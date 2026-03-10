@@ -31,7 +31,7 @@ func BuildIssuePrompt(target WatchTarget, issue GitHubIssue, session Session) st
 		fmt.Sprintf("Issue URL: %s", issue.URL),
 		fmt.Sprintf("Worktree path: %s", session.WorktreePath),
 		fmt.Sprintf("Branch: %s", session.Branch),
-		"Comment on the issue when you start working, add progress comments as you make meaningful progress, push the branch, open a pull request, and report any execution failure back to the issue.",
+		"Use `gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch, open a pull request, and report any execution failure back to the issue.",
 		"Use the issue as the source of truth for the requested behavior and keep the implementation minimal.",
 	}
 	return strings.Join(lines, "\n")
