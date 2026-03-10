@@ -139,20 +139,27 @@ func (a *App) Watch(ctx context.Context, rawPath string, daemon bool) error {
 		return err
 	}
 
-	for _, target := range targets {
+	updated := false
+	for i, target := range targets {
 		if target.Path == info.Path {
-			return fmt.Errorf("watch target already exists for %s", info.Path)
+			targets[i].Repo = info.Repo
+			targets[i].Branch = info.Branch
+			targets[i].DaemonEnabled = daemon
+			updated = true
+			break
 		}
 	}
 
-	target := WatchTarget{
-		Path:          info.Path,
-		Repo:          info.Repo,
-		Branch:        info.Branch,
-		DaemonEnabled: daemon,
-		AddedAt:       a.clock().Format(time.RFC3339),
+	if !updated {
+		target := WatchTarget{
+			Path:          info.Path,
+			Repo:          info.Repo,
+			Branch:        info.Branch,
+			DaemonEnabled: daemon,
+			AddedAt:       a.clock().Format(time.RFC3339),
+		}
+		targets = append(targets, target)
 	}
-	targets = append(targets, target)
 	sort.Slice(targets, func(i, j int) bool {
 		return targets[i].Path < targets[j].Path
 	})
@@ -166,7 +173,11 @@ func (a *App) Watch(ctx context.Context, rawPath string, daemon bool) error {
 		}
 	}
 
-	fmt.Fprintln(a.stdout, "watching", info.Path)
+	if updated {
+		fmt.Fprintln(a.stdout, "updated", info.Path)
+	} else {
+		fmt.Fprintln(a.stdout, "watching", info.Path)
+	}
 	return nil
 }
 

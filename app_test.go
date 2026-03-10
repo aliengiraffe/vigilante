@@ -79,3 +79,57 @@ func TestWatchListAndUnwatch(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestWatchUpdatesExistingTarget(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := NewApp()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = ioDiscard{}
+	launchAgentPath := filepath.Join(home, "Library", "LaunchAgents", "com.vigilante.agent.plist")
+	app.env.Runner = fakeRunner{
+		lookPath: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		outputs: map[string]string{
+			"gh auth status":                    "ok",
+			`/bin/zsh -lic printf "%s" "$PATH"`: "/usr/bin:/bin:/Users/test/.local/bin",
+			`/bin/sh -lc PATH="/usr/bin:/bin:/Users/test/.local/bin" command -v 'git'`:   "/usr/bin/git\n",
+			`/bin/sh -lc PATH="/usr/bin:/bin:/Users/test/.local/bin" command -v 'gh'`:    "/usr/bin/gh\n",
+			`/bin/sh -lc PATH="/usr/bin:/bin:/Users/test/.local/bin" command -v 'codex'`: "/Users/test/.local/bin/codex\n",
+			key("launchctl", "unload", launchAgentPath):                                  "",
+			key("launchctl", "load", launchAgentPath):                                    "",
+			key("git", "rev-parse", "--is-inside-work-tree"):                             "true\n",
+			key("git", "remote", "get-url", "origin"):                                    "git@github.com:nicobistolfi/vigilante.git\n",
+			key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"):            "origin/main\n",
+		},
+	}
+
+	if err := app.Watch(context.Background(), repoPath, false); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout.Reset()
+	if err := app.Watch(context.Background(), repoPath, true); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "updated "+repoPath) {
+		t.Fatalf("unexpected output: %s", stdout.String())
+	}
+
+	targets, err := app.state.LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("unexpected targets: %#v", targets)
+	}
+	if !targets[0].DaemonEnabled {
+		t.Fatalf("expected daemon_enabled to be updated: %#v", targets[0])
+	}
+}
