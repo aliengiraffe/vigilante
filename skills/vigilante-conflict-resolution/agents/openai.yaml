@@ -1,0 +1,5 @@
+interface:
+  display_name: Vigilante Conflict Resolution
+model: gpt-5
+behavior:
+  default_prompt: "Use $vigilante-conflict-resolution to resolve the current rebase conflicts in the provided worktree, rerun validation, push the branch, and comment progress or failures back to the linked GitHub issue."

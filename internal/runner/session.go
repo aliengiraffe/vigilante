@@ -53,6 +53,31 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 	return session
 }
 
+func RunConflictResolutionSession(ctx context.Context, env *environment.Environment, store *state.Store, target state.WatchTarget, session state.Session, pr ghcli.PullRequest) error {
+	logPath := store.SessionLogPath(session.IssueNumber)
+	appendSessionLog(logPath, "conflict resolution started", session, fmt.Sprintf("pr=%d url=%s", pr.Number, pr.URL))
+
+	prompt := skill.BuildConflictResolutionPrompt(target, session, pr)
+	output, err := env.Runner.Run(
+		ctx,
+		"",
+		"codex",
+		"exec",
+		"--cd", session.WorktreePath,
+		"--dangerously-bypass-approvals-and-sandbox",
+		prompt,
+	)
+	if err != nil {
+		appendSessionLog(logPath, "conflict resolution failed", session, combineLogDetails(output, err.Error()))
+		body := fmt.Sprintf("Vigilante conflict-resolution session failed for PR #%d on branch `%s`: %s", pr.Number, session.Branch, summarizeError(err))
+		_ = ghcli.CommentOnIssue(ctx, env.Runner, target.Repo, session.IssueNumber, body)
+		return err
+	}
+
+	appendSessionLog(logPath, "conflict resolution succeeded", session, output)
+	return nil
+}
+
 func summarizeError(err error) string {
 	text := strings.TrimSpace(err.Error())
 	if len(text) > 400 {

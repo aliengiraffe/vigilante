@@ -326,7 +326,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		sessions, err = a.cleanupMergedSessions(ctx, sessions)
+		sessions, err = a.maintainPullRequests(ctx, sessions)
 		if err != nil {
 			return err
 		}
@@ -406,18 +406,18 @@ func (a *App) ScanOnce(ctx context.Context) error {
 	return nil
 }
 
-func (a *App) cleanupMergedSessions(ctx context.Context, sessions []state.Session) ([]state.Session, error) {
+func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session) ([]state.Session, error) {
 	for i := range sessions {
 		session := &sessions[i]
-		if session.Status != state.SessionStatusSuccess || session.CleanupCompletedAt != "" {
+		if session.Status != state.SessionStatusSuccess || session.CleanupCompletedAt != "" || session.MonitoringStoppedAt != "" {
 			continue
 		}
 
 		pr, err := ghcli.FindPullRequestForBranch(ctx, a.env.Runner, session.Repo, session.Branch)
 		if err != nil {
-			session.CleanupError = err.Error()
+			session.LastMaintenanceError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
-			a.state.AppendDaemonLog("cleanup pr lookup failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
+			a.state.AppendDaemonLog("pr lookup failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
 			continue
 		}
 		if pr == nil {
@@ -426,9 +426,28 @@ func (a *App) cleanupMergedSessions(ctx context.Context, sessions []state.Sessio
 
 		session.PullRequestNumber = pr.Number
 		session.PullRequestURL = pr.URL
+		session.PullRequestState = pr.State
 		if pr.MergedAt == nil {
-			session.CleanupError = ""
-			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			if pr.State != "OPEN" {
+				session.MonitoringStoppedAt = a.clock().Format(time.RFC3339)
+				session.LastMaintenanceError = ""
+				session.UpdatedAt = session.MonitoringStoppedAt
+				a.state.AppendDaemonLog("monitoring stopped repo=%s issue=%d pr=%d branch=%s state=%s", session.Repo, session.IssueNumber, pr.Number, session.Branch, pr.State)
+				continue
+			}
+			if err := a.maintainOpenPullRequest(ctx, session, *pr); err != nil {
+				session.UpdatedAt = a.clock().Format(time.RFC3339)
+				a.state.AppendDaemonLog("pr maintenance failed repo=%s issue=%d pr=%d branch=%s err=%v", session.Repo, session.IssueNumber, pr.Number, session.Branch, err)
+				if shouldCommentMaintenanceFailure(*session, err) {
+					body := fmt.Sprintf("Vigilante could not keep PR #%d merge-ready on `%s`: %s", pr.Number, session.Branch, summarizeMaintenanceError(err))
+					if commentErr := ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body); commentErr != nil {
+						a.state.AppendDaemonLog("pr maintenance failure comment failed repo=%s issue=%d pr=%d err=%v", session.Repo, session.IssueNumber, pr.Number, commentErr)
+					}
+					session.LastMaintenanceError = err.Error()
+				}
+				continue
+			}
+			session.LastMaintenanceError = ""
 			continue
 		}
 
@@ -455,6 +474,75 @@ func (a *App) cleanupMergedSessions(ctx context.Context, sessions []state.Sessio
 	}
 
 	return sessions, nil
+}
+
+func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Session, pr ghcli.PullRequest) error {
+	if _, err := a.env.Runner.Run(ctx, session.WorktreePath, "git", "fetch", "origin", "main"); err != nil {
+		return err
+	}
+
+	statusOutput, err := a.env.Runner.Run(ctx, session.WorktreePath, "git", "status", "--porcelain")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(statusOutput) != "" {
+		return errors.New("worktree is not clean before PR maintenance")
+	}
+
+	rebaseOutput, err := a.env.Runner.Run(ctx, session.WorktreePath, "git", "rebase", "origin/main")
+	rebased := rebaseChangedHistory(rebaseOutput)
+	if err != nil {
+		if !isRebaseConflict(rebaseOutput, err) {
+			return err
+		}
+		body := fmt.Sprintf("Vigilante hit rebase conflicts while updating PR #%d onto the latest `origin/main`. Launching the dedicated conflict-resolution skill in `%s`.", pr.Number, session.WorktreePath)
+		if commentErr := ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body); commentErr != nil {
+			a.state.AppendDaemonLog("pr conflict comment failed repo=%s issue=%d pr=%d err=%v", session.Repo, session.IssueNumber, pr.Number, commentErr)
+		}
+		target := state.WatchTarget{Path: session.RepoPath, Repo: session.Repo, Branch: "main"}
+		if conflictErr := issuerunner.RunConflictResolutionSession(ctx, a.env, a.state, target, *session, pr); conflictErr != nil {
+			return conflictErr
+		}
+		rebased = true
+	}
+
+	session.LastMaintainedAt = a.clock().Format(time.RFC3339)
+	session.UpdatedAt = session.LastMaintainedAt
+	if !rebased {
+		return nil
+	}
+
+	if _, err := a.env.Runner.Run(ctx, session.WorktreePath, "go", "test", "./..."); err != nil {
+		return err
+	}
+	if _, err := a.env.Runner.Run(ctx, session.WorktreePath, "git", "push", "--force-with-lease", "origin", "HEAD:"+session.Branch); err != nil {
+		return err
+	}
+
+	body := fmt.Sprintf("Vigilante rebased PR #%d onto the latest `origin/main`, reran `go test ./...`, and pushed `%s`.", pr.Number, session.Branch)
+	return ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body)
+}
+
+func rebaseChangedHistory(output string) bool {
+	text := strings.ToLower(strings.TrimSpace(output))
+	return text != "" && !strings.Contains(text, "up to date")
+}
+
+func isRebaseConflict(output string, err error) bool {
+	text := strings.ToLower(strings.TrimSpace(output + "\n" + err.Error()))
+	return strings.Contains(text, "conflict") || strings.Contains(text, "could not apply")
+}
+
+func shouldCommentMaintenanceFailure(session state.Session, err error) bool {
+	return strings.TrimSpace(session.LastMaintenanceError) != strings.TrimSpace(err.Error())
+}
+
+func summarizeMaintenanceError(err error) string {
+	text := strings.TrimSpace(err.Error())
+	if len(text) > 400 {
+		return text[:400]
+	}
+	return text
 }
 
 func (a *App) ensureTooling(ctx context.Context) error {

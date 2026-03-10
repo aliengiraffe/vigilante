@@ -86,7 +86,7 @@ func TestListOpenIssuesAllowsNoAssigneeFilter(t *testing.T) {
 func TestFindPullRequestForBranch(t *testing.T) {
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh pr list --repo owner/repo --head vigilante/issue-7 --state all --json number,url,mergedAt": `[{"number":17,"url":"https://github.com/owner/repo/pull/17","mergedAt":"2026-03-10T14:00:00Z"}]`,
+			"gh pr list --repo owner/repo --head vigilante/issue-7 --state all --json number,url,state,mergedAt": `[{"number":17,"url":"https://github.com/owner/repo/pull/17","state":"MERGED","mergedAt":"2026-03-10T14:00:00Z"}]`,
 		},
 	}
 
@@ -99,6 +99,9 @@ func TestFindPullRequestForBranch(t *testing.T) {
 	}
 	if pr.Number != 17 || pr.URL != "https://github.com/owner/repo/pull/17" {
 		t.Fatalf("unexpected pull request: %#v", pr)
+	}
+	if pr.State != "MERGED" {
+		t.Fatalf("unexpected pull request state: %#v", pr)
 	}
 	if pr.MergedAt == nil || !pr.MergedAt.Equal(time.Date(2026, 3, 10, 14, 0, 0, 0, time.UTC)) {
 		t.Fatalf("unexpected merged time: %#v", pr.MergedAt)

@@ -27,6 +27,7 @@ type Label struct {
 type PullRequest struct {
 	Number   int        `json:"number"`
 	URL      string     `json:"url"`
+	State    string     `json:"state"`
 	MergedAt *time.Time `json:"mergedAt"`
 }
 
@@ -91,7 +92,7 @@ func CommentOnIssue(ctx context.Context, runner environment.Runner, repo string,
 }
 
 func FindPullRequestForBranch(ctx context.Context, runner environment.Runner, repo string, branch string) (*PullRequest, error) {
-	output, err := runner.Run(ctx, "", "gh", "pr", "list", "--repo", repo, "--head", branch, "--state", "all", "--json", "number,url,mergedAt")
+	output, err := runner.Run(ctx, "", "gh", "pr", "list", "--repo", repo, "--head", branch, "--state", "all", "--json", "number,url,state,mergedAt")
 	if err != nil {
 		return nil, err
 	}

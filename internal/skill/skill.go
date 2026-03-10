@@ -12,17 +12,23 @@ import (
 )
 
 const VigilanteIssueImplementation = "vigilante-issue-implementation"
+const VigilanteConflictResolution = "vigilante-conflict-resolution"
 
 func EnsureInstalled(codexHome string) error {
-	skillDir := filepath.Join(codexHome, "skills", VigilanteIssueImplementation)
-	sourceDir := repoSkillDir()
-	if _, err := os.Stat(filepath.Join(sourceDir, "SKILL.md")); err != nil {
-		return err
+	for _, name := range []string{VigilanteIssueImplementation, VigilanteConflictResolution} {
+		skillDir := filepath.Join(codexHome, "skills", name)
+		sourceDir := repoSkillDir(name)
+		if _, err := os.Stat(filepath.Join(sourceDir, "SKILL.md")); err != nil {
+			return err
+		}
+		if err := os.RemoveAll(skillDir); err != nil {
+			return err
+		}
+		if err := copyDir(sourceDir, skillDir); err != nil {
+			return err
+		}
 	}
-	if err := os.RemoveAll(skillDir); err != nil {
-		return err
-	}
-	return copyDir(sourceDir, skillDir)
+	return nil
 }
 
 func BuildIssuePrompt(target state.WatchTarget, issue ghcli.Issue, session state.Session) string {
@@ -40,12 +46,30 @@ func BuildIssuePrompt(target state.WatchTarget, issue ghcli.Issue, session state
 	return strings.Join(lines, "\n")
 }
 
-func repoSkillPath() string {
-	return filepath.Join(repoRoot(), "skills", VigilanteIssueImplementation, "SKILL.md")
+func BuildConflictResolutionPrompt(target state.WatchTarget, session state.Session, pr ghcli.PullRequest) string {
+	lines := []string{
+		fmt.Sprintf("Use the `%s` skill for this task.", VigilanteConflictResolution),
+		fmt.Sprintf("Repository: %s", target.Repo),
+		fmt.Sprintf("Local repository path: %s", target.Path),
+		fmt.Sprintf("Issue: #%d - %s", session.IssueNumber, session.IssueTitle),
+		fmt.Sprintf("Issue URL: %s", session.IssueURL),
+		fmt.Sprintf("Pull Request: #%d", pr.Number),
+		fmt.Sprintf("Pull Request URL: %s", pr.URL),
+		fmt.Sprintf("Worktree path: %s", session.WorktreePath),
+		fmt.Sprintf("Branch: %s", session.Branch),
+		"Base branch: origin/main",
+		"Resolve the current rebase conflicts in the assigned worktree, use `gh issue comment` for progress and failures, rerun `go test ./...` after conflict resolution if the rebase succeeds, and push the updated branch when finished.",
+		"Keep the changes minimal and focused on getting the PR back to a merge-ready state.",
+	}
+	return strings.Join(lines, "\n")
 }
 
-func repoSkillDir() string {
-	return filepath.Join(repoRoot(), "skills", VigilanteIssueImplementation)
+func repoSkillPath(name string) string {
+	return filepath.Join(repoRoot(), "skills", name, "SKILL.md")
+}
+
+func repoSkillDir(name string) string {
+	return filepath.Join(repoRoot(), "skills", name)
 }
 
 func repoRoot() string {

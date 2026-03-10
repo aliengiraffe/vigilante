@@ -75,3 +75,33 @@ func TestRunIssueSessionFailureCommentsOnIssue(t *testing.T) {
 		t.Fatalf("unexpected log: %s", string(data))
 	}
 }
+
+func TestRunConflictResolutionSessionFailureCommentsOnIssue(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh issue comment --repo owner/repo 7 --body Vigilante conflict-resolution session failed for PR #17 on branch `vigilante/issue-7`: codex exec [--cd /tmp/worktree --dangerously-bypass-approvals-and-sandbox prompt]: exit status 1": "ok",
+		},
+		Errors: map[string]error{
+			"codex exec --cd /tmp/worktree --dangerously-bypass-approvals-and-sandbox Use the `vigilante-conflict-resolution` skill for this task.\nRepository: owner/repo\nLocal repository path: /tmp/repo\nIssue: #7 - Demo\nIssue URL: https://github.com/owner/repo/issues/7\nPull Request: #17\nPull Request URL: https://github.com/owner/repo/pull/17\nWorktree path: /tmp/worktree\nBranch: vigilante/issue-7\nBase branch: origin/main\nResolve the current rebase conflicts in the assigned worktree, use `gh issue comment` for progress and failures, rerun `go test ./...` after conflict resolution if the rebase succeeds, and push the updated branch when finished.\nKeep the changes minimal and focused on getting the PR back to a merge-ready state.": errors.New("codex exec [--cd /tmp/worktree --dangerously-bypass-approvals-and-sandbox prompt]: exit status 1"),
+		},
+	}
+	env := &environment.Environment{OS: "darwin", Runner: runner}
+	store := state.NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+
+	err := RunConflictResolutionSession(
+		context.Background(),
+		env,
+		store,
+		state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"},
+		state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, IssueTitle: "Demo", IssueURL: "https://github.com/owner/repo/issues/7", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7"},
+		ghcli.PullRequest{Number: 17, URL: "https://github.com/owner/repo/pull/17"},
+	)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
