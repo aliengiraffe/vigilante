@@ -46,7 +46,7 @@ For each watched repository:
 
 ## Commands
 
-### `vigilante watch <path>`
+### `vigilante watch [--assignee <value>] <path>`
 
 Register a local repository for issue monitoring.
 
@@ -55,12 +55,17 @@ Expected behavior:
 - expands `~` and resolves the absolute path
 - validates the folder is a git repository
 - discovers the GitHub remote from git config
+- defaults the assignee filter to `me` unless overridden
 - stores the target in `~/.vigilante/watchlist.json`
 
 Example:
 
 ```sh
 vigilante watch ~/hello-world-app
+```
+
+```sh
+vigilante watch --assignee nicobistolfi ~/hello-world-app
 ```
 
 ### `vigilante watch -d <path>`
@@ -175,6 +180,7 @@ Suggested `watchlist.json` shape:
     "path": "/Users/example/hello-world-app",
     "repo": "owner/hello-world-app",
     "branch": "main",
+    "assignee": "me",
     "daemon_enabled": true,
     "last_scan_at": "2026-03-10T12:00:00Z"
   }

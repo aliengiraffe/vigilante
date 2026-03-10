@@ -16,6 +16,7 @@ type WatchTarget struct {
 	Repo          string   `json:"repo"`
 	Branch        string   `json:"branch"`
 	Labels        []string `json:"labels,omitempty"`
+	Assignee      string   `json:"assignee,omitempty"`
 	DaemonEnabled bool     `json:"daemon_enabled"`
 	LastScanAt    string   `json:"last_scan_at,omitempty"`
 	AddedAt       string   `json:"added_at,omitempty"`

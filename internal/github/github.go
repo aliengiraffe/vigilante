@@ -30,8 +30,14 @@ type PullRequest struct {
 	MergedAt *time.Time `json:"mergedAt"`
 }
 
-func ListOpenIssues(ctx context.Context, runner environment.Runner, repo string) ([]Issue, error) {
-	output, err := runner.Run(ctx, "", "gh", "issue", "list", "--repo", repo, "--state", "open", "--json", "number,title,createdAt,url,labels")
+func ListOpenIssues(ctx context.Context, runner environment.Runner, repo string, assignee string) ([]Issue, error) {
+	args := []string{"issue", "list", "--repo", repo, "--state", "open"}
+	if assignee != "" {
+		args = append(args, "--assignee", assignee)
+	}
+	args = append(args, "--json", "number,title,createdAt,url,labels")
+	output, err := runner.Run(ctx, "", "gh", args...)
+
 	if err != nil {
 		return nil, err
 	}

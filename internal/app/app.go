@@ -25,6 +25,7 @@ import (
 )
 
 const defaultScanInterval = 5 * time.Minute
+const defaultAssigneeFilter = "me"
 
 type App struct {
 	stdout io.Writer
@@ -96,13 +97,14 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		daemon := fs.Bool("d", false, "install and start daemon service")
 		var labels stringListFlag
 		fs.Var(&labels, "label", "allow only issues with this label; repeatable")
+		assignee := fs.String("assignee", "", "issue assignee filter (defaults to me)")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
 		if fs.NArg() != 1 {
-			return errors.New("usage: vigilante watch [-d] [--label value] <path>")
+			return errors.New("usage: vigilante watch [-d] [--label value] [--assignee value] <path>")
 		}
-		return a.Watch(ctx, fs.Arg(0), *daemon, labels)
+		return a.Watch(ctx, fs.Arg(0), *daemon, labels, *assignee)
 	case "unwatch":
 		if len(args) != 2 {
 			return errors.New("usage: vigilante unwatch <path>")
@@ -154,8 +156,8 @@ func (a *App) Setup(ctx context.Context, installDaemon bool) error {
 	return nil
 }
 
-func (a *App) Watch(ctx context.Context, rawPath string, daemon bool, labels []string) error {
-	a.state.AppendDaemonLog("watch start raw_path=%q daemon=%t", rawPath, daemon)
+func (a *App) Watch(ctx context.Context, rawPath string, daemon bool, labels []string, assignee string) error {
+	a.state.AppendDaemonLog("watch start raw_path=%q daemon=%t assignee=%q", rawPath, daemon, assignee)
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
 	}
@@ -183,6 +185,11 @@ func (a *App) Watch(ctx context.Context, rawPath string, daemon bool, labels []s
 			targets[i].Repo = info.Repo
 			targets[i].Branch = info.Branch
 			targets[i].Labels = labels
+			if assignee != "" {
+				targets[i].Assignee = assignee
+			} else if targets[i].Assignee == "" {
+				targets[i].Assignee = defaultAssigneeFilter
+			}
 			targets[i].DaemonEnabled = daemon
 			updated = true
 			break
@@ -195,6 +202,7 @@ func (a *App) Watch(ctx context.Context, rawPath string, daemon bool, labels []s
 			Repo:          info.Repo,
 			Branch:        info.Branch,
 			Labels:        labels,
+			Assignee:      assigneeOrDefault(assignee),
 			DaemonEnabled: daemon,
 			AddedAt:       a.clock().Format(time.RFC3339),
 		}
@@ -214,10 +222,10 @@ func (a *App) Watch(ctx context.Context, rawPath string, daemon bool, labels []s
 	}
 
 	if updated {
-		a.state.AppendDaemonLog("watch updated path=%s repo=%s branch=%s daemon=%t", info.Path, info.Repo, info.Branch, daemon)
+		a.state.AppendDaemonLog("watch updated path=%s repo=%s branch=%s assignee=%s daemon=%t", info.Path, info.Repo, info.Branch, assigneeOrDefault(findWatchTargetAssignee(targets, info.Path)), daemon)
 		fmt.Fprintln(a.stdout, "updated", info.Path)
 	} else {
-		a.state.AppendDaemonLog("watch added path=%s repo=%s branch=%s daemon=%t", info.Path, info.Repo, info.Branch, daemon)
+		a.state.AppendDaemonLog("watch added path=%s repo=%s branch=%s assignee=%s daemon=%t", info.Path, info.Repo, info.Branch, assigneeOrDefault(assignee), daemon)
 		fmt.Fprintln(a.stdout, "watching", info.Path)
 	}
 	return nil
@@ -329,8 +337,9 @@ func (a *App) ScanOnce(ctx context.Context) error {
 
 		for i := range targets {
 			target := &targets[i]
+			target.Assignee = assigneeOrDefault(target.Assignee)
 			a.state.AppendDaemonLog("scan repo start repo=%s path=%s", target.Repo, target.Path)
-			issues, err := ghcli.ListOpenIssues(ctx, a.env.Runner, target.Repo)
+			issues, err := ghcli.ListOpenIssues(ctx, a.env.Runner, target.Repo, target.Assignee)
 			target.LastScanAt = a.clock().Format(time.RFC3339)
 			if err != nil {
 				if saveErr := a.state.SaveWatchTargets(targets); saveErr != nil {
@@ -463,7 +472,7 @@ func (a *App) ensureTooling(ctx context.Context) error {
 func (a *App) printUsage() {
 	fmt.Fprintln(a.stderr, "usage:")
 	fmt.Fprintln(a.stderr, "  vigilante setup [-d]")
-	fmt.Fprintln(a.stderr, "  vigilante watch [-d] [--label value] <path>")
+	fmt.Fprintln(a.stderr, "  vigilante watch [-d] [--label value] [--assignee value] <path>")
 	fmt.Fprintln(a.stderr, "  vigilante unwatch <path>")
 	fmt.Fprintln(a.stderr, "  vigilante list")
 	fmt.Fprintln(a.stderr, "  vigilante daemon run [--once] [--interval duration]")
@@ -498,6 +507,13 @@ func ExpandPath(raw string) (string, error) {
 	return filepath.Abs(raw)
 }
 
+func assigneeOrDefault(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return defaultAssigneeFilter
+	}
+	return value
+}
+
 func normalizeLabels(labels []string) []string {
 	if len(labels) == 0 {
 		return nil
@@ -506,16 +522,26 @@ func normalizeLabels(labels []string) []string {
 	seen := make(map[string]bool, len(labels))
 	normalized := make([]string, 0, len(labels))
 	for _, label := range labels {
-		trimmed := strings.TrimSpace(label)
-		if trimmed == "" || seen[trimmed] {
+		label = strings.TrimSpace(label)
+		if label == "" || seen[label] {
 			continue
 		}
-		seen[trimmed] = true
-		normalized = append(normalized, trimmed)
+		seen[label] = true
+		normalized = append(normalized, label)
 	}
-	sort.Strings(normalized)
+
 	if len(normalized) == 0 {
 		return nil
 	}
+	sort.Strings(normalized)
 	return normalized
+}
+
+func findWatchTargetAssignee(targets []state.WatchTarget, path string) string {
+	for _, target := range targets {
+		if target.Path == path {
+			return target.Assignee
+		}
+	}
+	return ""
 }

@@ -66,7 +66,7 @@ func TestWatchListAndUnwatch(t *testing.T) {
 		},
 	}
 
-	if err := app.Watch(context.Background(), repoPath, false, []string{"to-do", "good first issue"}); err != nil {
+	if err := app.Watch(context.Background(), repoPath, false, []string{"to-do", "good first issue"}, ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -79,6 +79,9 @@ func TestWatchListAndUnwatch(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "\"labels\": [") || !strings.Contains(stdout.String(), "\"to-do\"") {
 		t.Fatalf("expected labels in list output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "\"assignee\": \"me\"") {
+		t.Fatalf("expected default assignee in list output: %s", stdout.String())
 	}
 
 	if err := app.Unwatch(repoPath); err != nil {
@@ -116,12 +119,12 @@ func TestWatchUpdatesExistingTarget(t *testing.T) {
 		},
 	}
 
-	if err := app.Watch(context.Background(), repoPath, false, nil); err != nil {
+	if err := app.Watch(context.Background(), repoPath, false, nil, "nicobistolfi"); err != nil {
 		t.Fatal(err)
 	}
 
 	stdout.Reset()
-	if err := app.Watch(context.Background(), repoPath, true, []string{"vibe-code", "vibe-code"}); err != nil {
+	if err := app.Watch(context.Background(), repoPath, true, []string{"vibe-code", "vibe-code"}, ""); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(stdout.String(), "updated "+repoPath) {
@@ -141,6 +144,9 @@ func TestWatchUpdatesExistingTarget(t *testing.T) {
 	if len(targets[0].Labels) != 1 || targets[0].Labels[0] != "vibe-code" {
 		t.Fatalf("expected labels to be updated: %#v", targets[0])
 	}
+	if targets[0].Assignee != "nicobistolfi" {
+		t.Fatalf("expected assignee to be preserved: %#v", targets[0])
+	}
 }
 
 func TestScanOnceSelectsEligibleIssueAndPersistsSession(t *testing.T) {
@@ -157,7 +163,7 @@ func TestScanOnceSelectsEligibleIssueAndPersistsSession(t *testing.T) {
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
 		Outputs: map[string]string{
 			"gh auth status": "ok",
-			"gh issue list --repo owner/repo --state open --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[{"name":"to-do"}]}]`,
+			"gh issue list --repo owner/repo --state open --assignee me --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[{"name":"to-do"}]}]`,
 			"git worktree prune": "ok",
 			"git worktree add -b vigilante/issue-1 " + worktreePath + " main":                                                                                       "ok",
 			"gh issue comment --repo owner/repo 1 --body Vigilante started a Codex session for this issue in `" + worktreePath + "` on branch `vigilante/issue-1`.": "ok",
@@ -167,7 +173,7 @@ func TestScanOnceSelectsEligibleIssueAndPersistsSession(t *testing.T) {
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main", Assignee: "me", Labels: []string{"to-do"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := app.ScanOnce(context.Background()); err != nil {
@@ -197,13 +203,13 @@ func TestScanOncePrintsNoEligibleIssues(t *testing.T) {
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
 		Outputs: map[string]string{
-			"gh issue list --repo owner/repo --state open --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
+			"gh issue list --repo owner/repo --state open --assignee me --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
 		},
 	}
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main", Assignee: "me", Labels: []string{"to-do"}}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := app.state.SaveSessions([]state.Session{{Repo: "owner/repo", IssueNumber: 1, Status: state.SessionStatusRunning}}); err != nil {
@@ -234,7 +240,7 @@ func TestScanOnceCleansUpMergedIssueSession(t *testing.T) {
 			"git worktree list --porcelain":                              "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n",
 			"git show-ref --verify --quiet refs/heads/vigilante/issue-1": "ok",
 			"git branch -D vigilante/issue-1":                            "Deleted branch vigilante/issue-1\n",
-			"gh issue list --repo owner/repo --state open --json number,title,createdAt,url,labels": "[]",
+			"gh issue list --repo owner/repo --state open --assignee me --json number,title,createdAt,url,labels": "[]",
 		},
 	}
 	if err := app.state.EnsureLayout(); err != nil {
@@ -282,35 +288,6 @@ func TestScanOnceCleansUpMergedIssueSession(t *testing.T) {
 	}
 }
 
-func TestScanOnceSkipsIssuesWithoutConfiguredLabels(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
-	t.Setenv("HOME", home)
-
-	var stdout bytes.Buffer
-	app := New()
-	app.stdout = &stdout
-	app.stderr = testutil.IODiscard{}
-	app.env.Runner = testutil.FakeRunner{
-		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
-		Outputs: map[string]string{
-			"gh issue list --repo owner/repo --state open --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[{"name":"bug"}]}]`,
-		},
-	}
-	if err := app.state.EnsureLayout(); err != nil {
-		t.Fatal(err)
-	}
-	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main", Labels: []string{"to-do"}}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := app.ScanOnce(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if got := stdout.String(); !strings.Contains(got, "repo: owner/repo no eligible issues (1 open)") {
-		t.Fatalf("unexpected output: %s", got)
-	}
-}
-
 func TestScanOnceSkipsWhenAnotherProcessHoldsScanLock(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
@@ -337,6 +314,35 @@ func TestScanOnceSkipsWhenAnotherProcessHoldsScanLock(t *testing.T) {
 		t.Fatal("expected outer lock to be acquired")
 	}
 	if got := stdout.String(); !strings.Contains(got, "scan skipped: another vigilante daemon is already scanning") {
+		t.Fatalf("unexpected output: %s", got)
+	}
+}
+
+func TestScanOnceUsesExplicitAssigneeFilter(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	var stdout bytes.Buffer
+	app := New()
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main", Assignee: "nicobistolfi"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := stdout.String(); !strings.Contains(got, "repo: owner/repo no eligible issues (0 open)") {
 		t.Fatalf("unexpected output: %s", got)
 	}
 }
