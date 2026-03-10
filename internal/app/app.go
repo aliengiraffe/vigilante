@@ -297,6 +297,13 @@ func (a *App) ScanOnce(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		sessions, err = a.cleanupMergedSessions(ctx, sessions)
+		if err != nil {
+			return err
+		}
+		if err := a.state.SaveSessions(sessions); err != nil {
+			return err
+		}
 		startedCount := 0
 
 		for i := range targets {
@@ -367,6 +374,57 @@ func (a *App) ScanOnce(ctx context.Context) error {
 		return nil
 	}
 	return nil
+}
+
+func (a *App) cleanupMergedSessions(ctx context.Context, sessions []state.Session) ([]state.Session, error) {
+	for i := range sessions {
+		session := &sessions[i]
+		if session.Status != state.SessionStatusSuccess || session.CleanupCompletedAt != "" {
+			continue
+		}
+
+		pr, err := ghcli.FindPullRequestForBranch(ctx, a.env.Runner, session.Repo, session.Branch)
+		if err != nil {
+			session.CleanupError = err.Error()
+			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			a.state.AppendDaemonLog("cleanup pr lookup failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
+			continue
+		}
+		if pr == nil {
+			continue
+		}
+
+		session.PullRequestNumber = pr.Number
+		session.PullRequestURL = pr.URL
+		if pr.MergedAt == nil {
+			session.CleanupError = ""
+			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			continue
+		}
+
+		session.PullRequestMergedAt = pr.MergedAt.UTC().Format(time.RFC3339)
+		if err := worktree.CleanupIssueArtifacts(ctx, a.env.Runner, session.RepoPath, session.WorktreePath, session.Branch); err != nil {
+			session.CleanupError = err.Error()
+			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			a.state.AppendDaemonLog("cleanup failed repo=%s issue=%d branch=%s worktree=%s err=%v", session.Repo, session.IssueNumber, session.Branch, session.WorktreePath, err)
+			continue
+		}
+
+		session.CleanupCompletedAt = a.clock().Format(time.RFC3339)
+		session.CleanupError = ""
+		session.UpdatedAt = session.CleanupCompletedAt
+		a.state.AppendDaemonLog(
+			"cleanup complete repo=%s issue=%d pr=%d branch=%s worktree=%s merged_at=%s",
+			session.Repo,
+			session.IssueNumber,
+			session.PullRequestNumber,
+			session.Branch,
+			session.WorktreePath,
+			session.PullRequestMergedAt,
+		)
+	}
+
+	return sessions, nil
 }
 
 func (a *App) ensureTooling(ctx context.Context) error {

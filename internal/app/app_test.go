@@ -211,6 +211,71 @@ func TestScanOncePrintsNoEligibleIssues(t *testing.T) {
 	}
 }
 
+func TestScanOnceCleansUpMergedIssueSession(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	var stdout bytes.Buffer
+	app := New()
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","mergedAt":"2026-03-10T15:00:00Z"}]`,
+			"git worktree prune":                                                             "ok",
+			"git worktree list --porcelain":                                                  "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n",
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-1":                     "ok",
+			"git branch -D vigilante/issue-1":                                                "Deleted branch vigilante/issue-1\n",
+			"gh issue list --repo owner/repo --state open --json number,title,createdAt,url": "[]",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:     "/tmp/repo",
+		Repo:         "owner/repo",
+		IssueNumber:  1,
+		Branch:       "vigilante/issue-1",
+		WorktreePath: filepath.Join("/tmp/repo", ".worktrees", "vigilante", "issue-1"),
+		Status:       state.SessionStatusSuccess,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+	if sessions[0].PullRequestNumber != 31 || sessions[0].PullRequestURL != "https://github.com/owner/repo/pull/31" {
+		t.Fatalf("expected pull request to be tracked: %#v", sessions[0])
+	}
+	if sessions[0].PullRequestMergedAt != "2026-03-10T15:00:00Z" {
+		t.Fatalf("expected merged time to be tracked: %#v", sessions[0])
+	}
+	if sessions[0].CleanupCompletedAt == "" {
+		t.Fatalf("expected cleanup to complete: %#v", sessions[0])
+	}
+	if sessions[0].CleanupError != "" {
+		t.Fatalf("unexpected cleanup error: %#v", sessions[0])
+	}
+	if got := stdout.String(); !strings.Contains(got, "repo: owner/repo no eligible issues (0 open)") {
+		t.Fatalf("unexpected output: %s", got)
+	}
+}
+
 func TestScanOnceSkipsWhenAnotherProcessHoldsScanLock(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))

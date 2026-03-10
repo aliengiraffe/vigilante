@@ -29,18 +29,23 @@ const (
 )
 
 type Session struct {
-	RepoPath     string        `json:"repo_path"`
-	Repo         string        `json:"repo"`
-	IssueNumber  int           `json:"issue_number"`
-	IssueTitle   string        `json:"issue_title,omitempty"`
-	IssueURL     string        `json:"issue_url,omitempty"`
-	Branch       string        `json:"branch"`
-	WorktreePath string        `json:"worktree_path"`
-	Status       SessionStatus `json:"status"`
-	StartedAt    string        `json:"started_at,omitempty"`
-	EndedAt      string        `json:"ended_at,omitempty"`
-	UpdatedAt    string        `json:"updated_at,omitempty"`
-	LastError    string        `json:"last_error,omitempty"`
+	RepoPath            string        `json:"repo_path"`
+	Repo                string        `json:"repo"`
+	IssueNumber         int           `json:"issue_number"`
+	IssueTitle          string        `json:"issue_title,omitempty"`
+	IssueURL            string        `json:"issue_url,omitempty"`
+	Branch              string        `json:"branch"`
+	WorktreePath        string        `json:"worktree_path"`
+	Status              SessionStatus `json:"status"`
+	PullRequestNumber   int           `json:"pull_request_number,omitempty"`
+	PullRequestURL      string        `json:"pull_request_url,omitempty"`
+	PullRequestMergedAt string        `json:"pull_request_merged_at,omitempty"`
+	CleanupCompletedAt  string        `json:"cleanup_completed_at,omitempty"`
+	CleanupError        string        `json:"cleanup_error,omitempty"`
+	StartedAt           string        `json:"started_at,omitempty"`
+	EndedAt             string        `json:"ended_at,omitempty"`
+	UpdatedAt           string        `json:"updated_at,omitempty"`
+	LastError           string        `json:"last_error,omitempty"`
 }
 
 type Store struct {
