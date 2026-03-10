@@ -14,10 +14,6 @@ func TestCreateAndRemoveWorktree(t *testing.T) {
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	state := NewStateStore()
-	if err := state.EnsureLayout(); err != nil {
-		t.Fatal(err)
-	}
 
 	runner := ExecRunner{}
 	ctx := context.Background()
@@ -30,9 +26,12 @@ func TestCreateAndRemoveWorktree(t *testing.T) {
 	mustRun(t, runner, ctx, repo, "git", "add", "README.md")
 	mustRun(t, runner, ctx, repo, "git", "commit", "-m", "init")
 
-	worktree, err := CreateIssueWorktree(ctx, runner, state, WatchTarget{Path: repo, Repo: "owner/repo", Branch: "main"}, 9)
+	worktree, err := CreateIssueWorktree(ctx, runner, WatchTarget{Path: repo, Repo: "owner/repo", Branch: "main"}, 9)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if want := filepath.Join(repo, ".worktrees", "vigilante", "issue-9"); worktree.Path != want {
+		t.Fatalf("unexpected worktree path: got %s want %s", worktree.Path, want)
 	}
 	if _, err := os.Stat(worktree.Path); err != nil {
 		t.Fatal(err)

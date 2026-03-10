@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 type Worktree struct {
@@ -13,10 +12,9 @@ type Worktree struct {
 	Branch string
 }
 
-func CreateIssueWorktree(ctx context.Context, runner Runner, state *StateStore, target WatchTarget, issueNumber int) (Worktree, error) {
-	slug := strings.ReplaceAll(target.Repo, "/", "_")
+func CreateIssueWorktree(ctx context.Context, runner Runner, target WatchTarget, issueNumber int) (Worktree, error) {
 	branch := fmt.Sprintf("vigilante/issue-%d", issueNumber)
-	path := filepath.Join(state.WorktreesDir(), slug, fmt.Sprintf("issue-%d", issueNumber))
+	path := filepath.Join(target.Path, ".worktrees", "vigilante", fmt.Sprintf("issue-%d", issueNumber))
 
 	if _, err := os.Stat(path); err == nil {
 		return Worktree{}, fmt.Errorf("worktree already exists for issue #%d at %s", issueNumber, path)

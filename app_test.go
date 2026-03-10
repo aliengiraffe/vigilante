@@ -33,7 +33,6 @@ func TestSetupCreatesStateLayoutAndSkill(t *testing.T) {
 		filepath.Join(app.state.Root(), "watchlist.json"),
 		filepath.Join(app.state.Root(), "sessions.json"),
 		filepath.Join(app.state.Root(), "logs"),
-		filepath.Join(app.state.Root(), "worktrees"),
 		filepath.Join(app.state.CodexHome(), "skills", vigilanteSkillName, "SKILL.md"),
 	} {
 		if _, err := os.Stat(path); err != nil {

@@ -228,7 +228,7 @@ Each issue run should get an isolated worktree to prevent branch collisions and 
 Suggested naming:
 
 - branch: `vigilante/issue-<number>`
-- worktree path: a managed folder under `~/.vigilante/worktrees/` or a repo-local generated path
+- worktree path: a repo-local path such as `<repo>/.worktrees/vigilante/issue-<number>`
 
 The daemon must track which worktrees are active so duplicate launches do not happen.
 

@@ -63,7 +63,7 @@ func (s *StateStore) CodexHome() string {
 }
 
 func (s *StateStore) EnsureLayout() error {
-	for _, dir := range []string{s.root, s.LogsDir(), s.WorktreesDir()} {
+	for _, dir := range []string{s.root, s.LogsDir()} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
@@ -78,10 +78,6 @@ func (s *StateStore) EnsureLayout() error {
 
 func (s *StateStore) LogsDir() string {
 	return filepath.Join(s.root, "logs")
-}
-
-func (s *StateStore) WorktreesDir() string {
-	return filepath.Join(s.root, "worktrees")
 }
 
 func (s *StateStore) watchlistPath() string {

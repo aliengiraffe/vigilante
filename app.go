@@ -287,7 +287,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			continue
 		}
 
-		worktree, err := CreateIssueWorktree(ctx, a.env.Runner, a.state, *target, next.Number)
+		worktree, err := CreateIssueWorktree(ctx, a.env.Runner, *target, next.Number)
 		if err != nil {
 			return err
 		}
