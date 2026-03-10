@@ -113,7 +113,7 @@ Recommended loop:
 
 ```sh
 go test ./...
-go build -o ./vigilante .
+go build -o ./vigilante ./cmd/vigilante
 ./vigilante setup
 ./vigilante watch /path/to/repo
 ./vigilante daemon run --once
@@ -124,19 +124,19 @@ Useful development commands:
 - run a single scan without installing the daemon:
 
 ```sh
-go run . daemon run --once
+go run ./cmd/vigilante daemon run --once
 ```
 
 - run the foreground daemon loop directly from source:
 
 ```sh
-go run . daemon run --interval 30s
+go run ./cmd/vigilante daemon run --interval 30s
 ```
 
 - rebuild the installed binary and refresh the installed Codex skill:
 
 ```sh
-go build -o /Users/$USER/.local/bin/vigilante .
+go build -o /Users/$USER/.local/bin/vigilante ./cmd/vigilante
 /Users/$USER/.local/bin/vigilante setup
 ```
 
@@ -151,7 +151,7 @@ Notes:
 - foreground runs are the quickest way to iterate on scheduler, worktree, and Codex execution behavior
 - `setup` refreshes the installed skill from the repo `skills/` folder
 - after changing service installation logic on macOS, rerun `setup -d` so the `launchd` plist is regenerated with the current shell-derived PATH
-- because the repo currently uses a root-level `main` package, `go run . ...` and `go build ...` are the expected development entrypoints
+- the CLI entrypoint lives in `cmd/vigilante/`, while non-exported implementation packages live under `internal/`
 
 ## Local State
 

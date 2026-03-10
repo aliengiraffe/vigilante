@@ -1,4 +1,4 @@
-package main
+package skill
 
 import (
 	"fmt"
@@ -6,12 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	ghcli "github.com/nicobistolfi/vigilante/internal/github"
+	"github.com/nicobistolfi/vigilante/internal/state"
 )
 
-const vigilanteSkillName = "vigilante-issue-implementation"
+const VigilanteIssueImplementation = "vigilante-issue-implementation"
 
-func EnsureSkillInstalled(codexHome string) error {
-	skillDir := filepath.Join(codexHome, "skills", vigilanteSkillName)
+func EnsureInstalled(codexHome string) error {
+	skillDir := filepath.Join(codexHome, "skills", VigilanteIssueImplementation)
 	sourceDir := repoSkillDir()
 	if _, err := os.Stat(filepath.Join(sourceDir, "SKILL.md")); err != nil {
 		return err
@@ -22,9 +25,9 @@ func EnsureSkillInstalled(codexHome string) error {
 	return copyDir(sourceDir, skillDir)
 }
 
-func BuildIssuePrompt(target WatchTarget, issue GitHubIssue, session Session) string {
+func BuildIssuePrompt(target state.WatchTarget, issue ghcli.Issue, session state.Session) string {
 	lines := []string{
-		fmt.Sprintf("Use the `%s` skill for this task.", vigilanteSkillName),
+		fmt.Sprintf("Use the `%s` skill for this task.", VigilanteIssueImplementation),
 		fmt.Sprintf("Repository: %s", target.Repo),
 		fmt.Sprintf("Local repository path: %s", target.Path),
 		fmt.Sprintf("Issue: #%d - %s", issue.Number, issue.Title),
@@ -38,30 +41,43 @@ func BuildIssuePrompt(target WatchTarget, issue GitHubIssue, session Session) st
 }
 
 func repoSkillPath() string {
-	return filepath.Join(repoRoot(), "skills", vigilanteSkillName, "SKILL.md")
+	return filepath.Join(repoRoot(), "skills", VigilanteIssueImplementation, "SKILL.md")
 }
 
 func repoSkillDir() string {
-	return filepath.Join(repoRoot(), "skills", vigilanteSkillName)
+	return filepath.Join(repoRoot(), "skills", VigilanteIssueImplementation)
 }
 
 func repoRoot() string {
 	exe, err := os.Executable()
 	if err == nil {
-		dir := filepath.Dir(exe)
-		if _, statErr := os.Stat(filepath.Join(dir, "skills")); statErr == nil {
-			return dir
+		if root, ok := findRepoRoot(filepath.Dir(exe)); ok {
+			return root
 		}
 	}
 
 	wd, err := os.Getwd()
 	if err == nil {
-		if _, statErr := os.Stat(filepath.Join(wd, "skills")); statErr == nil {
-			return wd
+		if root, ok := findRepoRoot(wd); ok {
+			return root
 		}
 	}
 
 	return "."
+}
+
+func findRepoRoot(start string) (string, bool) {
+	dir := start
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "skills")); err == nil {
+			return dir, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", false
+		}
+		dir = parent
+	}
 }
 
 func copyDir(src string, dst string) error {

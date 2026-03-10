@@ -1,4 +1,4 @@
-package main
+package environment
 
 import (
 	"bytes"
@@ -77,14 +77,14 @@ type Environment struct {
 	Runner Runner
 }
 
-func NewEnvironment(goos string) *Environment {
+func New(goos string) *Environment {
 	return &Environment{
 		OS:     goos,
 		Runner: ExecRunner{},
 	}
 }
 
-func executablePath() string {
+func ExecutablePath() string {
 	path, err := os.Executable()
 	if err != nil {
 		return "vigilante"

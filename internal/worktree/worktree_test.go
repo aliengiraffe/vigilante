@@ -1,10 +1,13 @@
-package main
+package worktree
 
 import (
 	"context"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/nicobistolfi/vigilante/internal/environment"
+	"github.com/nicobistolfi/vigilante/internal/state"
 )
 
 func TestCreateAndRemoveWorktree(t *testing.T) {
@@ -15,7 +18,7 @@ func TestCreateAndRemoveWorktree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runner := ExecRunner{}
+	runner := environment.ExecRunner{}
 	ctx := context.Background()
 	mustRun(t, runner, ctx, repo, "git", "init", "--initial-branch=main")
 	mustRun(t, runner, ctx, repo, "git", "config", "user.email", "test@example.com")
@@ -26,7 +29,7 @@ func TestCreateAndRemoveWorktree(t *testing.T) {
 	mustRun(t, runner, ctx, repo, "git", "add", "README.md")
 	mustRun(t, runner, ctx, repo, "git", "commit", "-m", "init")
 
-	worktree, err := CreateIssueWorktree(ctx, runner, WatchTarget{Path: repo, Repo: "owner/repo", Branch: "main"}, 9)
+	worktree, err := CreateIssueWorktree(ctx, runner, state.WatchTarget{Path: repo, Repo: "owner/repo", Branch: "main"}, 9)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +39,7 @@ func TestCreateAndRemoveWorktree(t *testing.T) {
 	if _, err := os.Stat(worktree.Path); err != nil {
 		t.Fatal(err)
 	}
-	if err := RemoveWorktree(ctx, runner, repo, worktree.Path); err != nil {
+	if err := Remove(ctx, runner, repo, worktree.Path); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -48,7 +51,7 @@ func TestCreateIssueWorktreeReusesExistingBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	runner := ExecRunner{}
+	runner := environment.ExecRunner{}
 	ctx := context.Background()
 	mustRun(t, runner, ctx, repo, "git", "init", "--initial-branch=main")
 	mustRun(t, runner, ctx, repo, "git", "config", "user.email", "test@example.com")
@@ -60,14 +63,21 @@ func TestCreateIssueWorktreeReusesExistingBranch(t *testing.T) {
 	mustRun(t, runner, ctx, repo, "git", "commit", "-m", "init")
 	mustRun(t, runner, ctx, repo, "git", "branch", "vigilante/issue-9")
 
-	worktree, err := CreateIssueWorktree(ctx, runner, WatchTarget{Path: repo, Repo: "owner/repo", Branch: "main"}, 9)
+	worktree, err := CreateIssueWorktree(ctx, runner, state.WatchTarget{Path: repo, Repo: "owner/repo", Branch: "main"}, 9)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(worktree.Path); err != nil {
 		t.Fatal(err)
 	}
-	if err := RemoveWorktree(ctx, runner, repo, worktree.Path); err != nil {
+	if err := Remove(ctx, runner, repo, worktree.Path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustRun(t *testing.T, runner environment.Runner, ctx context.Context, dir, name string, args ...string) {
+	t.Helper()
+	if _, err := runner.Run(ctx, dir, name, args...); err != nil {
 		t.Fatal(err)
 	}
 }

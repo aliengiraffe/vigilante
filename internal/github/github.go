@@ -1,4 +1,4 @@
-package main
+package ghcli
 
 import (
 	"context"
@@ -7,21 +7,24 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/nicobistolfi/vigilante/internal/environment"
+	"github.com/nicobistolfi/vigilante/internal/state"
 )
 
-type GitHubIssue struct {
+type Issue struct {
 	Number    int       `json:"number"`
 	Title     string    `json:"title"`
 	CreatedAt time.Time `json:"createdAt"`
 	URL       string    `json:"url"`
 }
 
-func ListOpenIssues(ctx context.Context, runner Runner, repo string) ([]GitHubIssue, error) {
+func ListOpenIssues(ctx context.Context, runner environment.Runner, repo string) ([]Issue, error) {
 	output, err := runner.Run(ctx, "", "gh", "issue", "list", "--repo", repo, "--state", "open", "--json", "number,title,createdAt,url")
 	if err != nil {
 		return nil, err
 	}
-	var issues []GitHubIssue
+	var issues []Issue
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &issues); err != nil {
 		return nil, fmt.Errorf("parse gh issue list output: %w", err)
 	}
@@ -31,10 +34,10 @@ func ListOpenIssues(ctx context.Context, runner Runner, repo string) ([]GitHubIs
 	return issues, nil
 }
 
-func SelectNextIssue(issues []GitHubIssue, sessions []Session, repo string) *GitHubIssue {
+func SelectNextIssue(issues []Issue, sessions []state.Session, repo string) *Issue {
 	active := map[int]bool{}
 	for _, session := range sessions {
-		if session.Repo == repo && session.Status == SessionStatusRunning {
+		if session.Repo == repo && session.Status == state.SessionStatusRunning {
 			active[session.IssueNumber] = true
 		}
 	}
@@ -46,7 +49,7 @@ func SelectNextIssue(issues []GitHubIssue, sessions []Session, repo string) *Git
 	return nil
 }
 
-func CommentOnIssue(ctx context.Context, runner Runner, repo string, number int, body string) error {
+func CommentOnIssue(ctx context.Context, runner environment.Runner, repo string, number int, body string) error {
 	_, err := runner.Run(ctx, "", "gh", "issue", "comment", "--repo", repo, fmt.Sprintf("%d", number), "--body", body)
 	return err
 }

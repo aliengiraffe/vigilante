@@ -1,4 +1,4 @@
-package main
+package repo
 
 import (
 	"context"
@@ -7,30 +7,32 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+
+	"github.com/nicobistolfi/vigilante/internal/environment"
 )
 
-type RepositoryInfo struct {
+type Info struct {
 	Path   string
 	Repo   string
 	Branch string
 }
 
-func DiscoverRepository(ctx context.Context, runner Runner, path string) (RepositoryInfo, error) {
+func Discover(ctx context.Context, runner environment.Runner, path string) (Info, error) {
 	absPath, err := filepath.Abs(path)
 	if err != nil {
-		return RepositoryInfo{}, err
+		return Info{}, err
 	}
 	if _, err := runner.Run(ctx, absPath, "git", "rev-parse", "--is-inside-work-tree"); err != nil {
-		return RepositoryInfo{}, fmt.Errorf("%s is not a git repository: %w", absPath, err)
+		return Info{}, fmt.Errorf("%s is not a git repository: %w", absPath, err)
 	}
 
 	remoteURL, err := runner.Run(ctx, absPath, "git", "remote", "get-url", "origin")
 	if err != nil {
-		return RepositoryInfo{}, fmt.Errorf("origin remote not found: %w", err)
+		return Info{}, fmt.Errorf("origin remote not found: %w", err)
 	}
 	repo, err := ParseGitHubRepo(strings.TrimSpace(remoteURL))
 	if err != nil {
-		return RepositoryInfo{}, err
+		return Info{}, err
 	}
 
 	branch := "main"
@@ -40,7 +42,7 @@ func DiscoverRepository(ctx context.Context, runner Runner, path string) (Reposi
 		branch = strings.TrimSpace(current)
 	}
 
-	return RepositoryInfo{
+	return Info{
 		Path:   absPath,
 		Repo:   repo,
 		Branch: branch,

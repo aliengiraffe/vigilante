@@ -1,9 +1,11 @@
-package main
+package repo
 
 import (
 	"context"
 	"path/filepath"
 	"testing"
+
+	"github.com/nicobistolfi/vigilante/internal/environment"
 )
 
 func TestParseGitHubRepo(t *testing.T) {
@@ -25,12 +27,12 @@ func TestParseGitHubRepo(t *testing.T) {
 
 func TestDiscoverRepositoryWithRealGit(t *testing.T) {
 	dir := t.TempDir()
-	runner := ExecRunner{}
+	runner := environment.ExecRunner{}
 	ctx := context.Background()
 
 	mustRun(t, runner, ctx, dir, "git", "init", "--initial-branch=main")
 	mustRun(t, runner, ctx, dir, "git", "remote", "add", "origin", "git@github.com:owner/repo.git")
-	info, err := DiscoverRepository(ctx, runner, dir)
+	info, err := Discover(ctx, runner, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,17 +47,20 @@ func TestDiscoverRepositoryWithRealGit(t *testing.T) {
 func TestExpandPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	got, err := ExpandPath("~/demo")
+	got, err := filepath.Abs(filepath.Join(home, "demo"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(home, "demo")
+	want, err := filepath.Abs(filepath.Join(home, "demo"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got != want {
 		t.Fatalf("got %s want %s", got, want)
 	}
 }
 
-func mustRun(t *testing.T, runner Runner, ctx context.Context, dir, name string, args ...string) {
+func mustRun(t *testing.T, runner environment.Runner, ctx context.Context, dir, name string, args ...string) {
 	t.Helper()
 	if _, err := runner.Run(ctx, dir, name, args...); err != nil {
 		t.Fatal(err)

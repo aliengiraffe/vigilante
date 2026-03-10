@@ -1,4 +1,4 @@
-package main
+package state
 
 import (
 	"path/filepath"
@@ -9,8 +9,8 @@ func TestTryWithScanLockIsExclusive(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 
-	stateA := NewStateStore()
-	stateB := NewStateStore()
+	stateA := NewStore()
+	stateB := NewStore()
 	if err := stateA.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}

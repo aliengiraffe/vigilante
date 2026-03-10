@@ -1,16 +1,19 @@
-package main
+package skill
 
 import (
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	ghcli "github.com/nicobistolfi/vigilante/internal/github"
+	"github.com/nicobistolfi/vigilante/internal/state"
 )
 
-func TestEnsureSkillInstalled(t *testing.T) {
+func TestEnsureInstalled(t *testing.T) {
 	dir := t.TempDir()
 	repoRoot := t.TempDir()
-	skillSourceDir := filepath.Join(repoRoot, "skills", vigilanteSkillName)
+	skillSourceDir := filepath.Join(repoRoot, "skills", VigilanteIssueImplementation)
 	if err := os.MkdirAll(skillSourceDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -36,10 +39,10 @@ func TestEnsureSkillInstalled(t *testing.T) {
 		_ = os.Chdir(wd)
 	}()
 
-	if err := EnsureSkillInstalled(dir); err != nil {
+	if err := EnsureInstalled(dir); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "skills", vigilanteSkillName, "SKILL.md")
+	path := filepath.Join(dir, "skills", VigilanteIssueImplementation, "SKILL.md")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +50,7 @@ func TestEnsureSkillInstalled(t *testing.T) {
 	if string(data) != sourceBody {
 		t.Fatalf("unexpected skill body: %s", string(data))
 	}
-	agentData, err := os.ReadFile(filepath.Join(dir, "skills", vigilanteSkillName, "agents", "openai.yaml"))
+	agentData, err := os.ReadFile(filepath.Join(dir, "skills", VigilanteIssueImplementation, "agents", "openai.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,9 +60,9 @@ func TestEnsureSkillInstalled(t *testing.T) {
 }
 
 func TestBuildIssuePrompt(t *testing.T) {
-	target := WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
-	issue := GitHubIssue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
-	session := Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12"}
+	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
+	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12"}
 	prompt := BuildIssuePrompt(target, issue, session)
 	for _, text := range []string{"Use the `vigilante-issue-implementation` skill", "Issue: #12 - Fix bug", "Worktree path: /tmp/worktree", "gh issue comment", "implementation plan", "open a pull request"} {
 		if !strings.Contains(prompt, text) {

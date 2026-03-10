@@ -1,18 +1,19 @@
-package main
+package environment
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/nicobistolfi/vigilante/internal/testutil"
 )
 
 func TestLoggingRunnerLogsCommands(t *testing.T) {
 	var entries []string
 	runner := LoggingRunner{
-		Base: fakeRunner{
-			outputs: map[string]string{
+		Base: testutil.FakeRunner{
+			Outputs: map[string]string{
 				"gh issue list": "[]",
 			},
 		},
@@ -38,9 +39,9 @@ func TestLoggingRunnerLogsCommands(t *testing.T) {
 func TestLoggingRunnerLogsFailures(t *testing.T) {
 	var entries []string
 	runner := LoggingRunner{
-		Base: fakeRunner{
-			errors: map[string]error{
-				"git status": errors.New("boom"),
+		Base: testutil.FakeRunner{
+			Errors: map[string]error{
+				"git status": fmt.Errorf("boom"),
 			},
 		},
 		Logf: func(format string, args ...any) {

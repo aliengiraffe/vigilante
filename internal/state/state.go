@@ -1,4 +1,4 @@
-package main
+package state
 
 import (
 	"encoding/json"
@@ -43,19 +43,19 @@ type Session struct {
 	LastError    string        `json:"last_error,omitempty"`
 }
 
-type StateStore struct {
+type Store struct {
 	root string
 }
 
-func NewStateStore() *StateStore {
-	return &StateStore{root: discoverStateRoot()}
+func NewStore() *Store {
+	return &Store{root: discoverStateRoot()}
 }
 
-func (s *StateStore) Root() string {
+func (s *Store) Root() string {
 	return s.root
 }
 
-func (s *StateStore) CodexHome() string {
+func (s *Store) CodexHome() string {
 	if value := os.Getenv("CODEX_HOME"); value != "" {
 		return value
 	}
@@ -66,7 +66,7 @@ func (s *StateStore) CodexHome() string {
 	return filepath.Join(home, ".codex")
 }
 
-func (s *StateStore) EnsureLayout() error {
+func (s *Store) EnsureLayout() error {
 	for _, dir := range []string{s.root, s.LogsDir()} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
@@ -80,31 +80,31 @@ func (s *StateStore) EnsureLayout() error {
 	return nil
 }
 
-func (s *StateStore) LogsDir() string {
+func (s *Store) LogsDir() string {
 	return filepath.Join(s.root, "logs")
 }
 
-func (s *StateStore) DaemonLogPath() string {
+func (s *Store) DaemonLogPath() string {
 	return filepath.Join(s.LogsDir(), "vigilante.log")
 }
 
-func (s *StateStore) SessionLogPath(issueNumber int) string {
+func (s *Store) SessionLogPath(issueNumber int) string {
 	return filepath.Join(s.LogsDir(), fmt.Sprintf("issue-%d.log", issueNumber))
 }
 
-func (s *StateStore) watchlistPath() string {
+func (s *Store) watchlistPath() string {
 	return filepath.Join(s.root, "watchlist.json")
 }
 
-func (s *StateStore) sessionsPath() string {
+func (s *Store) sessionsPath() string {
 	return filepath.Join(s.root, "sessions.json")
 }
 
-func (s *StateStore) scanLockPath() string {
+func (s *Store) scanLockPath() string {
 	return filepath.Join(s.root, "scan.lock")
 }
 
-func (s *StateStore) LoadWatchTargets() ([]WatchTarget, error) {
+func (s *Store) LoadWatchTargets() ([]WatchTarget, error) {
 	var targets []WatchTarget
 	if err := readJSONFile(s.watchlistPath(), &targets); err != nil {
 		return nil, err
@@ -112,11 +112,11 @@ func (s *StateStore) LoadWatchTargets() ([]WatchTarget, error) {
 	return targets, nil
 }
 
-func (s *StateStore) SaveWatchTargets(targets []WatchTarget) error {
+func (s *Store) SaveWatchTargets(targets []WatchTarget) error {
 	return writeJSONFile(s.watchlistPath(), targets)
 }
 
-func (s *StateStore) LoadSessions() ([]Session, error) {
+func (s *Store) LoadSessions() ([]Session, error) {
 	var sessions []Session
 	if err := readJSONFile(s.sessionsPath(), &sessions); err != nil {
 		return nil, err
@@ -124,7 +124,7 @@ func (s *StateStore) LoadSessions() ([]Session, error) {
 	return sessions, nil
 }
 
-func (s *StateStore) SaveSessions(sessions []Session) error {
+func (s *Store) SaveSessions(sessions []Session) error {
 	return writeJSONFile(s.sessionsPath(), sessions)
 }
 
@@ -165,7 +165,7 @@ func writeJSONFile(path string, value any) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-func (s *StateStore) AppendDaemonLog(format string, args ...any) {
+func (s *Store) AppendDaemonLog(format string, args ...any) {
 	appendLogFile(s.DaemonLogPath(), fmt.Sprintf(format, args...))
 }
 
@@ -181,7 +181,7 @@ func appendLogFile(path string, message string) {
 	_, _ = fmt.Fprintf(f, "[%s] %s\n", time.Now().UTC().Format(time.RFC3339), strings.TrimSpace(message))
 }
 
-func (s *StateStore) TryWithScanLock(fn func() error) (bool, error) {
+func (s *Store) TryWithScanLock(fn func() error) (bool, error) {
 	if err := os.MkdirAll(s.root, 0o755); err != nil {
 		return false, err
 	}

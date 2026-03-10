@@ -1,10 +1,13 @@
-package main
+package worktree
 
 import (
 	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/nicobistolfi/vigilante/internal/environment"
+	"github.com/nicobistolfi/vigilante/internal/state"
 )
 
 type Worktree struct {
@@ -12,7 +15,7 @@ type Worktree struct {
 	Branch string
 }
 
-func CreateIssueWorktree(ctx context.Context, runner Runner, target WatchTarget, issueNumber int) (Worktree, error) {
+func CreateIssueWorktree(ctx context.Context, runner environment.Runner, target state.WatchTarget, issueNumber int) (Worktree, error) {
 	branch := fmt.Sprintf("vigilante/issue-%d", issueNumber)
 	path := filepath.Join(target.Path, ".worktrees", "vigilante", fmt.Sprintf("issue-%d", issueNumber))
 
@@ -37,12 +40,12 @@ func CreateIssueWorktree(ctx context.Context, runner Runner, target WatchTarget,
 	return Worktree{Path: path, Branch: branch}, nil
 }
 
-func RemoveWorktree(ctx context.Context, runner Runner, repoPath string, worktreePath string) error {
+func Remove(ctx context.Context, runner environment.Runner, repoPath string, worktreePath string) error {
 	_, err := runner.Run(ctx, repoPath, "git", "worktree", "remove", "--force", worktreePath)
 	return err
 }
 
-func branchExists(ctx context.Context, runner Runner, repoPath string, branch string) bool {
+func branchExists(ctx context.Context, runner environment.Runner, repoPath string, branch string) bool {
 	_, err := runner.Run(ctx, repoPath, "git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
 	return err == nil
 }

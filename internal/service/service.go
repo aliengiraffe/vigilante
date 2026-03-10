@@ -1,4 +1,4 @@
-package main
+package service
 
 import (
 	"context"
@@ -8,37 +8,40 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/nicobistolfi/vigilante/internal/environment"
+	"github.com/nicobistolfi/vigilante/internal/state"
 )
 
-type ServiceConfig struct {
+type Config struct {
 	Executable string
 	PathEnv    string
 	HomeDir    string
 }
 
-func InstallService(ctx context.Context, env *Environment, state *StateStore) error {
-	cfg, err := buildServiceConfig(ctx, env)
+func Install(ctx context.Context, env *environment.Environment, store *state.Store) error {
+	cfg, err := BuildConfig(ctx, env)
 	if err != nil {
 		return err
 	}
 
 	switch env.OS {
 	case "darwin":
-		return installLaunchdService(ctx, env, state, cfg)
+		return installLaunchdService(ctx, env, store, cfg)
 	case "linux":
-		return installSystemdUserService(ctx, env, state, cfg)
+		return installSystemdUserService(ctx, env, store, cfg)
 	default:
 		return fmt.Errorf("unsupported OS %q", env.OS)
 	}
 }
 
-func installLaunchdService(ctx context.Context, env *Environment, state *StateStore, cfg ServiceConfig) error {
+func installLaunchdService(ctx context.Context, env *environment.Environment, store *state.Store, cfg Config) error {
 	dir := filepath.Join(cfg.HomeDir, "Library", "LaunchAgents")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	path := filepath.Join(dir, "com.vigilante.agent.plist")
-	if err := os.WriteFile(path, []byte(renderLaunchdPlist(state, cfg)), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(RenderLaunchdPlist(store, cfg)), 0o644); err != nil {
 		return err
 	}
 	_, _ = env.Runner.Run(ctx, "", "launchctl", "unload", path)
@@ -48,13 +51,13 @@ func installLaunchdService(ctx context.Context, env *Environment, state *StateSt
 	return nil
 }
 
-func installSystemdUserService(ctx context.Context, env *Environment, state *StateStore, cfg ServiceConfig) error {
+func installSystemdUserService(ctx context.Context, env *environment.Environment, store *state.Store, cfg Config) error {
 	dir := filepath.Join(cfg.HomeDir, ".config", "systemd", "user")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	path := filepath.Join(dir, "vigilante.service")
-	if err := os.WriteFile(path, []byte(renderSystemdUnit(state, cfg)), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(RenderSystemdUnit(store, cfg)), 0o644); err != nil {
 		return err
 	}
 	for _, args := range [][]string{
@@ -68,7 +71,7 @@ func installSystemdUserService(ctx context.Context, env *Environment, state *Sta
 	return nil
 }
 
-func renderLaunchdPlist(state *StateStore, cfg ServiceConfig) string {
+func RenderLaunchdPlist(store *state.Store, cfg Config) string {
 	args := []string{cfg.Executable, "daemon", "run"}
 	return strings.TrimSpace(fmt.Sprintf(`
 <?xml version="1.0" encoding="UTF-8"?>
@@ -100,10 +103,10 @@ func renderLaunchdPlist(state *StateStore, cfg ServiceConfig) string {
   <string>%s/vigilante.err.log</string>
 </dict>
 </plist>
-`, args[0], args[1], args[2], cfg.HomeDir, cfg.PathEnv, state.LogsDir(), state.LogsDir())) + "\n"
+`, args[0], args[1], args[2], cfg.HomeDir, cfg.PathEnv, store.LogsDir(), store.LogsDir())) + "\n"
 }
 
-func renderSystemdUnit(state *StateStore, cfg ServiceConfig) string {
+func RenderSystemdUnit(store *state.Store, cfg Config) string {
 	return strings.TrimSpace(fmt.Sprintf(`
 [Unit]
 Description=Vigilante issue watcher
@@ -119,10 +122,10 @@ StandardError=append:%s/vigilante.err.log
 
 [Install]
 WantedBy=default.target
-`, cfg.HomeDir, cfg.PathEnv, cfg.Executable, state.Root(), state.LogsDir(), state.LogsDir())) + "\n"
+`, cfg.HomeDir, cfg.PathEnv, cfg.Executable, store.Root(), store.LogsDir(), store.LogsDir())) + "\n"
 }
 
-func serviceFilePath(goos string) (string, error) {
+func FilePath(goos string) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
@@ -137,14 +140,14 @@ func serviceFilePath(goos string) (string, error) {
 	}
 }
 
-func buildServiceConfig(ctx context.Context, env *Environment) (ServiceConfig, error) {
+func BuildConfig(ctx context.Context, env *environment.Environment) (Config, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ServiceConfig{}, err
+		return Config{}, err
 	}
 
-	cfg := ServiceConfig{
-		Executable: executablePath(),
+	cfg := Config{
+		Executable: environment.ExecutablePath(),
 		PathEnv:    os.Getenv("PATH"),
 		HomeDir:    home,
 	}
@@ -152,19 +155,19 @@ func buildServiceConfig(ctx context.Context, env *Environment) (ServiceConfig, e
 	if shellPath := os.Getenv("SHELL"); shellPath != "" {
 		pathValue, err := shellDerivedPath(ctx, env.Runner, shellPath)
 		if err != nil {
-			return ServiceConfig{}, err
+			return Config{}, err
 		}
 		cfg.PathEnv = pathValue
 	}
 
 	if err := validateDaemonTooling(ctx, env.Runner, cfg.PathEnv); err != nil {
-		return ServiceConfig{}, err
+		return Config{}, err
 	}
 
 	return cfg, nil
 }
 
-func shellDerivedPath(ctx context.Context, runner Runner, shellPath string) (string, error) {
+func shellDerivedPath(ctx context.Context, runner environment.Runner, shellPath string) (string, error) {
 	output, err := runner.Run(ctx, "", shellPath, "-lic", `printf "%s" "$PATH"`)
 	if err != nil {
 		return "", fmt.Errorf("derive PATH from shell %q: %w", shellPath, err)
@@ -176,7 +179,7 @@ func shellDerivedPath(ctx context.Context, runner Runner, shellPath string) (str
 	return pathValue, nil
 }
 
-func validateDaemonTooling(ctx context.Context, runner Runner, pathEnv string) error {
+func validateDaemonTooling(ctx context.Context, runner environment.Runner, pathEnv string) error {
 	missing := []string{}
 	for _, tool := range []string{"git", "gh", "codex"} {
 		if err := validateToolInPath(ctx, runner, pathEnv, tool); err != nil {
@@ -190,7 +193,7 @@ func validateDaemonTooling(ctx context.Context, runner Runner, pathEnv string) e
 	return nil
 }
 
-func validateToolInPath(ctx context.Context, runner Runner, pathEnv string, tool string) error {
+func validateToolInPath(ctx context.Context, runner environment.Runner, pathEnv string, tool string) error {
 	shellPath := "/bin/sh"
 	command := fmt.Sprintf("PATH=%q command -v %s", pathEnv, shellQuote(tool))
 	_, err := runner.Run(ctx, "", shellPath, "-lc", command)

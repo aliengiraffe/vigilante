@@ -1,21 +1,26 @@
-package main
+package service
 
 import (
 	"context"
-	"path/filepath"
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/nicobistolfi/vigilante/internal/environment"
+	"github.com/nicobistolfi/vigilante/internal/state"
+	"github.com/nicobistolfi/vigilante/internal/testutil"
 )
 
 func TestRenderLaunchdPlist(t *testing.T) {
-	state := &StateStore{root: filepath.Join(t.TempDir(), ".vigilante")}
-	cfg := ServiceConfig{
+	t.Setenv("VIGILANTE_HOME", t.TempDir())
+	store := state.NewStore()
+	cfg := Config{
 		Executable: "/Users/test/.local/bin/vigilante",
 		PathEnv:    "/opt/homebrew/bin:/usr/bin:/bin",
 		HomeDir:    "/Users/test",
 	}
-	plist := renderLaunchdPlist(state, cfg)
-	if !strings.Contains(plist, "<string>daemon</string>") || !strings.Contains(plist, state.LogsDir()) {
+	plist := RenderLaunchdPlist(store, cfg)
+	if !strings.Contains(plist, "<string>daemon</string>") || !strings.Contains(plist, store.LogsDir()) {
 		t.Fatalf("unexpected plist: %s", plist)
 	}
 	if !strings.Contains(plist, cfg.PathEnv) || !strings.Contains(plist, cfg.HomeDir) {
@@ -24,14 +29,15 @@ func TestRenderLaunchdPlist(t *testing.T) {
 }
 
 func TestRenderSystemdUnit(t *testing.T) {
-	state := &StateStore{root: filepath.Join(t.TempDir(), ".vigilante")}
-	cfg := ServiceConfig{
+	t.Setenv("VIGILANTE_HOME", t.TempDir())
+	store := state.NewStore()
+	cfg := Config{
 		Executable: "/home/test/.local/bin/vigilante",
 		PathEnv:    "/usr/local/bin:/usr/bin:/bin",
 		HomeDir:    "/home/test",
 	}
-	unit := renderSystemdUnit(state, cfg)
-	if !strings.Contains(unit, "ExecStart=") || !strings.Contains(unit, state.LogsDir()) {
+	unit := RenderSystemdUnit(store, cfg)
+	if !strings.Contains(unit, "ExecStart=") || !strings.Contains(unit, store.LogsDir()) {
 		t.Fatalf("unexpected unit: %s", unit)
 	}
 	if !strings.Contains(unit, "Environment=PATH="+cfg.PathEnv) || !strings.Contains(unit, "Environment=HOME="+cfg.HomeDir) {
@@ -39,15 +45,15 @@ func TestRenderSystemdUnit(t *testing.T) {
 	}
 }
 
-func TestBuildServiceConfigUsesShellPath(t *testing.T) {
+func TestBuildConfigUsesShellPath(t *testing.T) {
 	t.Setenv("HOME", "/Users/test")
 	t.Setenv("SHELL", "/bin/zsh")
 	t.Setenv("PATH", "/usr/bin:/bin")
 
-	env := &Environment{
+	env := &environment.Environment{
 		OS: "darwin",
-		Runner: fakeRunner{
-			outputs: map[string]string{
+		Runner: testutil.FakeRunner{
+			Outputs: map[string]string{
 				`/bin/zsh -lic printf "%s" "$PATH"`: "/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin",
 				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" command -v 'git'`:   "/opt/homebrew/bin/git\n",
 				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" command -v 'gh'`:    "/opt/homebrew/bin/gh\n",
@@ -56,7 +62,7 @@ func TestBuildServiceConfigUsesShellPath(t *testing.T) {
 		},
 	}
 
-	cfg, err := buildServiceConfig(context.Background(), env)
+	cfg, err := BuildConfig(context.Background(), env)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,27 +74,27 @@ func TestBuildServiceConfigUsesShellPath(t *testing.T) {
 	}
 }
 
-func TestBuildServiceConfigFailsWhenDaemonPathCannotResolveTools(t *testing.T) {
+func TestBuildConfigFailsWhenDaemonPathCannotResolveTools(t *testing.T) {
 	t.Setenv("HOME", "/Users/test")
 	t.Setenv("SHELL", "/bin/zsh")
 
-	env := &Environment{
+	env := &environment.Environment{
 		OS: "darwin",
-		Runner: fakeRunner{
-			outputs: map[string]string{
+		Runner: testutil.FakeRunner{
+			Outputs: map[string]string{
 				`/bin/zsh -lic printf "%s" "$PATH"`:                   "/usr/bin:/bin",
 				`/bin/sh -lc PATH="/usr/bin:/bin" command -v 'git'`:   "/usr/bin/git\n",
 				`/bin/sh -lc PATH="/usr/bin:/bin" command -v 'gh'`:    "",
 				`/bin/sh -lc PATH="/usr/bin:/bin" command -v 'codex'`: "",
 			},
-			errors: map[string]error{
-				`/bin/sh -lc PATH="/usr/bin:/bin" command -v 'gh'`:    errString("missing"),
-				`/bin/sh -lc PATH="/usr/bin:/bin" command -v 'codex'`: errString("missing"),
+			Errors: map[string]error{
+				`/bin/sh -lc PATH="/usr/bin:/bin" command -v 'gh'`:    errors.New("missing"),
+				`/bin/sh -lc PATH="/usr/bin:/bin" command -v 'codex'`: errors.New("missing"),
 			},
 		},
 	}
 
-	_, err := buildServiceConfig(context.Background(), env)
+	_, err := BuildConfig(context.Background(), env)
 	if err == nil || !strings.Contains(err.Error(), "codex, gh") {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -13,6 +13,15 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/nicobistolfi/vigilante/internal/environment"
+	ghcli "github.com/nicobistolfi/vigilante/internal/github"
+	"github.com/nicobistolfi/vigilante/internal/repo"
+	issuerunner "github.com/nicobistolfi/vigilante/internal/runner"
+	"github.com/nicobistolfi/vigilante/internal/service"
+	"github.com/nicobistolfi/vigilante/internal/skill"
+	"github.com/nicobistolfi/vigilante/internal/state"
+	"github.com/nicobistolfi/vigilante/internal/worktree"
 )
 
 const defaultScanInterval = 5 * time.Minute
@@ -20,23 +29,23 @@ const defaultScanInterval = 5 * time.Minute
 type App struct {
 	stdout io.Writer
 	stderr io.Writer
-	state  *StateStore
+	state  *state.Store
 	clock  func() time.Time
-	env    *Environment
+	env    *environment.Environment
 }
 
-func NewApp() *App {
-	state := NewStateStore()
+func New() *App {
+	store := state.NewStore()
 	return &App{
 		stdout: os.Stdout,
 		stderr: os.Stderr,
-		state:  state,
+		state:  store,
 		clock:  time.Now().UTC,
-		env: &Environment{
+		env: &environment.Environment{
 			OS: runtime.GOOS,
-			Runner: LoggingRunner{
-				Base: ExecRunner{},
-				Logf: state.AppendDaemonLog,
+			Runner: environment.LoggingRunner{
+				Base: environment.ExecRunner{},
+				Logf: store.AppendDaemonLog,
 			},
 		},
 	}
@@ -115,11 +124,11 @@ func (a *App) Setup(ctx context.Context, installDaemon bool) error {
 	if err := a.ensureTooling(ctx); err != nil {
 		return err
 	}
-	if err := EnsureSkillInstalled(a.state.CodexHome()); err != nil {
+	if err := skill.EnsureInstalled(a.state.CodexHome()); err != nil {
 		return err
 	}
 	if installDaemon {
-		if err := InstallService(ctx, a.env, a.state); err != nil {
+		if err := service.Install(ctx, a.env, a.state); err != nil {
 			return err
 		}
 	}
@@ -139,7 +148,7 @@ func (a *App) Watch(ctx context.Context, rawPath string, daemon bool) error {
 		return err
 	}
 
-	info, err := DiscoverRepository(ctx, a.env.Runner, repoPath)
+	info, err := repo.Discover(ctx, a.env.Runner, repoPath)
 	if err != nil {
 		return err
 	}
@@ -161,7 +170,7 @@ func (a *App) Watch(ctx context.Context, rawPath string, daemon bool) error {
 	}
 
 	if !updated {
-		target := WatchTarget{
+		target := state.WatchTarget{
 			Path:          info.Path,
 			Repo:          info.Repo,
 			Branch:        info.Branch,
@@ -293,7 +302,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 		for i := range targets {
 			target := &targets[i]
 			a.state.AppendDaemonLog("scan repo start repo=%s path=%s", target.Repo, target.Path)
-			issues, err := ListOpenIssues(ctx, a.env.Runner, target.Repo)
+			issues, err := ghcli.ListOpenIssues(ctx, a.env.Runner, target.Repo)
 			target.LastScanAt = a.clock().Format(time.RFC3339)
 			if err != nil {
 				if saveErr := a.state.SaveWatchTargets(targets); saveErr != nil {
@@ -303,7 +312,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			}
 			a.state.AppendDaemonLog("scan repo issues repo=%s open_issues=%d", target.Repo, len(issues))
 
-			next := SelectNextIssue(issues, sessions, target.Repo)
+			next := ghcli.SelectNextIssue(issues, sessions, target.Repo)
 			if next == nil {
 				a.state.AppendDaemonLog("scan repo no eligible issues repo=%s", target.Repo)
 				fmt.Fprintf(a.stdout, "repo: %s no eligible issues (%d open)\n", target.Repo, len(issues))
@@ -311,21 +320,21 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			}
 			a.state.AppendDaemonLog("scan repo selected issue repo=%s issue=%d title=%q", target.Repo, next.Number, next.Title)
 
-			worktree, err := CreateIssueWorktree(ctx, a.env.Runner, *target, next.Number)
+			wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, *target, next.Number)
 			if err != nil {
 				return err
 			}
-			a.state.AppendDaemonLog("scan repo worktree ready repo=%s issue=%d path=%s branch=%s", target.Repo, next.Number, worktree.Path, worktree.Branch)
+			a.state.AppendDaemonLog("scan repo worktree ready repo=%s issue=%d path=%s branch=%s", target.Repo, next.Number, wt.Path, wt.Branch)
 
-			session := Session{
+			session := state.Session{
 				RepoPath:     target.Path,
 				Repo:         target.Repo,
 				IssueNumber:  next.Number,
 				IssueTitle:   next.Title,
 				IssueURL:     next.URL,
-				Branch:       worktree.Branch,
-				WorktreePath: worktree.Path,
-				Status:       SessionStatusRunning,
+				Branch:       wt.Branch,
+				WorktreePath: wt.Path,
+				Status:       state.SessionStatusRunning,
 				StartedAt:    a.clock().Format(time.RFC3339),
 				UpdatedAt:    a.clock().Format(time.RFC3339),
 			}
@@ -334,9 +343,9 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				return err
 			}
 			startedCount++
-			fmt.Fprintf(a.stdout, "repo: %s started issue #%d in %s\n", target.Repo, next.Number, worktree.Path)
+			fmt.Fprintf(a.stdout, "repo: %s started issue #%d in %s\n", target.Repo, next.Number, wt.Path)
 
-			result := RunIssueSession(ctx, a.env, a.state, *target, *next, session)
+			result := issuerunner.RunIssueSession(ctx, a.env, a.state, *target, *next, session)
 			sessions = upsertSession(sessions, result)
 			if err := a.state.SaveSessions(sessions); err != nil {
 				return err
@@ -381,7 +390,7 @@ func (a *App) printUsage() {
 	fmt.Fprintln(a.stderr, "  vigilante daemon run [--once] [--interval duration]")
 }
 
-func upsertSession(sessions []Session, session Session) []Session {
+func upsertSession(sessions []state.Session, session state.Session) []state.Session {
 	for i := range sessions {
 		if sessions[i].Repo == session.Repo && sessions[i].IssueNumber == session.IssueNumber {
 			sessions[i] = session
