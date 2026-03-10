@@ -275,78 +275,89 @@ func (a *App) DaemonRun(ctx context.Context, interval time.Duration, once bool) 
 
 func (a *App) ScanOnce(ctx context.Context) error {
 	a.state.AppendDaemonLog("scan start")
-	if err := a.state.EnsureLayout(); err != nil {
-		return err
-	}
+	locked, err := a.state.TryWithScanLock(func() error {
+		if err := a.state.EnsureLayout(); err != nil {
+			return err
+		}
 
-	targets, err := a.state.LoadWatchTargets()
-	if err != nil {
-		return err
-	}
-	sessions, err := a.state.LoadSessions()
-	if err != nil {
-		return err
-	}
-	startedCount := 0
-
-	for i := range targets {
-		target := &targets[i]
-		a.state.AppendDaemonLog("scan repo start repo=%s path=%s", target.Repo, target.Path)
-		issues, err := ListOpenIssues(ctx, a.env.Runner, target.Repo)
-		target.LastScanAt = a.clock().Format(time.RFC3339)
+		targets, err := a.state.LoadWatchTargets()
 		if err != nil {
-			if saveErr := a.state.SaveWatchTargets(targets); saveErr != nil {
-				return saveErr
+			return err
+		}
+		sessions, err := a.state.LoadSessions()
+		if err != nil {
+			return err
+		}
+		startedCount := 0
+
+		for i := range targets {
+			target := &targets[i]
+			a.state.AppendDaemonLog("scan repo start repo=%s path=%s", target.Repo, target.Path)
+			issues, err := ListOpenIssues(ctx, a.env.Runner, target.Repo)
+			target.LastScanAt = a.clock().Format(time.RFC3339)
+			if err != nil {
+				if saveErr := a.state.SaveWatchTargets(targets); saveErr != nil {
+					return saveErr
+				}
+				return err
 			}
-			return err
-		}
-		a.state.AppendDaemonLog("scan repo issues repo=%s open_issues=%d", target.Repo, len(issues))
+			a.state.AppendDaemonLog("scan repo issues repo=%s open_issues=%d", target.Repo, len(issues))
 
-		next := SelectNextIssue(issues, sessions, target.Repo)
-		if next == nil {
-			a.state.AppendDaemonLog("scan repo no eligible issues repo=%s", target.Repo)
-			fmt.Fprintf(a.stdout, "repo: %s no eligible issues (%d open)\n", target.Repo, len(issues))
-			continue
-		}
-		a.state.AppendDaemonLog("scan repo selected issue repo=%s issue=%d title=%q", target.Repo, next.Number, next.Title)
+			next := SelectNextIssue(issues, sessions, target.Repo)
+			if next == nil {
+				a.state.AppendDaemonLog("scan repo no eligible issues repo=%s", target.Repo)
+				fmt.Fprintf(a.stdout, "repo: %s no eligible issues (%d open)\n", target.Repo, len(issues))
+				continue
+			}
+			a.state.AppendDaemonLog("scan repo selected issue repo=%s issue=%d title=%q", target.Repo, next.Number, next.Title)
 
-		worktree, err := CreateIssueWorktree(ctx, a.env.Runner, *target, next.Number)
-		if err != nil {
-			return err
-		}
-		a.state.AppendDaemonLog("scan repo worktree ready repo=%s issue=%d path=%s branch=%s", target.Repo, next.Number, worktree.Path, worktree.Branch)
+			worktree, err := CreateIssueWorktree(ctx, a.env.Runner, *target, next.Number)
+			if err != nil {
+				return err
+			}
+			a.state.AppendDaemonLog("scan repo worktree ready repo=%s issue=%d path=%s branch=%s", target.Repo, next.Number, worktree.Path, worktree.Branch)
 
-		session := Session{
-			RepoPath:     target.Path,
-			Repo:         target.Repo,
-			IssueNumber:  next.Number,
-			IssueTitle:   next.Title,
-			IssueURL:     next.URL,
-			Branch:       worktree.Branch,
-			WorktreePath: worktree.Path,
-			Status:       SessionStatusRunning,
-			StartedAt:    a.clock().Format(time.RFC3339),
-			UpdatedAt:    a.clock().Format(time.RFC3339),
-		}
-		sessions = upsertSession(sessions, session)
-		if err := a.state.SaveSessions(sessions); err != nil {
-			return err
-		}
-		startedCount++
-		fmt.Fprintf(a.stdout, "repo: %s started issue #%d in %s\n", target.Repo, next.Number, worktree.Path)
+			session := Session{
+				RepoPath:     target.Path,
+				Repo:         target.Repo,
+				IssueNumber:  next.Number,
+				IssueTitle:   next.Title,
+				IssueURL:     next.URL,
+				Branch:       worktree.Branch,
+				WorktreePath: worktree.Path,
+				Status:       SessionStatusRunning,
+				StartedAt:    a.clock().Format(time.RFC3339),
+				UpdatedAt:    a.clock().Format(time.RFC3339),
+			}
+			sessions = upsertSession(sessions, session)
+			if err := a.state.SaveSessions(sessions); err != nil {
+				return err
+			}
+			startedCount++
+			fmt.Fprintf(a.stdout, "repo: %s started issue #%d in %s\n", target.Repo, next.Number, worktree.Path)
 
-		result := RunIssueSession(ctx, a.env, a.state, *target, *next, session)
-		sessions = upsertSession(sessions, result)
-		if err := a.state.SaveSessions(sessions); err != nil {
-			return err
+			result := RunIssueSession(ctx, a.env, a.state, *target, *next, session)
+			sessions = upsertSession(sessions, result)
+			if err := a.state.SaveSessions(sessions); err != nil {
+				return err
+			}
+			a.state.AppendDaemonLog("scan repo session finished repo=%s issue=%d status=%s", target.Repo, next.Number, result.Status)
 		}
-		a.state.AppendDaemonLog("scan repo session finished repo=%s issue=%d status=%s", target.Repo, next.Number, result.Status)
+
+		fmt.Fprintf(a.stdout, "scanned %d watch target(s), started %d issue session(s)\n", len(targets), startedCount)
+		a.state.AppendDaemonLog("scan complete targets=%d started=%d", len(targets), startedCount)
+
+		return a.state.SaveWatchTargets(targets)
+	})
+	if err != nil {
+		return err
 	}
-
-	fmt.Fprintf(a.stdout, "scanned %d watch target(s), started %d issue session(s)\n", len(targets), startedCount)
-	a.state.AppendDaemonLog("scan complete targets=%d started=%d", len(targets), startedCount)
-
-	return a.state.SaveWatchTargets(targets)
+	if !locked {
+		a.state.AppendDaemonLog("scan skipped; another daemon process holds the scan lock")
+		fmt.Fprintln(a.stdout, "scan skipped: another vigilante daemon is already scanning")
+		return nil
+	}
+	return nil
 }
 
 func (a *App) ensureTooling(ctx context.Context) error {

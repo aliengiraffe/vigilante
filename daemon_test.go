@@ -81,3 +81,33 @@ func TestScanOncePrintsNoEligibleIssues(t *testing.T) {
 		t.Fatalf("unexpected output: %s", got)
 	}
 }
+
+func TestScanOnceSkipsWhenAnotherProcessHoldsScanLock(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	var stdout bytes.Buffer
+	app := NewApp()
+	app.stdout = &stdout
+	app.stderr = ioDiscard{}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+
+	locked, err := app.state.TryWithScanLock(func() error {
+		if err := app.ScanOnce(context.Background()); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !locked {
+		t.Fatal("expected outer lock to be acquired")
+	}
+	if got := stdout.String(); !strings.Contains(got, "scan skipped: another vigilante daemon is already scanning") {
+		t.Fatalf("unexpected output: %s", got)
+	}
+}

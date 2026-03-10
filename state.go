@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -99,6 +100,10 @@ func (s *StateStore) sessionsPath() string {
 	return filepath.Join(s.root, "sessions.json")
 }
 
+func (s *StateStore) scanLockPath() string {
+	return filepath.Join(s.root, "scan.lock")
+}
+
 func (s *StateStore) LoadWatchTargets() ([]WatchTarget, error) {
 	var targets []WatchTarget
 	if err := readJSONFile(s.watchlistPath(), &targets); err != nil {
@@ -174,4 +179,27 @@ func appendLogFile(path string, message string) {
 	}
 	defer f.Close()
 	_, _ = fmt.Fprintf(f, "[%s] %s\n", time.Now().UTC().Format(time.RFC3339), strings.TrimSpace(message))
+}
+
+func (s *StateStore) TryWithScanLock(fn func() error) (bool, error) {
+	if err := os.MkdirAll(s.root, 0o755); err != nil {
+		return false, err
+	}
+	f, err := os.OpenFile(s.scanLockPath(), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return false, nil
+		}
+		return false, err
+	}
+	defer func() {
+		_ = syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	}()
+
+	return true, fn()
 }
