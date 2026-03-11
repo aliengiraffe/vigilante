@@ -4,13 +4,21 @@
 
 # vigilante
 
-`vigilante` is a Go CLI and background service that watches local Git repositories, discovers their GitHub remotes, monitors open issues with the GitHub CLI, and launches headless Codex sessions to implement issues in isolated git worktrees.
+`vigilante` is a Go CLI and background service that watches local Git repositories, discovers their GitHub remotes, monitors open issues with the GitHub CLI, and orchestrates headless coding agent sessions in isolated git worktrees.
 
-The initial target platforms are macOS and Ubuntu. The first implementation should keep dependencies minimal and lean on existing system tools where possible: `git`, `gh`, `codex`, and native service managers.
+The initial target platforms are macOS and Ubuntu. The first implementation should keep dependencies minimal and lean on existing system tools where possible: `git`, `gh`, one or more headless coding agent CLIs such as `codex`, and native service managers.
+
+## What Vigilante Is
+
+`vigilante` is the control plane around headless coding agents. It watches repositories, chooses eligible issues, prepares isolated worktrees, launches agent sessions, tracks their lifecycle, reports progress back to GitHub, and keeps automation running as a daemon.
+
+## What Vigilante Is Not
+
+`vigilante` is not itself the code-generating agent. Tools such as Codex, Claude Code, and similar headless coding CLIs are the execution engines that read the prompt, edit code, run checks, and prepare pull requests. Keeping orchestration separate from code generation makes the system easier to evolve: Vigilante can handle scheduling, worktree isolation, PR maintenance, repo monitoring, and GitHub status reporting while remaining flexible about which provider actually performs the implementation work.
 
 ## Product Goal
 
-Turn a local checkout into an autonomous issue worker:
+Turn a local checkout into an autonomous coding-agent worker:
 
 ```sh
 vigilante watch ~/hello-world-app
@@ -21,8 +29,8 @@ Once a folder is registered, `vigilante` should:
 1. Resolve the repository path and detect the GitHub remote.
 2. Poll or subscribe for open GitHub issues through `gh`.
 3. Select issues that are ready to work and not already being handled.
-4. Launch a headless Codex session in YOLO mode against a dedicated git worktree.
-5. Use the Codex issue implementation skill from the repo `skills/` folder as part of the execution prompt.
+4. Launch a headless coding agent session in YOLO mode against a dedicated git worktree.
+5. Use the issue implementation skill from the repo `skills/` folder as part of the execution prompt.
 6. Post progress comments back to the GitHub issue, including session start and failures.
 7. Track watched repositories locally and optionally run as a daemon.
 
@@ -36,15 +44,15 @@ For each watched repository:
    - `git`
    - `gh`
    - `codex`
-4. Ensure the Codex issue implementation skill from `skills/vigilante-issue-implementation/` is installed during setup, including its companion agent metadata.
+4. Ensure the coding-agent issue implementation skill from `skills/vigilante-issue-implementation/` is installed during setup, including its companion agent metadata.
 5. Query GitHub for open issues.
 6. Determine which issues are eligible for execution.
 7. Create a git worktree for the selected issue.
-8. Launch Codex headlessly in the worktree with a prompt that:
+8. Launch a supported coding agent headlessly in the worktree with a prompt that:
    - uses the issue implementation skill
-   - instructs Codex to comment on the issue when work starts
-   - instructs Codex to keep commenting as progress is made
-   - instructs Codex to report errors back to the issue
+   - instructs the agent to comment on the issue when work starts
+   - instructs the agent to keep commenting as progress is made
+   - instructs the agent to report errors back to the issue
 9. Track the session state locally so the daemon does not duplicate work.
 10. Clean up or mark terminal states when the session exits.
 
@@ -113,7 +121,7 @@ Expected behavior:
 - creates `~/.vigilante/`
 - initializes `watchlist.json`
 - verifies `git`, `gh`, and `codex`
-- installs the bundled Codex skills for regular runtime use, including any companion files under each skill directory
+- installs the bundled coding-agent skills for regular runtime use, including any companion files under each skill directory
 - installs or updates the daemon definition when requested
 
 ## Development Mode
@@ -236,18 +244,18 @@ Initial rules:
 
 Future policy can expand to label filters, assignment rules, priority queues, and concurrency limits.
 
-## Codex Execution Contract
+## Headless Agent Execution Contract
 
-When `vigilante` launches Codex for an issue, it should:
+When `vigilante` launches a coding agent for an issue, it should:
 
 - create a dedicated git worktree for that issue
 - pass a prompt that includes the repository, issue number, and local working directory
-- ensure the Codex issue implementation skill is available
-- instruct Codex to post a GitHub comment when the session starts
-- instruct Codex to post progress comments during execution
-- instruct Codex to report failures on the issue if execution aborts
+- ensure the issue implementation skill is available
+- instruct the agent to post a GitHub comment when the session starts
+- instruct the agent to post progress comments during execution
+- instruct the agent to report failures on the issue if execution aborts
 
-The first implementation can treat the Codex invocation as a subprocess wrapper around the installed `codex` CLI.
+The first implementation can treat the agent invocation as a subprocess wrapper around an installed coding CLI such as `codex`, while keeping the wording compatible with future providers.
 
 ## GitHub Integration
 
@@ -295,7 +303,7 @@ Minimum error reporting behavior:
 
 - write structured local logs
 - mark the local session as failed
-- comment on the GitHub issue when the Codex session fails to start
+- comment on the GitHub issue when the coding-agent session fails to start
 - comment on the GitHub issue when a running session exits with error
 
 ## Development Plan
@@ -305,9 +313,9 @@ The initial implementation should be split into issues covering:
 1. CLI scaffolding and config/state management
 2. Git repository and GitHub remote discovery
 3. GitHub issue polling through `gh`
-4. Codex skill installation and prompt assembly
+4. Coding-agent skill installation and prompt assembly
 5. Worktree lifecycle management
-6. Headless Codex session runner with GitHub progress comments
+6. Headless coding-agent session runner with GitHub progress comments
 7. Daemon loop and scheduler
 8. macOS and Ubuntu service installation
 
