@@ -272,6 +272,82 @@ func TestScanOncePrintsNoEligibleIssues(t *testing.T) {
 	}
 }
 
+func TestScanOnceSkipsRedispatchForMaintainedIssueAndStartsNextEligibleIssue(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath1 := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	worktreePath2 := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-2")
+	if err := os.MkdirAll(worktreePath1, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	var stdout bytes.Buffer
+	app := New()
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
+			"git fetch origin main":  "ok",
+			"git status --porcelain": "",
+			"git rebase origin/main": "Successfully rebased and updated refs/heads/vigilante/issue-1.\n",
+			"go test ./...":          "ok",
+			"git push --force-with-lease origin HEAD:vigilante/issue-1": "ok",
+			"gh issue comment --repo owner/repo 1 --body Vigilante rebased PR #31 onto the latest `origin/main`, reran `go test ./...`, and pushed `vigilante/issue-1`.": "ok",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels":                                              `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[{"name":"to-do"}]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[{"name":"to-do"}]}]`,
+			"git worktree prune": "ok",
+			"git worktree add -b vigilante/issue-2 " + worktreePath2 + " main":                                                                                       "ok",
+			"gh issue comment --repo owner/repo 2 --body Vigilante started a Codex session for this issue in `" + worktreePath2 + "` on branch `vigilante/issue-2`.": "ok",
+			"codex exec --cd " + worktreePath2 + " --dangerously-bypass-approvals-and-sandbox Use the `vigilante-issue-implementation` skill for this task.\nRepository: owner/repo\nLocal repository path: " + repoPath + "\nIssue: #2 - second\nIssue URL: https://github.com/owner/repo/issues/2\nWorktree path: " + worktreePath2 + "\nBranch: vigilante/issue-2\nUse `gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch, open a pull request, and report any execution failure back to the issue.\nUse the issue as the source of truth for the requested behavior and keep the implementation minimal.": "done",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me", Labels: []string{"to-do"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:     repoPath,
+		Repo:         "owner/repo",
+		IssueNumber:  1,
+		IssueTitle:   "first",
+		IssueURL:     "https://github.com/owner/repo/issues/1",
+		Branch:       "vigilante/issue-1",
+		WorktreePath: worktreePath1,
+		Status:       state.SessionStatusSuccess,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := stdout.String(); !strings.Contains(got, "repo: owner/repo started issue #2 in "+worktreePath2) || !strings.Contains(got, "scanned 1 watch target(s), started 1 issue session(s)") {
+		t.Fatalf("unexpected output: %s", got)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+	if sessions[0].IssueNumber != 1 || sessions[0].PullRequestState != "OPEN" {
+		t.Fatalf("expected issue #1 to stay under maintenance: %#v", sessions[0])
+	}
+	if sessions[1].IssueNumber != 2 || sessions[1].Status != state.SessionStatusSuccess {
+		t.Fatalf("expected issue #2 to complete a new session: %#v", sessions[1])
+	}
+}
+
 func TestScanOnceCleansUpMergedIssueSession(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))

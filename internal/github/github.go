@@ -72,7 +72,7 @@ func resolveAssignee(ctx context.Context, runner environment.Runner, assignee st
 func SelectNextIssue(issues []Issue, sessions []state.Session, target state.WatchTarget) *Issue {
 	active := map[int]bool{}
 	for _, session := range sessions {
-		if session.Repo == target.Repo && session.Status == state.SessionStatusRunning {
+		if session.Repo == target.Repo && sessionBlocksRedispatch(session) {
 			active[session.IssueNumber] = true
 		}
 	}
@@ -86,6 +86,19 @@ func SelectNextIssue(issues []Issue, sessions []state.Session, target state.Watc
 		return &issues[i]
 	}
 	return nil
+}
+
+func sessionBlocksRedispatch(session state.Session) bool {
+	if session.Status == state.SessionStatusRunning {
+		return true
+	}
+	if session.Status != state.SessionStatusSuccess {
+		return false
+	}
+	if session.CleanupCompletedAt != "" || session.MonitoringStoppedAt != "" {
+		return false
+	}
+	return true
 }
 
 func matchesLabelAllowlist(issue Issue, allowlist []string) bool {
