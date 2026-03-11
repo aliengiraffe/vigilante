@@ -28,7 +28,7 @@ func TestRunIssueSessionSuccess(t *testing.T) {
 				Items: []string{
 					"Vigilante launched this implementation session in `/tmp/worktree`.",
 					"Branch: `vigilante/issue-7`.",
-					"Current stage: handing the issue off to Codex for investigation and implementation.",
+					"Current stage: handing the issue off to the configured coding agent (`codex`) for investigation and implementation.",
 				},
 				Tagline: "Make it simple, but significant.",
 			}): "ok",
@@ -67,7 +67,7 @@ func TestRunIssueSessionFailureCommentsOnIssue(t *testing.T) {
 				Items: []string{
 					"Vigilante launched this implementation session in `/tmp/worktree`.",
 					"Branch: `vigilante/issue-7`.",
-					"Current stage: handing the issue off to Codex for investigation and implementation.",
+					"Current stage: handing the issue off to the configured coding agent (`codex`) for investigation and implementation.",
 				},
 				Tagline: "Make it simple, but significant.",
 			}): "ok",
@@ -161,6 +161,7 @@ func TestAppendSessionLogUsesLocalTimezone(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "issue-7.log")
 	appendSessionLog(path, "session started", state.Session{
 		IssueNumber:  7,
+		Provider:     "codex",
 		Branch:       "vigilante/issue-7",
 		WorktreePath: "/tmp/worktree",
 		Status:       state.SessionStatusRunning,
@@ -171,6 +172,9 @@ func TestAppendSessionLogUsesLocalTimezone(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(data)
+	if !strings.Contains(text, "provider=codex") {
+		t.Fatalf("expected provider in session log entry, got %q", text)
+	}
 	if !strings.Contains(text, "-08:00] session started") {
 		t.Fatalf("expected local timezone offset in session log entry, got %q", text)
 	}

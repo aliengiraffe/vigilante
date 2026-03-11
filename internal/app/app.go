@@ -17,10 +17,10 @@ import (
 
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
+	"github.com/nicobistolfi/vigilante/internal/provider"
 	"github.com/nicobistolfi/vigilante/internal/repo"
 	issuerunner "github.com/nicobistolfi/vigilante/internal/runner"
 	"github.com/nicobistolfi/vigilante/internal/service"
-	"github.com/nicobistolfi/vigilante/internal/skill"
 	"github.com/nicobistolfi/vigilante/internal/state"
 	"github.com/nicobistolfi/vigilante/internal/worktree"
 )
@@ -171,14 +171,18 @@ func (a *App) Setup(ctx context.Context, installDaemon bool) error {
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
 	}
-	if err := a.ensureTooling(ctx); err != nil {
+	selectedProvider, err := provider.Resolve(provider.DefaultID)
+	if err != nil {
 		return err
 	}
-	if err := skill.EnsureInstalled(a.state.CodexHome()); err != nil {
+	if err := a.ensureTooling(ctx, selectedProvider); err != nil {
+		return err
+	}
+	if err := selectedProvider.EnsureRuntimeInstalled(a.state); err != nil {
 		return err
 	}
 	if installDaemon {
-		if err := service.Install(ctx, a.env, a.state); err != nil {
+		if err := service.Install(ctx, a.env, a.state, selectedProvider); err != nil {
 			return err
 		}
 	}
@@ -215,6 +219,9 @@ func (a *App) Watch(ctx context.Context, rawPath string, daemon bool, labels []s
 		if target.Path == info.Path {
 			targets[i].Repo = info.Repo
 			targets[i].Branch = info.Branch
+			if strings.TrimSpace(targets[i].Provider) == "" {
+				targets[i].Provider = provider.DefaultID
+			}
 			targets[i].Labels = labels
 			if assignee != "" {
 				targets[i].Assignee = assignee
@@ -232,6 +239,7 @@ func (a *App) Watch(ctx context.Context, rawPath string, daemon bool, labels []s
 			Path:          info.Path,
 			Repo:          info.Repo,
 			Branch:        info.Branch,
+			Provider:      provider.DefaultID,
 			Labels:        labels,
 			Assignee:      assigneeOrDefault(assignee),
 			DaemonEnabled: daemon,
@@ -380,6 +388,9 @@ func (a *App) ScanOnce(ctx context.Context) error {
 		for i := range targets {
 			target := &targets[i]
 			target.Assignee = assigneeOrDefault(target.Assignee)
+			if strings.TrimSpace(target.Provider) == "" {
+				target.Provider = provider.DefaultID
+			}
 			a.state.AppendDaemonLog("scan repo start repo=%s path=%s", target.Repo, target.Path)
 			issues, err := ghcli.ListOpenIssues(ctx, a.env.Runner, target.Repo, target.Assignee)
 			target.LastScanAt = a.clock().Format(time.RFC3339)
@@ -408,6 +419,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			session := state.Session{
 				RepoPath:        target.Path,
 				Repo:            target.Repo,
+				Provider:        target.Provider,
 				IssueNumber:     next.Number,
 				IssueTitle:      next.Title,
 				IssueURL:        next.URL,
@@ -962,8 +974,19 @@ func (a *App) resumeBlockedMaintenance(ctx context.Context, session *state.Sessi
 func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Session) error {
 	issue := ghcli.Issue{Number: session.IssueNumber, Title: session.IssueTitle, URL: session.IssueURL}
 	target := state.WatchTarget{Path: session.RepoPath, Repo: session.Repo, Branch: "main"}
-	prompt := skill.BuildIssuePrompt(target, issue, *session)
-	output, err := a.env.Runner.Run(ctx, "", "codex", "exec", "--cd", session.WorktreePath, "--dangerously-bypass-approvals-and-sandbox", prompt)
+	selectedProvider, err := provider.Resolve(session.Provider)
+	if err != nil {
+		return err
+	}
+	invocation, err := selectedProvider.BuildIssueInvocation(provider.IssueTask{
+		Target:  target,
+		Issue:   issue,
+		Session: *session,
+	})
+	if err != nil {
+		return err
+	}
+	output, err := a.env.Runner.Run(ctx, invocation.Dir, invocation.Name, invocation.Args...)
 	session.EndedAt = a.clock().Format(time.RFC3339)
 	session.LastHeartbeatAt = session.EndedAt
 	session.UpdatedAt = session.EndedAt
@@ -1153,8 +1176,8 @@ func fallbackText(value string, fallback string) string {
 	return value
 }
 
-func (a *App) ensureTooling(ctx context.Context) error {
-	for _, tool := range []string{"git", "gh", "codex"} {
+func (a *App) ensureTooling(ctx context.Context, selectedProvider provider.Provider) error {
+	for _, tool := range provider.RequiredToolset(selectedProvider) {
 		if _, err := a.env.Runner.LookPath(tool); err != nil {
 			return fmt.Errorf("%s is required: %w", tool, err)
 		}

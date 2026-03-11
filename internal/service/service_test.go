@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nicobistolfi/vigilante/internal/environment"
+	"github.com/nicobistolfi/vigilante/internal/provider"
 	"github.com/nicobistolfi/vigilante/internal/state"
 	"github.com/nicobistolfi/vigilante/internal/testutil"
 )
@@ -62,7 +63,11 @@ func TestBuildConfigUsesShellPath(t *testing.T) {
 		},
 	}
 
-	cfg, err := BuildConfig(context.Background(), env)
+	selectedProvider, err := provider.Resolve(provider.DefaultID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := BuildConfig(context.Background(), env, selectedProvider)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +99,11 @@ func TestBuildConfigFailsWhenDaemonPathCannotResolveTools(t *testing.T) {
 		},
 	}
 
-	_, err := BuildConfig(context.Background(), env)
+	selectedProvider, err := provider.Resolve(provider.DefaultID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = BuildConfig(context.Background(), env, selectedProvider)
 	if err == nil || !strings.Contains(err.Error(), "codex, gh") {
 		t.Fatalf("unexpected error: %v", err)
 	}

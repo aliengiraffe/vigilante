@@ -359,7 +359,7 @@ func TestScanOnceSelectsEligibleIssueAndPersistsSession(t *testing.T) {
 				Items: []string{
 					"Vigilante launched this implementation session in `" + worktreePath + "`.",
 					"Branch: `" + branch + "`.",
-					"Current stage: handing the issue off to Codex for investigation and implementation.",
+					"Current stage: handing the issue off to the configured coding agent (`codex`) for investigation and implementation.",
 				},
 				Tagline: "Make it simple, but significant.",
 			}): "ok",
@@ -483,7 +483,7 @@ func TestScanOnceSkipsRedispatchForMaintainedIssueAndStartsNextEligibleIssue(t *
 				Items: []string{
 					"Vigilante launched this implementation session in `" + worktreePath2 + "`.",
 					"Branch: `" + branch2 + "`.",
-					"Current stage: handing the issue off to Codex for investigation and implementation.",
+					"Current stage: handing the issue off to the configured coding agent (`codex`) for investigation and implementation.",
 				},
 				Tagline: "Make it simple, but significant.",
 			}): "ok",
@@ -816,7 +816,7 @@ func TestScanOnceRecoversStalledSessionAndRedispatchesIssue(t *testing.T) {
 				Items: []string{
 					"Vigilante launched this implementation session in `" + worktreePath + "`.",
 					"Branch: `" + branch + "`.",
-					"Current stage: handing the issue off to Codex for investigation and implementation.",
+					"Current stage: handing the issue off to the configured coding agent (`codex`) for investigation and implementation.",
 				},
 				Tagline: "Make it simple, but significant.",
 			}): "ok",
