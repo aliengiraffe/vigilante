@@ -13,6 +13,50 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/testutil"
 )
 
+func TestRunDaemonCommandUsesDefaultScanInterval(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+
+	if err := app.runDaemonCommand(context.Background(), []string{"run", "--once"}); err != nil {
+		t.Fatal(err)
+	}
+
+	logData, err := os.ReadFile(app.state.DaemonLogPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logData), "daemon run start once=true interval=1m0s") {
+		t.Fatalf("unexpected daemon log: %s", logData)
+	}
+}
+
+func TestRunDaemonCommandKeepsIntervalOverride(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+
+	if err := app.runDaemonCommand(context.Background(), []string{"run", "--once", "--interval", "30s"}); err != nil {
+		t.Fatal(err)
+	}
+
+	logData, err := os.ReadFile(app.state.DaemonLogPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logData), "daemon run start once=true interval=30s") {
+		t.Fatalf("unexpected daemon log: %s", logData)
+	}
+}
+
 func TestSetupCreatesStateLayoutAndSkill(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))

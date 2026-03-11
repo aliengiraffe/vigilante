@@ -24,7 +24,7 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/worktree"
 )
 
-const defaultScanInterval = 5 * time.Minute
+const defaultScanInterval = 1 * time.Minute
 
 type App struct {
 	stdout io.Writer

@@ -92,6 +92,7 @@ Remove a repository from the watchlist without deleting the repository itself.
 ### `vigilante daemon run`
 
 Run the long-lived watcher loop in the foreground. This is the process the OS service should execute.
+By default it scans watched repositories every 1 minute. Use `--interval` to override that cadence for manual runs.
 
 ### `vigilante setup`
 
