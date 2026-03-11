@@ -29,9 +29,12 @@ func TestCreateAndRemoveWorktree(t *testing.T) {
 	mustRun(t, runner, ctx, repo, "git", "add", "README.md")
 	mustRun(t, runner, ctx, repo, "git", "commit", "-m", "init")
 
-	worktree, err := CreateIssueWorktree(ctx, runner, state.WatchTarget{Path: repo, Repo: "owner/repo", Branch: "main"}, 9)
+	worktree, err := CreateIssueWorktree(ctx, runner, state.WatchTarget{Path: repo, Repo: "owner/repo", Branch: "main"}, 9, "Add daemon status command")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if want := "vigilante/issue-9-add-daemon-status-command"; worktree.Branch != want {
+		t.Fatalf("unexpected branch: got %s want %s", worktree.Branch, want)
 	}
 	if want := filepath.Join(repo, ".worktrees", "vigilante", "issue-9"); worktree.Path != want {
 		t.Fatalf("unexpected worktree path: got %s want %s", worktree.Path, want)
@@ -44,7 +47,7 @@ func TestCreateAndRemoveWorktree(t *testing.T) {
 	}
 }
 
-func TestCreateIssueWorktreeReusesExistingBranch(t *testing.T) {
+func TestCreateIssueWorktreeReusesExistingLegacyBranch(t *testing.T) {
 	home := t.TempDir()
 	repo := filepath.Join(home, "repo")
 	if err := os.MkdirAll(repo, 0o755); err != nil {
@@ -63,15 +66,48 @@ func TestCreateIssueWorktreeReusesExistingBranch(t *testing.T) {
 	mustRun(t, runner, ctx, repo, "git", "commit", "-m", "init")
 	mustRun(t, runner, ctx, repo, "git", "branch", "vigilante/issue-9")
 
-	worktree, err := CreateIssueWorktree(ctx, runner, state.WatchTarget{Path: repo, Repo: "owner/repo", Branch: "main"}, 9)
+	worktree, err := CreateIssueWorktree(ctx, runner, state.WatchTarget{Path: repo, Repo: "owner/repo", Branch: "main"}, 9, "Add daemon status command")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if want := "vigilante/issue-9"; worktree.Branch != want {
+		t.Fatalf("unexpected branch: got %s want %s", worktree.Branch, want)
 	}
 	if _, err := os.Stat(worktree.Path); err != nil {
 		t.Fatal(err)
 	}
 	if err := Remove(ctx, runner, repo, worktree.Path); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestIssueTitleSlug(t *testing.T) {
+	tests := []struct {
+		title string
+		want  string
+	}{
+		{title: "Add daemon status command", want: "add-daemon-status-command"},
+		{title: "Fix: spaces, punctuation, & CASE", want: "fix-spaces-punctuation-case"},
+		{title: "   ---   ", want: ""},
+	}
+
+	for _, tt := range tests {
+		if got := IssueTitleSlug(tt.title); got != tt.want {
+			t.Fatalf("IssueTitleSlug(%q) = %q, want %q", tt.title, got, tt.want)
+		}
+	}
+}
+
+func TestIssueBranchCandidates(t *testing.T) {
+	got := IssueBranchCandidates(21, "Add daemon status command")
+	want := []string{"vigilante/issue-21-add-daemon-status-command", "vigilante/issue-21"}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected candidates: %#v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected candidates: %#v", got)
+		}
 	}
 }
 

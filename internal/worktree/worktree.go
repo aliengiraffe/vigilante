@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/nicobistolfi/vigilante/internal/environment"
@@ -17,9 +18,11 @@ type Worktree struct {
 	Branch string
 }
 
-func CreateIssueWorktree(ctx context.Context, runner environment.Runner, target state.WatchTarget, issueNumber int) (Worktree, error) {
-	branch := fmt.Sprintf("vigilante/issue-%d", issueNumber)
-	path := filepath.Join(target.Path, ".worktrees", "vigilante", fmt.Sprintf("issue-%d", issueNumber))
+var nonAlnumPattern = regexp.MustCompile(`[^a-z0-9]+`)
+
+func CreateIssueWorktree(ctx context.Context, runner environment.Runner, target state.WatchTarget, issueNumber int, issueTitle string) (Worktree, error) {
+	branch := IssueBranchName(issueNumber, issueTitle)
+	path := IssueWorktreePath(target.Path, issueNumber)
 
 	if _, err := runner.Run(ctx, target.Path, "git", "worktree", "prune"); err != nil {
 		return Worktree{}, err
@@ -32,14 +35,49 @@ func CreateIssueWorktree(ctx context.Context, runner environment.Runner, target 
 	}
 
 	args := []string{"worktree", "add", "-b", branch, path, target.Branch}
-	if branchExists(ctx, runner, target.Path, branch) {
-		args = []string{"worktree", "add", path, branch}
+	for _, candidate := range IssueBranchCandidates(issueNumber, issueTitle) {
+		if branchExists(ctx, runner, target.Path, candidate) {
+			branch = candidate
+			args = []string{"worktree", "add", path, branch}
+			break
+		}
 	}
 
 	if _, err := runner.Run(ctx, target.Path, "git", args...); err != nil {
 		return Worktree{}, err
 	}
 	return Worktree{Path: path, Branch: branch}, nil
+}
+
+func IssueBranchName(issueNumber int, issueTitle string) string {
+	slug := IssueTitleSlug(issueTitle)
+	if slug == "" {
+		return LegacyIssueBranchName(issueNumber)
+	}
+	return fmt.Sprintf("%s-%s", LegacyIssueBranchName(issueNumber), slug)
+}
+
+func LegacyIssueBranchName(issueNumber int) string {
+	return fmt.Sprintf("vigilante/issue-%d", issueNumber)
+}
+
+func IssueWorktreePath(repoPath string, issueNumber int) string {
+	return filepath.Join(repoPath, ".worktrees", "vigilante", fmt.Sprintf("issue-%d", issueNumber))
+}
+
+func IssueBranchCandidates(issueNumber int, issueTitle string) []string {
+	primary := IssueBranchName(issueNumber, issueTitle)
+	legacy := LegacyIssueBranchName(issueNumber)
+	if primary == legacy {
+		return []string{legacy}
+	}
+	return []string{primary, legacy}
+}
+
+func IssueTitleSlug(issueTitle string) string {
+	normalized := strings.ToLower(issueTitle)
+	normalized = nonAlnumPattern.ReplaceAllString(normalized, "-")
+	return strings.Trim(normalized, "-")
 }
 
 func Remove(ctx context.Context, runner environment.Runner, repoPath string, worktreePath string) error {

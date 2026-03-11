@@ -363,7 +363,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			}
 			a.state.AppendDaemonLog("scan repo selected issue repo=%s issue=%d title=%q", target.Repo, next.Number, next.Title)
 
-			wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, *target, next.Number)
+			wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, *target, next.Number, next.Title)
 			if err != nil {
 				return err
 			}
