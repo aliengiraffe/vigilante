@@ -94,6 +94,7 @@ func TestWatchUpdatesExistingTarget(t *testing.T) {
 	repoPath := filepath.Join(home, "repo")
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 	t.Setenv("HOME", home)
+	t.Setenv("SHELL", "/bin/zsh")
 	if err := os.MkdirAll(repoPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
