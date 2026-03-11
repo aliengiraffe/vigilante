@@ -448,7 +448,18 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 			session.LastError = ""
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 			a.state.AppendDaemonLog("stalled session recovered to pr maintenance repo=%s issue=%d branch=%s reason=%q pr=%d", session.Repo, session.IssueNumber, session.Branch, reason, pr.Number)
-			body := fmt.Sprintf("Vigilante detected that the previous local session for branch `%s` was stalled (%s). An existing PR #%d was found, so the issue was recovered into PR maintenance.", session.Branch, reason, pr.Number)
+			body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Implementation In Progress",
+				Emoji:      "🔄",
+				Percent:    70,
+				ETAMinutes: 10,
+				Items: []string{
+					fmt.Sprintf("The previous local session on `%s` stalled (%s).", session.Branch, reason),
+					fmt.Sprintf("An existing PR #%d was found, so Vigilante recovered this issue into PR maintenance.", pr.Number),
+					"Next step: keep the PR merge-ready instead of redispatching a new implementation session.",
+				},
+				Tagline: "Fall seven times, stand up eight.",
+			})
 			if err := ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body); err != nil {
 				return nil, err
 			}
@@ -460,7 +471,18 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 			session.CleanupError = err.Error()
 			a.state.AppendDaemonLog("stalled session cleanup failed repo=%s issue=%d branch=%s reason=%q err=%v", session.Repo, session.IssueNumber, session.Branch, reason, err)
-			body := fmt.Sprintf("Vigilante detected a stalled local session on branch `%s` (%s), but automatic cleanup failed: %s", session.Branch, reason, summarizeMaintenanceError(err))
+			body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Blocked",
+				Emoji:      "🛠️",
+				Percent:    65,
+				ETAMinutes: 15,
+				Items: []string{
+					fmt.Sprintf("The local session on `%s` stalled (%s).", session.Branch, reason),
+					fmt.Sprintf("Automatic cleanup failed: `%s`.", summarizeMaintenanceError(err)),
+					"Next step: resolve the cleanup problem before redispatching the issue.",
+				},
+				Tagline: "The gem cannot be polished without friction.",
+			})
 			if commentErr := ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body); commentErr != nil {
 				return nil, commentErr
 			}
@@ -476,7 +498,18 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 		session.UpdatedAt = now
 		session.LastError = fmt.Sprintf("stalled session recovered: %s", reason)
 		a.state.AppendDaemonLog("stalled session recovered for redispatch repo=%s issue=%d branch=%s reason=%q", session.Repo, session.IssueNumber, session.Branch, reason)
-		body := fmt.Sprintf("Vigilante detected that the previous local session on branch `%s` was stalled (%s). The abandoned worktree state was cleaned up so the issue can be redispatched.", session.Branch, reason)
+		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+			Stage:      "Implementation In Progress",
+			Emoji:      "🧹",
+			Percent:    15,
+			ETAMinutes: 20,
+			Items: []string{
+				fmt.Sprintf("The previous local session on `%s` stalled (%s).", session.Branch, reason),
+				"The abandoned worktree state was cleaned up successfully.",
+				"Next step: the issue is ready to be redispatched in a fresh worktree.",
+			},
+			Tagline: "A smooth sea never made a skilled sailor.",
+		})
 		if err := ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body); err != nil {
 			return nil, err
 		}
@@ -518,7 +551,18 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 				session.UpdatedAt = a.clock().Format(time.RFC3339)
 				a.state.AppendDaemonLog("pr maintenance failed repo=%s issue=%d pr=%d branch=%s err=%v", session.Repo, session.IssueNumber, pr.Number, session.Branch, err)
 				if shouldCommentMaintenanceFailure(*session, err) {
-					body := fmt.Sprintf("Vigilante could not keep PR #%d merge-ready on `%s`: %s", pr.Number, session.Branch, summarizeMaintenanceError(err))
+					body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+						Stage:      "Blocked",
+						Emoji:      "🧱",
+						Percent:    85,
+						ETAMinutes: 15,
+						Items: []string{
+							fmt.Sprintf("Vigilante could not keep PR #%d merge-ready on `%s`.", pr.Number, session.Branch),
+							fmt.Sprintf("Failure detail: `%s`.", summarizeMaintenanceError(err)),
+							"Next step: inspect the branch state, fix the maintenance failure, and rerun validation.",
+						},
+						Tagline: "Difficulties strengthen the mind, as labor does the body.",
+					})
 					if commentErr := ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body); commentErr != nil {
 						a.state.AppendDaemonLog("pr maintenance failure comment failed repo=%s issue=%d pr=%d err=%v", session.Repo, session.IssueNumber, pr.Number, commentErr)
 					}
@@ -574,7 +618,18 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 		if !isRebaseConflict(rebaseOutput, err) {
 			return err
 		}
-		body := fmt.Sprintf("Vigilante hit rebase conflicts while updating PR #%d onto the latest `origin/main`. Launching the dedicated conflict-resolution skill in `%s`.", pr.Number, session.WorktreePath)
+		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+			Stage:      "Implementation In Progress",
+			Emoji:      "⚔️",
+			Percent:    75,
+			ETAMinutes: 12,
+			Items: []string{
+				fmt.Sprintf("Rebase conflicts appeared while updating PR #%d onto the latest `origin/main`.", pr.Number),
+				fmt.Sprintf("Worktree: `%s`.", session.WorktreePath),
+				"Next step: launch the dedicated conflict-resolution skill and continue from the rebased branch.",
+			},
+			Tagline: "Smooth roads never make skillful drivers.",
+		})
 		if commentErr := ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body); commentErr != nil {
 			a.state.AppendDaemonLog("pr conflict comment failed repo=%s issue=%d pr=%d err=%v", session.Repo, session.IssueNumber, pr.Number, commentErr)
 		}
@@ -598,7 +653,18 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 		return err
 	}
 
-	body := fmt.Sprintf("Vigilante rebased PR #%d onto the latest `origin/main`, reran `go test ./...`, and pushed `%s`.", pr.Number, session.Branch)
+	body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Validation Passed",
+		Emoji:      "✅",
+		Percent:    90,
+		ETAMinutes: 5,
+		Items: []string{
+			fmt.Sprintf("Rebased PR #%d onto the latest `origin/main`.", pr.Number),
+			"Reran `go test ./...` after the rebase.",
+			fmt.Sprintf("Pushed the updated branch `%s`.", session.Branch),
+		},
+		Tagline: "Success is where preparation and opportunity meet.",
+	})
 	return ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body)
 }
 

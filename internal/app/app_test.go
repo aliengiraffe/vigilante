@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	ghcli "github.com/nicobistolfi/vigilante/internal/github"
 	"github.com/nicobistolfi/vigilante/internal/skill"
 	"github.com/nicobistolfi/vigilante/internal/state"
 	"github.com/nicobistolfi/vigilante/internal/testutil"
@@ -214,9 +215,20 @@ func TestScanOnceSelectsEligibleIssueAndPersistsSession(t *testing.T) {
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[{"name":"to-do"}]}]`,
 			"git worktree prune": "ok",
-			"git worktree add -b vigilante/issue-1 " + worktreePath + " main":                                                                                       "ok",
-			"gh issue comment --repo owner/repo 1 --body Vigilante started a Codex session for this issue in `" + worktreePath + "` on branch `vigilante/issue-1`.": "ok",
-			"codex exec --cd " + worktreePath + " --dangerously-bypass-approvals-and-sandbox Use the `vigilante-issue-implementation` skill for this task.\nRepository: owner/repo\nLocal repository path: /tmp/repo\nIssue: #1 - first\nIssue URL: https://github.com/owner/repo/issues/1\nWorktree path: " + worktreePath + "\nBranch: vigilante/issue-1\nUse `gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch, open a pull request, and report any execution failure back to the issue.\nUse the issue as the source of truth for the requested behavior and keep the implementation minimal.": "done",
+			"git worktree add -b vigilante/issue-1 " + worktreePath + " main": "ok",
+			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Session Start",
+				Emoji:      "🚦",
+				Percent:    20,
+				ETAMinutes: 25,
+				Items: []string{
+					"Vigilante launched this implementation session in `" + worktreePath + "`.",
+					"Branch: `vigilante/issue-1`.",
+					"Current stage: handing the issue off to Codex for investigation and implementation.",
+				},
+				Tagline: "Make it simple, but significant.",
+			}): "ok",
+			"codex exec --cd " + worktreePath + " --dangerously-bypass-approvals-and-sandbox Use the `vigilante-issue-implementation` skill for this task.\nRepository: owner/repo\nLocal repository path: /tmp/repo\nIssue: #1 - first\nIssue URL: https://github.com/owner/repo/issues/1\nWorktree path: " + worktreePath + "\nBranch: vigilante/issue-1\nUse `gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch, open a pull request, and report any execution failure back to the issue.\nUse the same GitHub comment structure for every non-terminal milestone comment: a short header with the current stage and optional emoji, a 10-cell progress bar with percentage, an `ETA: ~N minutes` line, 1-3 concise bullets covering what just happened and what is next, and an optional short playful quote or tagline.\nUse the issue as the source of truth for the requested behavior and keep the implementation minimal.": "done",
 		},
 	}
 	if err := app.state.EnsureLayout(); err != nil {
@@ -307,12 +319,34 @@ func TestScanOnceSkipsRedispatchForMaintainedIssueAndStartsNextEligibleIssue(t *
 			"git rebase origin/main": "Successfully rebased and updated refs/heads/vigilante/issue-1.\n",
 			"go test ./...":          "ok",
 			"git push --force-with-lease origin HEAD:vigilante/issue-1": "ok",
-			"gh issue comment --repo owner/repo 1 --body Vigilante rebased PR #31 onto the latest `origin/main`, reran `go test ./...`, and pushed `vigilante/issue-1`.": "ok",
-			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels":                                              `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[{"name":"to-do"}]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[{"name":"to-do"}]}]`,
+			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Validation Passed",
+				Emoji:      "✅",
+				Percent:    90,
+				ETAMinutes: 5,
+				Items: []string{
+					"Rebased PR #31 onto the latest `origin/main`.",
+					"Reran `go test ./...` after the rebase.",
+					"Pushed the updated branch `vigilante/issue-1`.",
+				},
+				Tagline: "Success is where preparation and opportunity meet.",
+			}): "ok",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[{"name":"to-do"}]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[{"name":"to-do"}]}]`,
 			"git worktree prune": "ok",
-			"git worktree add -b vigilante/issue-2 " + worktreePath2 + " main":                                                                                       "ok",
-			"gh issue comment --repo owner/repo 2 --body Vigilante started a Codex session for this issue in `" + worktreePath2 + "` on branch `vigilante/issue-2`.": "ok",
-			"codex exec --cd " + worktreePath2 + " --dangerously-bypass-approvals-and-sandbox Use the `vigilante-issue-implementation` skill for this task.\nRepository: owner/repo\nLocal repository path: " + repoPath + "\nIssue: #2 - second\nIssue URL: https://github.com/owner/repo/issues/2\nWorktree path: " + worktreePath2 + "\nBranch: vigilante/issue-2\nUse `gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch, open a pull request, and report any execution failure back to the issue.\nUse the issue as the source of truth for the requested behavior and keep the implementation minimal.": "done",
+			"git worktree add -b vigilante/issue-2 " + worktreePath2 + " main": "ok",
+			"gh issue comment --repo owner/repo 2 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Session Start",
+				Emoji:      "🚦",
+				Percent:    20,
+				ETAMinutes: 25,
+				Items: []string{
+					"Vigilante launched this implementation session in `" + worktreePath2 + "`.",
+					"Branch: `vigilante/issue-2`.",
+					"Current stage: handing the issue off to Codex for investigation and implementation.",
+				},
+				Tagline: "Make it simple, but significant.",
+			}): "ok",
+			"codex exec --cd " + worktreePath2 + " --dangerously-bypass-approvals-and-sandbox Use the `vigilante-issue-implementation` skill for this task.\nRepository: owner/repo\nLocal repository path: " + repoPath + "\nIssue: #2 - second\nIssue URL: https://github.com/owner/repo/issues/2\nWorktree path: " + worktreePath2 + "\nBranch: vigilante/issue-2\nUse `gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch, open a pull request, and report any execution failure back to the issue.\nUse the same GitHub comment structure for every non-terminal milestone comment: a short header with the current stage and optional emoji, a 10-cell progress bar with percentage, an `ETA: ~N minutes` line, 1-3 concise bullets covering what just happened and what is next, and an optional short playful quote or tagline.\nUse the issue as the source of truth for the requested behavior and keep the implementation minimal.": "done",
 		},
 	}
 	if err := app.state.EnsureLayout(); err != nil {
@@ -444,7 +478,18 @@ func TestScanOnceMaintainsOpenPullRequest(t *testing.T) {
 			"git rebase origin/main": "Successfully rebased and updated refs/heads/vigilante/issue-1.\n",
 			"go test ./...":          "ok",
 			"git push --force-with-lease origin HEAD:vigilante/issue-1": "ok",
-			"gh issue comment --repo owner/repo 1 --body Vigilante rebased PR #31 onto the latest `origin/main`, reran `go test ./...`, and pushed `vigilante/issue-1`.": "ok",
+			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Validation Passed",
+				Emoji:      "✅",
+				Percent:    90,
+				ETAMinutes: 5,
+				Items: []string{
+					"Rebased PR #31 onto the latest `origin/main`.",
+					"Reran `go test ./...` after the rebase.",
+					"Pushed the updated branch `vigilante/issue-1`.",
+				},
+				Tagline: "Success is where preparation and opportunity meet.",
+			}): "ok",
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
 		},
@@ -601,13 +646,35 @@ func TestScanOnceRecoversStalledSessionAndRedispatchesIssue(t *testing.T) {
 			"git worktree list --porcelain":                              "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n",
 			"git show-ref --verify --quiet refs/heads/vigilante/issue-1": "ok",
 			"git branch -D vigilante/issue-1":                            "Deleted branch vigilante/issue-1\n",
-			"gh issue comment --repo owner/repo 1 --body Vigilante detected that the previous local session on branch `vigilante/issue-1` was stalled (worktree path is missing). The abandoned worktree state was cleaned up so the issue can be redispatched.": "ok",
+			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Implementation In Progress",
+				Emoji:      "🧹",
+				Percent:    15,
+				ETAMinutes: 20,
+				Items: []string{
+					"The previous local session on `vigilante/issue-1` stalled (worktree path is missing).",
+					"The abandoned worktree state was cleaned up successfully.",
+					"Next step: the issue is ready to be redispatched in a fresh worktree.",
+				},
+				Tagline: "A smooth sea never made a skilled sailor.",
+			}): "ok",
 			"gh api user --jq .login": "nicobistolfi\n",
-			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels":                                         `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
-			"git worktree add -b vigilante/issue-1 " + worktreePath + " main":                                                                                       "ok",
-			"git worktree add " + worktreePath + " vigilante/issue-1":                                                                                               "ok",
-			"gh issue comment --repo owner/repo 1 --body Vigilante started a Codex session for this issue in `" + worktreePath + "` on branch `vigilante/issue-1`.": "ok",
-			"codex exec --cd " + worktreePath + " --dangerously-bypass-approvals-and-sandbox Use the `vigilante-issue-implementation` skill for this task.\nRepository: owner/repo\nLocal repository path: " + filepath.Join(home, "repo") + "\nIssue: #1 - first\nIssue URL: https://github.com/owner/repo/issues/1\nWorktree path: " + worktreePath + "\nBranch: vigilante/issue-1\nUse `gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch, open a pull request, and report any execution failure back to the issue.\nUse the issue as the source of truth for the requested behavior and keep the implementation minimal.": "done",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
+			"git worktree add -b vigilante/issue-1 " + worktreePath + " main":                                               "ok",
+			"git worktree add " + worktreePath + " vigilante/issue-1":                                                       "ok",
+			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Session Start",
+				Emoji:      "🚦",
+				Percent:    20,
+				ETAMinutes: 25,
+				Items: []string{
+					"Vigilante launched this implementation session in `" + worktreePath + "`.",
+					"Branch: `vigilante/issue-1`.",
+					"Current stage: handing the issue off to Codex for investigation and implementation.",
+				},
+				Tagline: "Make it simple, but significant.",
+			}): "ok",
+			"codex exec --cd " + worktreePath + " --dangerously-bypass-approvals-and-sandbox Use the `vigilante-issue-implementation` skill for this task.\nRepository: owner/repo\nLocal repository path: " + filepath.Join(home, "repo") + "\nIssue: #1 - first\nIssue URL: https://github.com/owner/repo/issues/1\nWorktree path: " + worktreePath + "\nBranch: vigilante/issue-1\nUse `gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch, open a pull request, and report any execution failure back to the issue.\nUse the same GitHub comment structure for every non-terminal milestone comment: a short header with the current stage and optional emoji, a 10-cell progress bar with percentage, an `ETA: ~N minutes` line, 1-3 concise bullets covering what just happened and what is next, and an optional short playful quote or tagline.\nUse the issue as the source of truth for the requested behavior and keep the implementation minimal.": "done",
 		},
 	}
 	if err := app.state.EnsureLayout(); err != nil {
@@ -668,8 +735,19 @@ func TestScanOnceRecoversStalledSessionIntoPRMaintenance(t *testing.T) {
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
 		Outputs: map[string]string{
-			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt":                                                                                                                                                  `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
-			"gh issue comment --repo owner/repo 1 --body Vigilante detected that the previous local session for branch `vigilante/issue-1` was stalled (worktree path is missing). An existing PR #31 was found, so the issue was recovered into PR maintenance.": "ok",
+			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
+			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Implementation In Progress",
+				Emoji:      "🔄",
+				Percent:    70,
+				ETAMinutes: 10,
+				Items: []string{
+					"The previous local session on `vigilante/issue-1` stalled (worktree path is missing).",
+					"An existing PR #31 was found, so Vigilante recovered this issue into PR maintenance.",
+					"Next step: keep the PR merge-ready instead of redispatching a new implementation session.",
+				},
+				Tagline: "Fall seven times, stand up eight.",
+			}): "ok",
 			"git fetch origin main":   "ok",
 			"git status --porcelain":  "",
 			"git rebase origin/main":  "Current branch vigilante/issue-1 is up to date.\n",

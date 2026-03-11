@@ -19,7 +19,18 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 	session.ProcessID = os.Getpid()
 	session.LastHeartbeatAt = time.Now().UTC().Format(time.RFC3339)
 	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	startBody := fmt.Sprintf("Vigilante started a Codex session for this issue in `%s` on branch `%s`.", session.WorktreePath, session.Branch)
+	startBody := ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Session Start",
+		Emoji:      "🚦",
+		Percent:    20,
+		ETAMinutes: 25,
+		Items: []string{
+			fmt.Sprintf("Vigilante launched this implementation session in `%s`.", session.WorktreePath),
+			fmt.Sprintf("Branch: `%s`.", session.Branch),
+			"Current stage: handing the issue off to Codex for investigation and implementation.",
+		},
+		Tagline: "Make it simple, but significant.",
+	})
 	appendSessionLog(logPath, "session started", session, "")
 	if err := ghcli.CommentOnIssue(ctx, env.Runner, target.Repo, issue.Number, startBody); err != nil {
 		session.Status = state.SessionStatusFailed
@@ -47,7 +58,18 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		session.Status = state.SessionStatusFailed
 		session.LastError = err.Error()
 		appendSessionLog(logPath, "session failed", session, combineLogDetails(output, err.Error()))
-		body := fmt.Sprintf("Vigilante Codex session failed for this issue: %s", summarizeError(err))
+		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+			Stage:      "Blocked",
+			Emoji:      "🛑",
+			Percent:    95,
+			ETAMinutes: 10,
+			Items: []string{
+				"Codex execution stopped before the issue implementation completed.",
+				fmt.Sprintf("Failure detail: `%s`.", summarizeError(err)),
+				"Next step: inspect the failing command or environment and redispatch once the blocker is resolved.",
+			},
+			Tagline: "Plans are only good intentions unless they immediately degenerate into hard work.",
+		})
 		_ = ghcli.CommentOnIssue(ctx, env.Runner, target.Repo, issue.Number, body)
 		return session
 	}
@@ -73,7 +95,18 @@ func RunConflictResolutionSession(ctx context.Context, env *environment.Environm
 	)
 	if err != nil {
 		appendSessionLog(logPath, "conflict resolution failed", session, combineLogDetails(output, err.Error()))
-		body := fmt.Sprintf("Vigilante conflict-resolution session failed for PR #%d on branch `%s`: %s", pr.Number, session.Branch, summarizeError(err))
+		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+			Stage:      "Blocked",
+			Emoji:      "🧯",
+			Percent:    90,
+			ETAMinutes: 12,
+			Items: []string{
+				fmt.Sprintf("Conflict resolution for PR #%d on `%s` did not complete.", pr.Number, session.Branch),
+				fmt.Sprintf("Failure detail: `%s`.", summarizeError(err)),
+				"Next step: review the rebase state in the worktree and rerun the dedicated conflict-resolution flow.",
+			},
+			Tagline: "An obstacle is often a stepping stone.",
+		})
 		_ = ghcli.CommentOnIssue(ctx, env.Runner, target.Repo, session.IssueNumber, body)
 		return err
 	}
