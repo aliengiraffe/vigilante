@@ -191,7 +191,7 @@ git tag 1.2.3
 git push origin 1.2.3
 ```
 
-Tags outside the version format, such as `v1.2.3` or `release-1.2.3`, do not trigger the release workflow. The release workflow validates both the tag format and that the tagged commit is already merged into `main` before GoReleaser publishes artifacts to GitHub Releases.
+Tags that do not match the required version format, such as `v1.2.3` or `release-1.2.3`, may start the release workflow but are rejected by the tag validation step before GoReleaser publishes artifacts. The release workflow also validates that the tagged commit is already merged into `main` before publishing to GitHub Releases.
 
 ## Local State
 
