@@ -6,7 +6,7 @@
 
 `vigilante` is a Go CLI and background service that watches local Git repositories, discovers their GitHub remotes, monitors open issues with the GitHub CLI, and orchestrates headless coding agent sessions in isolated git worktrees.
 
-The initial target platforms are macOS and Ubuntu. The first implementation should keep dependencies minimal and lean on existing system tools where possible: `git`, `gh`, one or more headless coding agent CLIs such as `claude code` and `codex`, and native service managers.
+The initial target platforms are macOS and Ubuntu. The first implementation should keep dependencies minimal and lean on existing system tools where possible: `git`, `gh`, one or more headless coding agent CLIs such as `claude code` and `codex`.
 
 ## What Vigilante Is
 
