@@ -29,6 +29,43 @@ func TestListOpenIssuesAndSelectNext(t *testing.T) {
 	}
 }
 
+func TestSelectNextIssueSkipsSessionWithOpenPullRequestUnderMaintenance(t *testing.T) {
+	issues := []Issue{
+		{Number: 1, Labels: []Label{{Name: "to-do"}}},
+		{Number: 2, Labels: []Label{{Name: "to-do"}}},
+	}
+
+	next := SelectNextIssue(issues, []state.Session{{
+		Repo:             "owner/repo",
+		IssueNumber:      1,
+		Status:           state.SessionStatusSuccess,
+		Branch:           "vigilante/issue-1",
+		WorktreePath:     "/tmp/repo/.worktrees/vigilante/issue-1",
+		PullRequestState: "OPEN",
+	}}, state.WatchTarget{Repo: "owner/repo", Labels: []string{"to-do"}})
+	if next == nil || next.Number != 2 {
+		t.Fatalf("unexpected next issue: %#v", next)
+	}
+}
+
+func TestSelectNextIssueSkipsSessionWithExistingIssueWorktree(t *testing.T) {
+	issues := []Issue{
+		{Number: 1, Labels: []Label{{Name: "to-do"}}},
+		{Number: 2, Labels: []Label{{Name: "to-do"}}},
+	}
+
+	next := SelectNextIssue(issues, []state.Session{{
+		Repo:         "owner/repo",
+		IssueNumber:  1,
+		Status:       state.SessionStatusSuccess,
+		Branch:       "vigilante/issue-1",
+		WorktreePath: "/tmp/repo/.worktrees/vigilante/issue-1",
+	}}, state.WatchTarget{Repo: "owner/repo", Labels: []string{"to-do"}})
+	if next == nil || next.Number != 2 {
+		t.Fatalf("unexpected next issue: %#v", next)
+	}
+}
+
 func TestSelectNextIssueRespectsConfiguredLabels(t *testing.T) {
 	issues := []Issue{
 		{Number: 1, Labels: []Label{{Name: "bug"}}},
