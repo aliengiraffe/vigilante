@@ -17,6 +17,7 @@ type WatchTarget struct {
 	Path          string   `json:"path"`
 	Repo          string   `json:"repo"`
 	Branch        string   `json:"branch"`
+	Provider      string   `json:"provider,omitempty"`
 	Labels        []string `json:"labels,omitempty"`
 	Assignee      string   `json:"assignee,omitempty"`
 	DaemonEnabled bool     `json:"daemon_enabled"`
@@ -44,6 +45,7 @@ type BlockedReason struct {
 type Session struct {
 	RepoPath             string        `json:"repo_path"`
 	Repo                 string        `json:"repo"`
+	Provider             string        `json:"provider,omitempty"`
 	IssueNumber          int           `json:"issue_number"`
 	IssueTitle           string        `json:"issue_title,omitempty"`
 	IssueURL             string        `json:"issue_url,omitempty"`
@@ -143,6 +145,11 @@ func (s *Store) LoadWatchTargets() ([]WatchTarget, error) {
 	if err := readJSONFile(s.watchlistPath(), &targets); err != nil {
 		return nil, err
 	}
+	for i := range targets {
+		if strings.TrimSpace(targets[i].Provider) == "" {
+			targets[i].Provider = "codex"
+		}
+	}
 	return targets, nil
 }
 
@@ -154,6 +161,11 @@ func (s *Store) LoadSessions() ([]Session, error) {
 	var sessions []Session
 	if err := readJSONFile(s.sessionsPath(), &sessions); err != nil {
 		return nil, err
+	}
+	for i := range sessions {
+		if strings.TrimSpace(sessions[i].Provider) == "" {
+			sessions[i].Provider = "codex"
+		}
 	}
 	return sessions, nil
 }

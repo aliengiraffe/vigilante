@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/nicobistolfi/vigilante/internal/environment"
+	"github.com/nicobistolfi/vigilante/internal/provider"
 	"github.com/nicobistolfi/vigilante/internal/state"
 )
 
@@ -19,8 +20,8 @@ type Config struct {
 	HomeDir    string
 }
 
-func Install(ctx context.Context, env *environment.Environment, store *state.Store) error {
-	cfg, err := BuildConfig(ctx, env)
+func Install(ctx context.Context, env *environment.Environment, store *state.Store, selectedProvider provider.Provider) error {
+	cfg, err := BuildConfig(ctx, env, selectedProvider)
 	if err != nil {
 		return err
 	}
@@ -140,7 +141,7 @@ func FilePath(goos string) (string, error) {
 	}
 }
 
-func BuildConfig(ctx context.Context, env *environment.Environment) (Config, error) {
+func BuildConfig(ctx context.Context, env *environment.Environment, selectedProvider provider.Provider) (Config, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return Config{}, err
@@ -160,7 +161,7 @@ func BuildConfig(ctx context.Context, env *environment.Environment) (Config, err
 		cfg.PathEnv = pathValue
 	}
 
-	if err := validateDaemonTooling(ctx, env.Runner, cfg.PathEnv); err != nil {
+	if err := validateDaemonTooling(ctx, env.Runner, cfg.PathEnv, selectedProvider); err != nil {
 		return Config{}, err
 	}
 
@@ -179,9 +180,9 @@ func shellDerivedPath(ctx context.Context, runner environment.Runner, shellPath 
 	return pathValue, nil
 }
 
-func validateDaemonTooling(ctx context.Context, runner environment.Runner, pathEnv string) error {
+func validateDaemonTooling(ctx context.Context, runner environment.Runner, pathEnv string, selectedProvider provider.Provider) error {
 	missing := []string{}
-	for _, tool := range []string{"git", "gh", "codex"} {
+	for _, tool := range provider.RequiredToolset(selectedProvider) {
 		if err := validateToolInPath(ctx, runner, pathEnv, tool); err != nil {
 			missing = append(missing, tool)
 		}

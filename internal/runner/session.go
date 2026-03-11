@@ -11,7 +11,7 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
 	"github.com/nicobistolfi/vigilante/internal/logtime"
-	"github.com/nicobistolfi/vigilante/internal/skill"
+	"github.com/nicobistolfi/vigilante/internal/provider"
 	"github.com/nicobistolfi/vigilante/internal/state"
 )
 
@@ -20,6 +20,16 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 	if session.Repo == "" {
 		session.Repo = target.Repo
 	}
+	selectedProvider, err := provider.Resolve(session.Provider)
+	if err != nil {
+		session.Status = state.SessionStatusFailed
+		session.LastError = err.Error()
+		session.EndedAt = time.Now().UTC().Format(time.RFC3339)
+		session.UpdatedAt = session.EndedAt
+		appendSessionLog(logPath, "session provider resolution failed", session, err.Error())
+		return session
+	}
+	session.Provider = selectedProvider.ID()
 	session.ProcessID = os.Getpid()
 	session.LastHeartbeatAt = time.Now().UTC().Format(time.RFC3339)
 	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
@@ -31,7 +41,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		Items: []string{
 			fmt.Sprintf("Vigilante launched this implementation session in `%s`.", session.WorktreePath),
 			fmt.Sprintf("Branch: `%s`.", session.Branch),
-			"Current stage: handing the issue off to Codex for investigation and implementation.",
+			fmt.Sprintf("Current stage: handing the issue off to the configured coding agent (`%s`) for investigation and implementation.", selectedProvider.ID()),
 		},
 		Tagline: "Make it simple, but significant.",
 	})
@@ -45,16 +55,17 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		return session
 	}
 
-	prompt := skill.BuildIssuePrompt(target, issue, session)
-	output, err := env.Runner.Run(
-		ctx,
-		"",
-		"codex",
-		"exec",
-		"--cd", session.WorktreePath,
-		"--dangerously-bypass-approvals-and-sandbox",
-		prompt,
-	)
+	invocation, err := selectedProvider.BuildIssueInvocation(provider.IssueTask{Target: target, Issue: issue, Session: session})
+	if err != nil {
+		session.Status = state.SessionStatusFailed
+		session.LastError = err.Error()
+		session.EndedAt = time.Now().UTC().Format(time.RFC3339)
+		session.LastHeartbeatAt = session.EndedAt
+		session.UpdatedAt = session.EndedAt
+		appendSessionLog(logPath, "issue invocation build failed", session, err.Error())
+		return session
+	}
+	output, err := env.Runner.Run(ctx, invocation.Dir, invocation.Name, invocation.Args...)
 	session.EndedAt = time.Now().UTC().Format(time.RFC3339)
 	session.LastHeartbeatAt = session.EndedAt
 	session.UpdatedAt = session.EndedAt
@@ -69,7 +80,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 			Percent:    95,
 			ETAMinutes: 10,
 			Items: []string{
-				"Codex execution stopped before the issue implementation completed.",
+				fmt.Sprintf("The `%s` provider stopped before the issue implementation completed.", selectedProvider.ID()),
 				fmt.Sprintf("Cause class: `%s`.", blocked.Kind),
 				fmt.Sprintf("Next step: fix the blocker, then run `%s` or request resume from GitHub.", session.ResumeHint),
 			},
@@ -86,18 +97,20 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 
 func RunConflictResolutionSession(ctx context.Context, env *environment.Environment, store *state.Store, target state.WatchTarget, session state.Session, pr ghcli.PullRequest) error {
 	logPath := store.SessionLogPath(session.IssueNumber)
+	selectedProvider, err := provider.Resolve(session.Provider)
+	if err != nil {
+		appendSessionLog(logPath, "conflict resolution provider resolution failed", session, err.Error())
+		return err
+	}
+	session.Provider = selectedProvider.ID()
 	appendSessionLog(logPath, "conflict resolution started", session, fmt.Sprintf("pr=%d url=%s", pr.Number, pr.URL))
 
-	prompt := skill.BuildConflictResolutionPrompt(target, session, pr)
-	output, err := env.Runner.Run(
-		ctx,
-		"",
-		"codex",
-		"exec",
-		"--cd", session.WorktreePath,
-		"--dangerously-bypass-approvals-and-sandbox",
-		prompt,
-	)
+	invocation, err := selectedProvider.BuildConflictResolutionInvocation(provider.ConflictTask{Target: target, Session: session, PR: pr})
+	if err != nil {
+		appendSessionLog(logPath, "conflict resolution invocation build failed", session, err.Error())
+		return err
+	}
+	output, err := env.Runner.Run(ctx, invocation.Dir, invocation.Name, invocation.Args...)
 	if err != nil {
 		appendSessionLog(logPath, "conflict resolution failed", session, combineLogDetails(output, err.Error()))
 		blocked := classifyBlockedFailure("conflict_resolution", "codex exec", output, err)
@@ -107,7 +120,7 @@ func RunConflictResolutionSession(ctx context.Context, env *environment.Environm
 			Percent:    90,
 			ETAMinutes: 12,
 			Items: []string{
-				fmt.Sprintf("Conflict resolution for PR #%d on `%s` did not complete.", pr.Number, session.Branch),
+				fmt.Sprintf("Conflict resolution for PR #%d on `%s` through provider `%s` did not complete.", pr.Number, session.Branch, selectedProvider.ID()),
 				fmt.Sprintf("Cause class: `%s`.", blocked.Kind),
 				fmt.Sprintf("Next step: fix the blocker, then run `%s` or request resume from GitHub.", buildResumeHint(session)),
 			},
@@ -187,10 +200,11 @@ func appendSessionLog(path string, event string, session state.Session, details 
 	}
 	defer f.Close()
 
-	_, _ = fmt.Fprintf(f, "[%s] %s issue=%d branch=%s worktree=%s status=%s\n",
+	_, _ = fmt.Fprintf(f, "[%s] %s issue=%d provider=%s branch=%s worktree=%s status=%s\n",
 		logtime.FormatLocal(time.Now()),
 		event,
 		session.IssueNumber,
+		session.Provider,
 		session.Branch,
 		session.WorktreePath,
 		session.Status,
