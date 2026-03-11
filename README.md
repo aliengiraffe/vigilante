@@ -1,3 +1,7 @@
+<p align="center">
+  <img src=".github/assets/logo.png" alt="vigilante logo" width="240">
+</p>
+
 # vigilante
 
 `vigilante` is a Go CLI and background service that watches local Git repositories, discovers their GitHub remotes, monitors open issues with the GitHub CLI, and launches headless Codex sessions to implement issues in isolated git worktrees.
