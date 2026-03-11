@@ -23,6 +23,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Set up GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          install-only: true
+
       - name: Verify tag policy
         env:
           TAG_NAME: ${{ github.ref_name }}
@@ -39,25 +44,10 @@ jobs:
             exit 1
           fi
 
-      - name: Build release archives
+      - name: Validate GoReleaser config
+        run: goreleaser check
+
+      - name: Build and publish GitHub release
         env:
-          TAG_NAME: ${{ github.ref_name }}
-        run: |
-          mkdir -p dist
-
-          for target in darwin/arm64 darwin/amd64 linux/amd64; do
-            GOOS="${target%/*}"
-            GOARCH="${target#*/}"
-            PACKAGE_DIR="dist/vigilante_${TAG_NAME}_${GOOS}_${GOARCH}"
-
-            mkdir -p "$PACKAGE_DIR"
-            GOOS="$GOOS" GOARCH="$GOARCH" go build -o "$PACKAGE_DIR/vigilante" ./cmd/vigilante
-            tar -C dist -czf "${PACKAGE_DIR}.tar.gz" "$(basename "$PACKAGE_DIR")"
-            rm -rf "$PACKAGE_DIR"
-          done
-
-      - name: Publish GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ github.ref_name }}
-        run: gh release create "$TAG_NAME" dist/*.tar.gz --generate-notes --title "$TAG_NAME"
+          GITHUB_TOKEN: ${{ github.token }}
+        run: goreleaser release --clean

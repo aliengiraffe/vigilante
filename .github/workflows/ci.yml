@@ -23,6 +23,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Set up GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          install-only: true
+
       - name: Check formatting
         run: |
           unformatted="$(gofmt -l .)"
@@ -40,3 +45,6 @@ jobs:
 
       - name: Verify build
         run: go build ./...
+
+      - name: Validate GoReleaser config
+        run: goreleaser check

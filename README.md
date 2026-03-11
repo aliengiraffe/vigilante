@@ -169,8 +169,14 @@ Pull requests are validated in GitHub Actions with native Go commands:
 - `go vet ./...`
 - `go test ./...`
 - `go build ./...`
+- `goreleaser check`
 
-Releases are created by pushing a version tag that matches `{x}.{y}.{z}` and points to a commit already reachable from `main`.
+Tagged releases are built and published with GoReleaser. Pushing a version tag that matches `{x}.{y}.{z}` and points to a commit already reachable from `main` creates a GitHub Release with:
+
+- `darwin/amd64`
+- `darwin/arm64`
+- `linux/amd64`
+- a `checksums.txt` file for the published archives
 
 Recommended release flow:
 
@@ -181,7 +187,7 @@ git tag 1.2.3
 git push origin 1.2.3
 ```
 
-Tags outside the version format, such as `v1.2.3` or `release-1.2.3`, do not trigger the release workflow.
+Tags outside the version format, such as `v1.2.3` or `release-1.2.3`, do not trigger the release workflow. The release workflow validates both the tag format and that the tagged commit is already merged into `main` before GoReleaser publishes artifacts to GitHub Releases.
 
 ## Local State
 
