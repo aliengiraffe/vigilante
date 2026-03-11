@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -208,6 +209,7 @@ func TestScanOnceSelectsEligibleIssueAndPersistsSession(t *testing.T) {
 	app.stdout = &bytes.Buffer{}
 	app.stderr = testutil.IODiscard{}
 	worktreePath := filepath.Join("/tmp/repo", ".worktrees", "vigilante", "issue-1")
+	branch := "vigilante/issue-1-first"
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
 		Outputs: map[string]string{
@@ -215,7 +217,7 @@ func TestScanOnceSelectsEligibleIssueAndPersistsSession(t *testing.T) {
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[{"name":"to-do"}]}]`,
 			"git worktree prune": "ok",
-			"git worktree add -b vigilante/issue-1 " + worktreePath + " main": "ok",
+			"git worktree add -b " + branch + " " + worktreePath + " main": "ok",
 			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
 				Stage:      "Session Start",
 				Emoji:      "🚦",
@@ -223,13 +225,18 @@ func TestScanOnceSelectsEligibleIssueAndPersistsSession(t *testing.T) {
 				ETAMinutes: 25,
 				Items: []string{
 					"Vigilante launched this implementation session in `" + worktreePath + "`.",
-					"Branch: `vigilante/issue-1`.",
+					"Branch: `" + branch + "`.",
 					"Current stage: handing the issue off to Codex for investigation and implementation.",
 				},
 				Tagline: "Make it simple, but significant.",
 			}): "ok",
-			"codex exec --cd " + worktreePath + " --dangerously-bypass-approvals-and-sandbox Use the `vigilante-issue-implementation` skill for this task.\nRepository: owner/repo\nLocal repository path: /tmp/repo\nIssue: #1 - first\nIssue URL: https://github.com/owner/repo/issues/1\nWorktree path: " + worktreePath + "\nBranch: vigilante/issue-1\nUse `gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch, open a pull request, and report any execution failure back to the issue.\nUse the same GitHub comment structure for every non-terminal milestone comment: a short header with the current stage and optional emoji, a 10-cell progress bar with percentage, an `ETA: ~N minutes` line, 1-3 concise bullets covering what just happened and what is next, and an optional short playful quote or tagline.\nUse the issue as the source of truth for the requested behavior and keep the implementation minimal.": "done",
-		},
+			"codex exec --cd " + worktreePath + " --dangerously-bypass-approvals-and-sandbox Use the `vigilante-issue-implementation` skill for this task.\nRepository: owner/repo\nLocal repository path: /tmp/repo\nIssue: #1 - first\nIssue URL: https://github.com/owner/repo/issues/1\nWorktree path: " + worktreePath + "\nBranch: " + branch + "\nUse `gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch, open a pull request, and report any execution failure back to the issue.\nUse the issue as the source of truth for the requested behavior and keep the implementation minimal.": "done",
+			"codex exec --cd " + worktreePath + " --dangerously-bypass-approvals-and-sandbox Use the `vigilante-issue-implementation` skill for this task.\nRepository: owner/repo\nLocal repository path: /tmp/repo\nIssue: #1 - first\nIssue URL: https://github.com/owner/repo/issues/1\nWorktree path: " + worktreePath + "\nBranch: " + branch + "\nUse `gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch, open a pull request, and report any execution failure back to the issue.\nUse the same GitHub comment structure for every non-terminal milestone comment: a short header with the current stage and optional emoji, a 10-cell progress bar with percentage, an `ETA: ~N minutes` line, 1-3 concise bullets covering what just happened and what is next, and an optional short playful quote or tagline.\nUse the issue as the source of truth for the requested behavior and keep the implementation minimal.": "done",
+			},
+			Errors: map[string]error{
+				"git show-ref --verify --quiet refs/heads/" + branch:         errors.New("exit status 1"),
+				"git show-ref --verify --quiet refs/heads/vigilante/issue-1": errors.New("exit status 1"),
+			},
 	}
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
@@ -298,6 +305,7 @@ func TestScanOnceSkipsRedispatchForMaintainedIssueAndStartsNextEligibleIssue(t *
 	repoPath := filepath.Join(home, "repo")
 	worktreePath1 := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
 	worktreePath2 := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-2")
+	branch2 := "vigilante/issue-2-second"
 	if err := os.MkdirAll(worktreePath1, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +341,7 @@ func TestScanOnceSkipsRedispatchForMaintainedIssueAndStartsNextEligibleIssue(t *
 			}): "ok",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[{"name":"to-do"}]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[{"name":"to-do"}]}]`,
 			"git worktree prune": "ok",
-			"git worktree add -b vigilante/issue-2 " + worktreePath2 + " main": "ok",
+			"git worktree add -b " + branch2 + " " + worktreePath2 + " main": "ok",
 			"gh issue comment --repo owner/repo 2 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
 				Stage:      "Session Start",
 				Emoji:      "🚦",
@@ -341,13 +349,18 @@ func TestScanOnceSkipsRedispatchForMaintainedIssueAndStartsNextEligibleIssue(t *
 				ETAMinutes: 25,
 				Items: []string{
 					"Vigilante launched this implementation session in `" + worktreePath2 + "`.",
-					"Branch: `vigilante/issue-2`.",
+					"Branch: `" + branch2 + "`.",
 					"Current stage: handing the issue off to Codex for investigation and implementation.",
 				},
 				Tagline: "Make it simple, but significant.",
 			}): "ok",
-			"codex exec --cd " + worktreePath2 + " --dangerously-bypass-approvals-and-sandbox Use the `vigilante-issue-implementation` skill for this task.\nRepository: owner/repo\nLocal repository path: " + repoPath + "\nIssue: #2 - second\nIssue URL: https://github.com/owner/repo/issues/2\nWorktree path: " + worktreePath2 + "\nBranch: vigilante/issue-2\nUse `gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch, open a pull request, and report any execution failure back to the issue.\nUse the same GitHub comment structure for every non-terminal milestone comment: a short header with the current stage and optional emoji, a 10-cell progress bar with percentage, an `ETA: ~N minutes` line, 1-3 concise bullets covering what just happened and what is next, and an optional short playful quote or tagline.\nUse the issue as the source of truth for the requested behavior and keep the implementation minimal.": "done",
-		},
+			"codex exec --cd " + worktreePath2 + " --dangerously-bypass-approvals-and-sandbox Use the `vigilante-issue-implementation` skill for this task.\nRepository: owner/repo\nLocal repository path: " + repoPath + "\nIssue: #2 - second\nIssue URL: https://github.com/owner/repo/issues/2\nWorktree path: " + worktreePath2 + "\nBranch: " + branch2 + "\nUse `gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch, open a pull request, and report any execution failure back to the issue.\nUse the issue as the source of truth for the requested behavior and keep the implementation minimal.": "done",
+			"codex exec --cd " + worktreePath2 + " --dangerously-bypass-approvals-and-sandbox Use the `vigilante-issue-implementation` skill for this task.\nRepository: owner/repo\nLocal repository path: " + repoPath + "\nIssue: #2 - second\nIssue URL: https://github.com/owner/repo/issues/2\nWorktree path: " + worktreePath2 + "\nBranch: " + branch2 + "\nUse `gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch, open a pull request, and report any execution failure back to the issue.\nUse the same GitHub comment structure for every non-terminal milestone comment: a short header with the current stage and optional emoji, a 10-cell progress bar with percentage, an `ETA: ~N minutes` line, 1-3 concise bullets covering what just happened and what is next, and an optional short playful quote or tagline.\nUse the issue as the source of truth for the requested behavior and keep the implementation minimal.": "done",
+			},
+			Errors: map[string]error{
+				"git show-ref --verify --quiet refs/heads/" + branch2:        errors.New("exit status 1"),
+				"git show-ref --verify --quiet refs/heads/vigilante/issue-2": errors.New("exit status 1"),
+			},
 	}
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
@@ -638,6 +651,7 @@ func TestScanOnceRecoversStalledSessionAndRedispatchesIssue(t *testing.T) {
 	app.clock = func() time.Time { return now }
 
 	worktreePath := filepath.Join(home, "repo", ".worktrees", "vigilante", "issue-1")
+	branch := "vigilante/issue-1-first"
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
 		Outputs: map[string]string{
@@ -660,8 +674,7 @@ func TestScanOnceRecoversStalledSessionAndRedispatchesIssue(t *testing.T) {
 			}): "ok",
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
-			"git worktree add -b vigilante/issue-1 " + worktreePath + " main":                                               "ok",
-			"git worktree add " + worktreePath + " vigilante/issue-1":                                                       "ok",
+			"git worktree add -b " + branch + " " + worktreePath + " main": "ok",
 			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
 				Stage:      "Session Start",
 				Emoji:      "🚦",
@@ -669,13 +682,18 @@ func TestScanOnceRecoversStalledSessionAndRedispatchesIssue(t *testing.T) {
 				ETAMinutes: 25,
 				Items: []string{
 					"Vigilante launched this implementation session in `" + worktreePath + "`.",
-					"Branch: `vigilante/issue-1`.",
+					"Branch: `" + branch + "`.",
 					"Current stage: handing the issue off to Codex for investigation and implementation.",
 				},
 				Tagline: "Make it simple, but significant.",
 			}): "ok",
-			"codex exec --cd " + worktreePath + " --dangerously-bypass-approvals-and-sandbox Use the `vigilante-issue-implementation` skill for this task.\nRepository: owner/repo\nLocal repository path: " + filepath.Join(home, "repo") + "\nIssue: #1 - first\nIssue URL: https://github.com/owner/repo/issues/1\nWorktree path: " + worktreePath + "\nBranch: vigilante/issue-1\nUse `gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch, open a pull request, and report any execution failure back to the issue.\nUse the same GitHub comment structure for every non-terminal milestone comment: a short header with the current stage and optional emoji, a 10-cell progress bar with percentage, an `ETA: ~N minutes` line, 1-3 concise bullets covering what just happened and what is next, and an optional short playful quote or tagline.\nUse the issue as the source of truth for the requested behavior and keep the implementation minimal.": "done",
-		},
+			"codex exec --cd " + worktreePath + " --dangerously-bypass-approvals-and-sandbox Use the `vigilante-issue-implementation` skill for this task.\nRepository: owner/repo\nLocal repository path: " + filepath.Join(home, "repo") + "\nIssue: #1 - first\nIssue URL: https://github.com/owner/repo/issues/1\nWorktree path: " + worktreePath + "\nBranch: " + branch + "\nUse `gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch, open a pull request, and report any execution failure back to the issue.\nUse the issue as the source of truth for the requested behavior and keep the implementation minimal.": "done",
+			"codex exec --cd " + worktreePath + " --dangerously-bypass-approvals-and-sandbox Use the `vigilante-issue-implementation` skill for this task.\nRepository: owner/repo\nLocal repository path: " + filepath.Join(home, "repo") + "\nIssue: #1 - first\nIssue URL: https://github.com/owner/repo/issues/1\nWorktree path: " + worktreePath + "\nBranch: " + branch + "\nUse `gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch, open a pull request, and report any execution failure back to the issue.\nUse the same GitHub comment structure for every non-terminal milestone comment: a short header with the current stage and optional emoji, a 10-cell progress bar with percentage, an `ETA: ~N minutes` line, 1-3 concise bullets covering what just happened and what is next, and an optional short playful quote or tagline.\nUse the issue as the source of truth for the requested behavior and keep the implementation minimal.": "done",
+			},
+			Errors: map[string]error{
+				"git show-ref --verify --quiet refs/heads/" + branch:         errors.New("exit status 1"),
+				"git show-ref --verify --quiet refs/heads/vigilante/issue-1": errors.New("exit status 1"),
+			},
 	}
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
