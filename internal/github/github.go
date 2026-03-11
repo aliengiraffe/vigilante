@@ -32,9 +32,14 @@ type PullRequest struct {
 }
 
 func ListOpenIssues(ctx context.Context, runner environment.Runner, repo string, assignee string) ([]Issue, error) {
+	resolvedAssignee, err := resolveAssignee(ctx, runner, assignee)
+	if err != nil {
+		return nil, err
+	}
+
 	args := []string{"issue", "list", "--repo", repo, "--state", "open"}
-	if assignee != "" {
-		args = append(args, "--assignee", assignee)
+	if resolvedAssignee != "" {
+		args = append(args, "--assignee", resolvedAssignee)
 	}
 	args = append(args, "--json", "number,title,createdAt,url,labels")
 	output, err := runner.Run(ctx, "", "gh", args...)
@@ -50,6 +55,18 @@ func ListOpenIssues(ctx context.Context, runner environment.Runner, repo string,
 		return issues[i].CreatedAt.Before(issues[j].CreatedAt)
 	})
 	return issues, nil
+}
+
+func resolveAssignee(ctx context.Context, runner environment.Runner, assignee string) (string, error) {
+	if assignee != "me" {
+		return assignee, nil
+	}
+
+	output, err := runner.Run(ctx, "", "gh", "api", "user", "--jq", ".login")
+	if err != nil {
+		return "", fmt.Errorf("resolve assignee %q: %w", assignee, err)
+	}
+	return strings.TrimSpace(output), nil
 }
 
 func SelectNextIssue(issues []Issue, sessions []state.Session, target state.WatchTarget) *Issue {

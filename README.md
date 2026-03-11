@@ -56,6 +56,7 @@ Expected behavior:
 - validates the folder is a git repository
 - discovers the GitHub remote from git config
 - defaults the assignee filter to `me` unless overridden
+- resolves `me` to the authenticated GitHub login at runtime before issue queries
 - stores the target in `~/.vigilante/watchlist.json`
 
 Example:

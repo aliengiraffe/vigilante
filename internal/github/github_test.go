@@ -12,7 +12,8 @@ import (
 func TestListOpenIssuesAndSelectNext(t *testing.T) {
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh issue list --repo owner/repo --state open --assignee me --json number,title,createdAt,url,labels": `[{"number":2,"title":"newer","createdAt":"2026-03-10T12:00:00Z","url":"u2","labels":[{"name":"to-do"}]},{"number":1,"title":"older","createdAt":"2026-03-09T12:00:00Z","url":"u1","labels":[{"name":"bug"}]}]`,
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":2,"title":"newer","createdAt":"2026-03-10T12:00:00Z","url":"u2","labels":[{"name":"to-do"}]},{"number":1,"title":"older","createdAt":"2026-03-09T12:00:00Z","url":"u1","labels":[{"name":"bug"}]}]`,
 		},
 	}
 	issues, err := ListOpenIssues(context.Background(), runner, "owner/repo", "me")
@@ -80,6 +81,22 @@ func TestListOpenIssuesAllowsNoAssigneeFilter(t *testing.T) {
 	}
 	if len(issues) != 1 || issues[0].Number != 4 {
 		t.Fatalf("unexpected issues: %#v", issues)
+	}
+}
+
+func TestListOpenIssuesReturnsErrorWhenResolvingMeFails(t *testing.T) {
+	runner := testutil.FakeRunner{
+		Errors: map[string]error{
+			"gh api user --jq .login": context.DeadlineExceeded,
+		},
+	}
+
+	_, err := ListOpenIssues(context.Background(), runner, "owner/repo", "me")
+	if err == nil {
+		t.Fatal("expected resolution error")
+	}
+	if got := err.Error(); got != `resolve assignee "me": context deadline exceeded` {
+		t.Fatalf("unexpected error: %s", got)
 	}
 }
 

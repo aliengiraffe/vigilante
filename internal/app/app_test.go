@@ -209,8 +209,9 @@ func TestScanOnceSelectsEligibleIssueAndPersistsSession(t *testing.T) {
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
 		Outputs: map[string]string{
-			"gh auth status": "ok",
-			"gh issue list --repo owner/repo --state open --assignee me --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[{"name":"to-do"}]}]`,
+			"gh auth status":          "ok",
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[{"name":"to-do"}]}]`,
 			"git worktree prune": "ok",
 			"git worktree add -b vigilante/issue-1 " + worktreePath + " main":                                                                                       "ok",
 			"gh issue comment --repo owner/repo 1 --body Vigilante started a Codex session for this issue in `" + worktreePath + "` on branch `vigilante/issue-1`.": "ok",
@@ -250,7 +251,8 @@ func TestScanOncePrintsNoEligibleIssues(t *testing.T) {
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
 		Outputs: map[string]string{
-			"gh issue list --repo owner/repo --state open --assignee me --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
 		},
 	}
 	if err := app.state.EnsureLayout(); err != nil {
@@ -287,7 +289,8 @@ func TestScanOnceCleansUpMergedIssueSession(t *testing.T) {
 			"git worktree list --porcelain":                              "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n",
 			"git show-ref --verify --quiet refs/heads/vigilante/issue-1": "ok",
 			"git branch -D vigilante/issue-1":                            "Deleted branch vigilante/issue-1\n",
-			"gh issue list --repo owner/repo --state open --assignee me --json number,title,createdAt,url,labels": "[]",
+			"gh api user --jq .login":                                    "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
 		},
 	}
 	if err := app.state.EnsureLayout(); err != nil {
@@ -357,7 +360,8 @@ func TestScanOnceMaintainsOpenPullRequest(t *testing.T) {
 			"go test ./...":          "ok",
 			"git push --force-with-lease origin HEAD:vigilante/issue-1": "ok",
 			"gh issue comment --repo owner/repo 1 --body Vigilante rebased PR #31 onto the latest `origin/main`, reran `go test ./...`, and pushed `vigilante/issue-1`.": "ok",
-			"gh issue list --repo owner/repo --state open --assignee me --json number,title,createdAt,url,labels":                                                        "[]",
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
 		},
 	}
 	if err := app.state.EnsureLayout(); err != nil {
@@ -457,5 +461,35 @@ func TestScanOnceUsesExplicitAssigneeFilter(t *testing.T) {
 	}
 	if got := stdout.String(); !strings.Contains(got, "repo: owner/repo no eligible issues (0 open)") {
 		t.Fatalf("unexpected output: %s", got)
+	}
+}
+
+func TestScanOnceReturnsErrorWhenResolvingDefaultAssigneeFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Errors: map[string]error{
+			"gh api user --jq .login": context.DeadlineExceeded,
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := app.ScanOnce(context.Background())
+	if err == nil {
+		t.Fatal("expected assignee resolution error")
+	}
+	if got := err.Error(); got != `resolve assignee "me": context deadline exceeded` {
+		t.Fatalf("unexpected error: %s", got)
 	}
 }
