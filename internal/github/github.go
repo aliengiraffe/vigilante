@@ -83,22 +83,50 @@ func resolveAssignee(ctx context.Context, runner environment.Runner, assignee st
 }
 
 func SelectNextIssue(issues []Issue, sessions []state.Session, target state.WatchTarget) *Issue {
+	selected := SelectIssues(issues, sessions, target, 1)
+	if len(selected) == 0 {
+		return nil
+	}
+	return &selected[0]
+}
+
+func SelectIssues(issues []Issue, sessions []state.Session, target state.WatchTarget, limit int) []Issue {
+	if limit <= 0 {
+		return nil
+	}
+
 	active := map[int]bool{}
 	for _, session := range sessions {
 		if session.Repo == target.Repo && sessionBlocksRedispatch(session) {
 			active[session.IssueNumber] = true
 		}
 	}
+
+	selected := make([]Issue, 0, limit)
 	for i := range issues {
+		if len(selected) >= limit {
+			break
+		}
 		if active[issues[i].Number] {
 			continue
 		}
 		if !matchesLabelAllowlist(issues[i], target.Labels) {
 			continue
 		}
-		return &issues[i]
+		selected = append(selected, issues[i])
+		active[issues[i].Number] = true
 	}
-	return nil
+	return selected
+}
+
+func ActiveSessionCount(sessions []state.Session, target state.WatchTarget) int {
+	count := 0
+	for _, session := range sessions {
+		if session.Repo == target.Repo && sessionBlocksRedispatch(session) {
+			count++
+		}
+	}
+	return count
 }
 
 func sessionBlocksRedispatch(session state.Session) bool {

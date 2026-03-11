@@ -89,6 +89,31 @@ func TestSelectNextIssueRespectsConfiguredLabels(t *testing.T) {
 	}
 }
 
+func TestSelectIssuesHonorsRequestedLimit(t *testing.T) {
+	issues := []Issue{
+		{Number: 1, Labels: []Label{{Name: "to-do"}}},
+		{Number: 2, Labels: []Label{{Name: "to-do"}}},
+		{Number: 3, Labels: []Label{{Name: "to-do"}}},
+	}
+
+	selected := SelectIssues(issues, nil, state.WatchTarget{Repo: "owner/repo", Labels: []string{"to-do"}}, 2)
+	if len(selected) != 2 || selected[0].Number != 1 || selected[1].Number != 2 {
+		t.Fatalf("unexpected selected issues: %#v", selected)
+	}
+}
+
+func TestActiveSessionCountIncludesOpenPullRequestMaintenance(t *testing.T) {
+	count := ActiveSessionCount([]state.Session{
+		{Repo: "owner/repo", IssueNumber: 1, Status: state.SessionStatusRunning},
+		{Repo: "owner/repo", IssueNumber: 2, Status: state.SessionStatusSuccess, PullRequestState: "OPEN"},
+		{Repo: "owner/repo", IssueNumber: 3, Status: state.SessionStatusSuccess, CleanupCompletedAt: "2026-03-10T15:00:00Z"},
+		{Repo: "owner/other", IssueNumber: 4, Status: state.SessionStatusRunning},
+	}, state.WatchTarget{Repo: "owner/repo"})
+	if count != 2 {
+		t.Fatalf("unexpected active session count: %d", count)
+	}
+}
+
 func TestListOpenIssuesSupportsExplicitAssignee(t *testing.T) {
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
