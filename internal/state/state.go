@@ -9,6 +9,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/nicobistolfi/vigilante/internal/logtime"
 )
 
 type WatchTarget struct {
@@ -189,7 +191,7 @@ func appendLogFile(path string, message string) {
 		return
 	}
 	defer f.Close()
-	_, _ = fmt.Fprintf(f, "[%s] %s\n", time.Now().UTC().Format(time.RFC3339), strings.TrimSpace(message))
+	_, _ = fmt.Fprintf(f, "[%s] %s\n", logtime.FormatLocal(time.Now()), strings.TrimSpace(message))
 }
 
 func (s *Store) TryWithScanLock(fn func() error) (bool, error) {

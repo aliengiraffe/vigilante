@@ -9,6 +9,7 @@ import (
 
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
+	"github.com/nicobistolfi/vigilante/internal/logtime"
 	"github.com/nicobistolfi/vigilante/internal/skill"
 	"github.com/nicobistolfi/vigilante/internal/state"
 )
@@ -97,7 +98,7 @@ func appendSessionLog(path string, event string, session state.Session, details 
 	defer f.Close()
 
 	_, _ = fmt.Fprintf(f, "[%s] %s issue=%d branch=%s worktree=%s status=%s\n",
-		time.Now().UTC().Format(time.RFC3339),
+		logtime.FormatLocal(time.Now()),
 		event,
 		session.IssueNumber,
 		session.Branch,

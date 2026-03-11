@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
@@ -103,5 +104,33 @@ func TestRunConflictResolutionSessionFailureCommentsOnIssue(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestAppendSessionLogUsesLocalTimezone(t *testing.T) {
+	originalLocal := time.Local
+	time.Local = time.FixedZone("TEST", -8*60*60)
+	t.Cleanup(func() {
+		time.Local = originalLocal
+	})
+
+	path := filepath.Join(t.TempDir(), "issue-7.log")
+	appendSessionLog(path, "session started", state.Session{
+		IssueNumber:  7,
+		Branch:       "vigilante/issue-7",
+		WorktreePath: "/tmp/worktree",
+		Status:       state.SessionStatusRunning,
+	}, "")
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "-08:00] session started") {
+		t.Fatalf("expected local timezone offset in session log entry, got %q", text)
+	}
+	if strings.Contains(text, "Z] session started") {
+		t.Fatalf("expected local timezone log entry, got %q", text)
 	}
 }
