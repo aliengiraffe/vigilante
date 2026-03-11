@@ -1200,7 +1200,7 @@ func sessionStartCommentCommand(repo string, issueNumber int, worktreePath strin
 		Items: []string{
 			"Vigilante launched this implementation session in `" + worktreePath + "`.",
 			"Branch: `" + branch + "`.",
-			"Current stage: handing the issue off to Codex for investigation and implementation.",
+			"Current stage: handing the issue off to the configured coding agent (`codex`) for investigation and implementation.",
 		},
 		Tagline: "Make it simple, but significant.",
 	})
