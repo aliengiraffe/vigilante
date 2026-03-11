@@ -78,8 +78,8 @@ func TestRunIssueSessionFailureCommentsOnIssue(t *testing.T) {
 				ETAMinutes: 10,
 				Items: []string{
 					"Codex execution stopped before the issue implementation completed.",
-					"Failure detail: `codex exec [--cd /tmp/worktree --dangerously-bypass-approvals-and-sandbox prompt]: exit status 1`.",
-					"Next step: inspect the failing command or environment and redispatch once the blocker is resolved.",
+					"Cause class: `provider_runtime_error`.",
+					"Next step: fix the blocker, then run `vigilante resume --repo owner/repo --issue 7` or request resume from GitHub.",
 				},
 				Tagline: "Plans are only good intentions unless they immediately degenerate into hard work.",
 			}): "ok",
@@ -95,7 +95,7 @@ func TestRunIssueSessionFailureCommentsOnIssue(t *testing.T) {
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
 	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
-	if got.Status != state.SessionStatusFailed {
+	if got.Status != state.SessionStatusBlocked {
 		t.Fatalf("unexpected status: %#v", got)
 	}
 	if !strings.Contains(got.LastError, "exit status 1") {
@@ -122,8 +122,8 @@ func TestRunConflictResolutionSessionFailureCommentsOnIssue(t *testing.T) {
 				ETAMinutes: 12,
 				Items: []string{
 					"Conflict resolution for PR #17 on `vigilante/issue-7` did not complete.",
-					"Failure detail: `codex exec [--cd /tmp/worktree --dangerously-bypass-approvals-and-sandbox prompt]: exit status 1`.",
-					"Next step: review the rebase state in the worktree and rerun the dedicated conflict-resolution flow.",
+					"Cause class: `provider_runtime_error`.",
+					"Next step: fix the blocker, then run `vigilante resume --repo owner/repo --issue 7` or request resume from GitHub.",
 				},
 				Tagline: "An obstacle is often a stepping stone.",
 			}): "ok",

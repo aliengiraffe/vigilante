@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -16,6 +17,9 @@ import (
 
 func RunIssueSession(ctx context.Context, env *environment.Environment, store *state.Store, target state.WatchTarget, issue ghcli.Issue, session state.Session) state.Session {
 	logPath := store.SessionLogPath(issue.Number)
+	if session.Repo == "" {
+		session.Repo = target.Repo
+	}
 	session.ProcessID = os.Getpid()
 	session.LastHeartbeatAt = time.Now().UTC().Format(time.RFC3339)
 	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
@@ -55,7 +59,8 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 	session.LastHeartbeatAt = session.EndedAt
 	session.UpdatedAt = session.EndedAt
 	if err != nil {
-		session.Status = state.SessionStatusFailed
+		blocked := classifyBlockedFailure("issue_execution", "codex exec", output, err)
+		markSessionBlocked(&session, "issue_execution", blocked, time.Now().UTC())
 		session.LastError = err.Error()
 		appendSessionLog(logPath, "session failed", session, combineLogDetails(output, err.Error()))
 		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
@@ -65,8 +70,8 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 			ETAMinutes: 10,
 			Items: []string{
 				"Codex execution stopped before the issue implementation completed.",
-				fmt.Sprintf("Failure detail: `%s`.", summarizeError(err)),
-				"Next step: inspect the failing command or environment and redispatch once the blocker is resolved.",
+				fmt.Sprintf("Cause class: `%s`.", blocked.Kind),
+				fmt.Sprintf("Next step: fix the blocker, then run `%s` or request resume from GitHub.", session.ResumeHint),
 			},
 			Tagline: "Plans are only good intentions unless they immediately degenerate into hard work.",
 		})
@@ -95,6 +100,7 @@ func RunConflictResolutionSession(ctx context.Context, env *environment.Environm
 	)
 	if err != nil {
 		appendSessionLog(logPath, "conflict resolution failed", session, combineLogDetails(output, err.Error()))
+		blocked := classifyBlockedFailure("conflict_resolution", "codex exec", output, err)
 		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
 			Stage:      "Blocked",
 			Emoji:      "🧯",
@@ -102,8 +108,8 @@ func RunConflictResolutionSession(ctx context.Context, env *environment.Environm
 			ETAMinutes: 12,
 			Items: []string{
 				fmt.Sprintf("Conflict resolution for PR #%d on `%s` did not complete.", pr.Number, session.Branch),
-				fmt.Sprintf("Failure detail: `%s`.", summarizeError(err)),
-				"Next step: review the rebase state in the worktree and rerun the dedicated conflict-resolution flow.",
+				fmt.Sprintf("Cause class: `%s`.", blocked.Kind),
+				fmt.Sprintf("Next step: fix the blocker, then run `%s` or request resume from GitHub.", buildResumeHint(session)),
 			},
 			Tagline: "An obstacle is often a stepping stone.",
 		})
@@ -121,6 +127,54 @@ func summarizeError(err error) string {
 		return text[:400]
 	}
 	return text
+}
+
+func markSessionBlocked(session *state.Session, stage string, blocked state.BlockedReason, now time.Time) {
+	session.Status = state.SessionStatusBlocked
+	session.BlockedAt = now.Format(time.RFC3339)
+	session.BlockedStage = stage
+	session.BlockedReason = blocked
+	session.RetryPolicy = "paused"
+	session.ResumeRequired = true
+	session.ResumeHint = buildResumeHint(*session)
+	session.ProcessID = 0
+	session.RecoveredAt = ""
+}
+
+func buildResumeHint(session state.Session) string {
+	return fmt.Sprintf("vigilante resume --repo %s --issue %d", session.Repo, session.IssueNumber)
+}
+
+func classifyBlockedFailure(stage string, operation string, output string, err error) state.BlockedReason {
+	text := strings.ToLower(strings.TrimSpace(output + "\n" + err.Error()))
+	reason := state.BlockedReason{
+		Kind:      "unknown_operator_action_required",
+		Operation: operation,
+		Summary:   summarizeError(err),
+		Detail:    summarizeError(errors.New(strings.TrimSpace(output))),
+	}
+	switch {
+	case strings.Contains(text, "permission denied (publickey)") || strings.Contains(text, "sign_and_send_pubkey") || strings.Contains(text, "could not read from remote repository"):
+		reason.Kind = "git_auth"
+	case strings.Contains(text, "gh auth") || strings.Contains(text, "not logged into") || strings.Contains(text, "authentication failed"):
+		reason.Kind = "gh_auth"
+	case strings.Contains(text, "session expired") || strings.Contains(text, "re-auth") || strings.Contains(text, "login required") || strings.Contains(text, "unauthorized"):
+		reason.Kind = "provider_auth"
+	case strings.Contains(text, "executable file not found") || strings.Contains(text, "no such file or directory"):
+		reason.Kind = "provider_missing"
+	case strings.Contains(text, "worktree is not clean"):
+		reason.Kind = "dirty_worktree"
+	case strings.Contains(text, "go test") || strings.Contains(text, "validation"):
+		reason.Kind = "validation_failed"
+	case strings.Contains(text, "network is unreachable") || strings.Contains(text, "timed out"):
+		reason.Kind = "network_unreachable"
+	case strings.Contains(strings.ToLower(stage), "issue") || strings.Contains(strings.ToLower(stage), "conflict"):
+		reason.Kind = "provider_runtime_error"
+	}
+	if reason.Detail == "" {
+		reason.Detail = reason.Summary
+	}
+	return reason
 }
 
 func appendSessionLog(path string, event string, session state.Session, details string) {

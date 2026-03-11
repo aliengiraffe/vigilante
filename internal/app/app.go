@@ -113,12 +113,41 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		}
 		return a.Unwatch(args[1])
 	case "list":
-		return a.List()
+		fs := flag.NewFlagSet("list", flag.ContinueOnError)
+		fs.SetOutput(a.stderr)
+		blockedOnly := fs.Bool("blocked", false, "show blocked sessions instead of watch targets")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		return a.List(*blockedOnly)
+	case "resume":
+		return a.runResumeCommand(ctx, args[1:])
 	case "daemon":
 		return a.runDaemonCommand(ctx, args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func (a *App) runResumeCommand(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
+	fs.SetOutput(a.stderr)
+	repo := fs.String("repo", "", "repository slug")
+	issue := fs.Int("issue", 0, "issue number")
+	allBlocked := fs.Bool("all-blocked", false, "resume all blocked sessions")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *allBlocked {
+		if *repo != "" || *issue != 0 {
+			return errors.New("usage: vigilante resume --all-blocked")
+		}
+		return a.ResumeAllBlocked(ctx)
+	}
+	if *repo == "" || *issue <= 0 {
+		return errors.New("usage: vigilante resume --repo <owner/name> --issue <n>")
+	}
+	return a.ResumeSession(ctx, *repo, *issue, "cli")
 }
 
 func (a *App) runDaemonCommand(ctx context.Context, args []string) error {
@@ -269,9 +298,12 @@ func (a *App) Unwatch(rawPath string) error {
 	return nil
 }
 
-func (a *App) List() error {
+func (a *App) List(blockedOnly bool) error {
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
+	}
+	if blockedOnly {
+		return a.listBlockedSessions()
 	}
 	targets, err := a.state.LoadWatchTargets()
 	if err != nil {
@@ -329,6 +361,10 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			return err
 		}
 		sessions, err = a.recoverStalledSessions(ctx, sessions)
+		if err != nil {
+			return err
+		}
+		sessions, err = a.processGitHubResumeRequests(ctx, sessions)
 		if err != nil {
 			return err
 		}
@@ -551,6 +587,8 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 				session.UpdatedAt = a.clock().Format(time.RFC3339)
 				a.state.AppendDaemonLog("pr maintenance failed repo=%s issue=%d pr=%d branch=%s err=%v", session.Repo, session.IssueNumber, pr.Number, session.Branch, err)
 				if shouldCommentMaintenanceFailure(*session, err) {
+					blocked := classifyBlockedReason("pr_maintenance", "git fetch origin main", err)
+					markSessionBlocked(session, "pr_maintenance", blocked, a.clock())
 					body := ghcli.FormatProgressComment(ghcli.ProgressComment{
 						Stage:      "Blocked",
 						Emoji:      "🧱",
@@ -558,8 +596,8 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 						ETAMinutes: 15,
 						Items: []string{
 							fmt.Sprintf("Vigilante could not keep PR #%d merge-ready on `%s`.", pr.Number, session.Branch),
-							fmt.Sprintf("Failure detail: `%s`.", summarizeMaintenanceError(err)),
-							"Next step: inspect the branch state, fix the maintenance failure, and rerun validation.",
+							fmt.Sprintf("Cause class: `%s`.", blocked.Kind),
+							fmt.Sprintf("Next step: fix the blocker, then run `%s` or request resume from GitHub.", session.ResumeHint),
 						},
 						Tagline: "Difficulties strengthen the mind, as labor does the body.",
 					})
@@ -668,6 +706,293 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 	return ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body)
 }
 
+func (a *App) listBlockedSessions() error {
+	sessions, err := a.state.LoadSessions()
+	if err != nil {
+		return err
+	}
+	count := 0
+	for _, session := range sessions {
+		if session.Status != state.SessionStatusBlocked {
+			continue
+		}
+		count++
+		fmt.Fprintf(a.stdout, "%s issue #%d  %s\n", session.Repo, session.IssueNumber, blockedStateLabel(session))
+		fmt.Fprintf(a.stdout, "  cause: %s\n", fallbackText(session.BlockedReason.Kind, "unknown_operator_action_required"))
+		if session.BlockedReason.Operation != "" {
+			fmt.Fprintf(a.stdout, "  failed op: %s\n", session.BlockedReason.Operation)
+		}
+		if session.BlockedAt != "" {
+			fmt.Fprintf(a.stdout, "  blocked at: %s\n", session.BlockedAt)
+		}
+		if session.ResumeHint != "" {
+			fmt.Fprintf(a.stdout, "  resume: %s\n", session.ResumeHint)
+		}
+		fmt.Fprintln(a.stdout, `  github resume: comment "@vigilanteai resume" or add label "resume"`)
+	}
+	if count == 0 {
+		fmt.Fprintln(a.stdout, "no blocked sessions")
+	}
+	return nil
+}
+
+func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.Session) ([]state.Session, error) {
+	for i := range sessions {
+		session := &sessions[i]
+		if session.Status != state.SessionStatusBlocked {
+			continue
+		}
+
+		details, err := ghcli.GetIssueDetails(ctx, a.env.Runner, session.Repo, session.IssueNumber)
+		if err != nil {
+			return nil, err
+		}
+		if ghcli.HasAnyLabel(details.Labels, "resume", "vigilante:resume") {
+			for _, label := range []string{"resume", "vigilante:resume"} {
+				if ghcli.HasAnyLabel(details.Labels, label) {
+					if err := ghcli.RemoveIssueLabel(ctx, a.env.Runner, session.Repo, session.IssueNumber, label); err != nil {
+						return nil, err
+					}
+				}
+			}
+			if err := a.resumeBlockedSession(ctx, session, "label"); err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		comments, err := ghcli.ListIssueComments(ctx, a.env.Runner, session.Repo, session.IssueNumber)
+		if err != nil {
+			return nil, err
+		}
+		comment := ghcli.FindResumeComment(comments, session.LastResumeCommentID)
+		if comment == nil {
+			continue
+		}
+		if err := ghcli.AddIssueCommentReaction(ctx, a.env.Runner, session.Repo, comment.ID, "salute"); err != nil {
+			return nil, err
+		}
+		session.LastResumeCommentID = comment.ID
+		session.LastResumeCommentAt = comment.CreatedAt.UTC().Format(time.RFC3339)
+		session.LastResumeSource = "comment"
+		if err := a.resumeBlockedSession(ctx, session, "comment"); err != nil {
+			return nil, err
+		}
+	}
+	return sessions, nil
+}
+
+func (a *App) ResumeAllBlocked(ctx context.Context) error {
+	if err := a.state.EnsureLayout(); err != nil {
+		return err
+	}
+	sessions, err := a.state.LoadSessions()
+	if err != nil {
+		return err
+	}
+	resumed := 0
+	for i := range sessions {
+		if sessions[i].Status != state.SessionStatusBlocked {
+			continue
+		}
+		if err := a.resumeBlockedSession(ctx, &sessions[i], "cli"); err != nil {
+			return err
+		}
+		resumed++
+	}
+	if err := a.state.SaveSessions(sessions); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.stdout, "resumed %d blocked session(s)\n", resumed)
+	return nil
+}
+
+func (a *App) ResumeSession(ctx context.Context, repo string, issue int, source string) error {
+	if err := a.state.EnsureLayout(); err != nil {
+		return err
+	}
+	sessions, err := a.state.LoadSessions()
+	if err != nil {
+		return err
+	}
+	found := false
+	for i := range sessions {
+		if sessions[i].Repo != repo || sessions[i].IssueNumber != issue {
+			continue
+		}
+		found = true
+		if sessions[i].Status != state.SessionStatusBlocked {
+			return fmt.Errorf("issue #%d in %s is not blocked", issue, repo)
+		}
+		if err := a.resumeBlockedSession(ctx, &sessions[i], source); err != nil {
+			return err
+		}
+		break
+	}
+	if !found {
+		return fmt.Errorf("blocked session not found for %s issue #%d", repo, issue)
+	}
+	if err := a.state.SaveSessions(sessions); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.stdout, "resume attempted for %s issue #%d\n", repo, issue)
+	return nil
+}
+
+func (a *App) resumeBlockedSession(ctx context.Context, session *state.Session, source string) error {
+	if session.Status != state.SessionStatusBlocked {
+		return nil
+	}
+	session.Status = state.SessionStatusResuming
+	session.LastResumeSource = source
+	session.UpdatedAt = a.clock().Format(time.RFC3339)
+
+	if err := a.preflightResume(ctx, *session); err != nil {
+		blocked := classifyBlockedReason(session.BlockedStage, session.BlockedReason.Operation, err)
+		markSessionBlocked(session, fallbackText(session.BlockedStage, "pr_maintenance"), blocked, a.clock())
+		session.LastError = err.Error()
+		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+			Stage:      "Blocked",
+			Emoji:      "🧱",
+			Percent:    88,
+			ETAMinutes: 10,
+			Items: []string{
+				fmt.Sprintf("Resume preflight did not pass for `%s`.", session.Branch),
+				fmt.Sprintf("Cause class: `%s`.", blocked.Kind),
+				fmt.Sprintf("Next step: fix the blocker, then run `%s` or request resume from GitHub again.", session.ResumeHint),
+			},
+			Tagline: "Clear eyes, full hearts, can’t lose.",
+		})
+		return ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body)
+	}
+
+	var err error
+	switch session.BlockedStage {
+	case "pr_maintenance":
+		err = a.resumeBlockedMaintenance(ctx, session)
+	case "conflict_resolution":
+		err = a.resumeBlockedConflictResolution(ctx, session)
+	default:
+		err = a.resumeBlockedIssueExecution(ctx, session)
+	}
+	if err != nil {
+		blocked := classifyBlockedReason(session.BlockedStage, session.BlockedReason.Operation, err)
+		markSessionBlocked(session, fallbackText(session.BlockedStage, "pr_maintenance"), blocked, a.clock())
+		session.LastError = err.Error()
+		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+			Stage:      "Blocked",
+			Emoji:      "🧱",
+			Percent:    90,
+			ETAMinutes: 12,
+			Items: []string{
+				fmt.Sprintf("Resume did not complete for `%s`.", session.Branch),
+				fmt.Sprintf("Cause class: `%s`.", blocked.Kind),
+				fmt.Sprintf("Next step: fix the blocker, then run `%s` or request resume from GitHub again.", session.ResumeHint),
+			},
+			Tagline: "The comeback is always stronger than the setback.",
+		})
+		return ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body)
+	}
+
+	previousKind := session.BlockedReason.Kind
+	previousStage := session.BlockedStage
+	clearBlockedState(session, a.clock(), source)
+	body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Recovered",
+		Emoji:      "🫡",
+		Percent:    92,
+		ETAMinutes: 5,
+		Items: []string{
+			fmt.Sprintf("The previous `%s` block was cleared for `%s`.", fallbackText(previousKind, "unknown_operator_action_required"), session.Branch),
+			fmt.Sprintf("Resume source: `%s`.", source),
+			fmt.Sprintf("Next step: Vigilante resumed `%s` successfully.", fallbackText(previousStage, "issue_execution")),
+		},
+		Tagline: "Back on the wire.",
+	})
+	return ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body)
+}
+
+func (a *App) preflightResume(ctx context.Context, session state.Session) error {
+	switch session.BlockedReason.Kind {
+	case "git_auth":
+		_, err := a.env.Runner.Run(ctx, session.WorktreePath, "git", "fetch", "origin", "main")
+		return err
+	case "gh_auth":
+		if _, err := a.env.Runner.Run(ctx, "", "gh", "auth", "status"); err != nil {
+			return err
+		}
+		_, err := ghcli.GetIssueDetails(ctx, a.env.Runner, session.Repo, session.IssueNumber)
+		return err
+	case "provider_missing":
+		_, err := a.env.Runner.LookPath("codex")
+		return err
+	case "provider_auth", "provider_runtime_error":
+		if _, err := a.env.Runner.LookPath("codex"); err != nil {
+			return err
+		}
+		_, err := a.env.Runner.Run(ctx, "", "codex", "--version")
+		return err
+	default:
+		return nil
+	}
+}
+
+func (a *App) resumeBlockedMaintenance(ctx context.Context, session *state.Session) error {
+	pr, err := ghcli.FindPullRequestForBranch(ctx, a.env.Runner, session.Repo, session.Branch)
+	if err != nil {
+		return err
+	}
+	if pr == nil {
+		return errors.New("no pull request found for blocked maintenance session")
+	}
+	session.PullRequestNumber = pr.Number
+	session.PullRequestURL = pr.URL
+	session.PullRequestState = pr.State
+	if pr.State != "OPEN" {
+		return fmt.Errorf("pull request #%d is not open", pr.Number)
+	}
+	if err := a.maintainOpenPullRequest(ctx, session, *pr); err != nil {
+		return err
+	}
+	session.Status = state.SessionStatusSuccess
+	session.LastMaintenanceError = ""
+	return nil
+}
+
+func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Session) error {
+	issue := ghcli.Issue{Number: session.IssueNumber, Title: session.IssueTitle, URL: session.IssueURL}
+	target := state.WatchTarget{Path: session.RepoPath, Repo: session.Repo, Branch: "main"}
+	prompt := skill.BuildIssuePrompt(target, issue, *session)
+	output, err := a.env.Runner.Run(ctx, "", "codex", "exec", "--cd", session.WorktreePath, "--dangerously-bypass-approvals-and-sandbox", prompt)
+	session.EndedAt = a.clock().Format(time.RFC3339)
+	session.LastHeartbeatAt = session.EndedAt
+	session.UpdatedAt = session.EndedAt
+	if err != nil {
+		a.state.AppendDaemonLog("resume issue execution failed repo=%s issue=%d err=%v output=%s", session.Repo, session.IssueNumber, err, summarizeText(output))
+		return err
+	}
+	session.Status = state.SessionStatusSuccess
+	session.LastError = ""
+	a.state.AppendDaemonLog("resume issue execution succeeded repo=%s issue=%d output=%s", session.Repo, session.IssueNumber, summarizeText(output))
+	return nil
+}
+
+func (a *App) resumeBlockedConflictResolution(ctx context.Context, session *state.Session) error {
+	pr, err := ghcli.FindPullRequestForBranch(ctx, a.env.Runner, session.Repo, session.Branch)
+	if err != nil {
+		return err
+	}
+	if pr == nil {
+		return errors.New("no pull request found for blocked conflict-resolution session")
+	}
+	target := state.WatchTarget{Path: session.RepoPath, Repo: session.Repo, Branch: "main"}
+	if err := issuerunner.RunConflictResolutionSession(ctx, a.env, a.state, target, *session, *pr); err != nil {
+		return err
+	}
+	session.Status = state.SessionStatusSuccess
+	return nil
+}
+
 func stalledSessionThreshold() time.Duration {
 	raw := strings.TrimSpace(os.Getenv("VIGILANTE_STALLED_SESSION_THRESHOLD"))
 	if raw == "" {
@@ -740,11 +1065,92 @@ func shouldCommentMaintenanceFailure(session state.Session, err error) bool {
 }
 
 func summarizeMaintenanceError(err error) string {
-	text := strings.TrimSpace(err.Error())
+	return summarizeText(err.Error())
+}
+
+func summarizeText(text string) string {
+	text = strings.TrimSpace(text)
 	if len(text) > 400 {
 		return text[:400]
 	}
 	return text
+}
+
+func classifyBlockedReason(stage string, operation string, err error) state.BlockedReason {
+	text := strings.ToLower(strings.TrimSpace(err.Error()))
+	reason := state.BlockedReason{
+		Kind:      "unknown_operator_action_required",
+		Operation: operation,
+		Summary:   summarizeMaintenanceError(err),
+		Detail:    summarizeMaintenanceError(err),
+	}
+	switch {
+	case strings.Contains(text, "permission denied (publickey)") || strings.Contains(text, "sign_and_send_pubkey") || strings.Contains(text, "could not read from remote repository"):
+		reason.Kind = "git_auth"
+	case strings.Contains(text, "gh auth") || strings.Contains(text, "not logged into") || strings.Contains(text, "authentication failed"):
+		reason.Kind = "gh_auth"
+	case strings.Contains(text, "session expired") || strings.Contains(text, "re-auth") || strings.Contains(text, "login required") || strings.Contains(text, "unauthorized"):
+		reason.Kind = "provider_auth"
+	case strings.Contains(text, "executable file not found") || strings.Contains(text, "no such file or directory"):
+		reason.Kind = "provider_missing"
+	case strings.Contains(text, "worktree is not clean"):
+		reason.Kind = "dirty_worktree"
+	case strings.Contains(text, "go test") || strings.Contains(text, "validation"):
+		reason.Kind = "validation_failed"
+	case strings.Contains(text, "network is unreachable") || strings.Contains(text, "timed out"):
+		reason.Kind = "network_unreachable"
+	case stage == "issue_execution" || stage == "conflict_resolution":
+		reason.Kind = "provider_runtime_error"
+	}
+	return reason
+}
+
+func markSessionBlocked(session *state.Session, stage string, blocked state.BlockedReason, now time.Time) {
+	session.Status = state.SessionStatusBlocked
+	session.BlockedAt = now.Format(time.RFC3339)
+	session.BlockedStage = stage
+	session.BlockedReason = blocked
+	session.RetryPolicy = "paused"
+	session.ResumeRequired = true
+	session.ResumeHint = fmt.Sprintf("vigilante resume --repo %s --issue %d", session.Repo, session.IssueNumber)
+	session.ProcessID = 0
+}
+
+func clearBlockedState(session *state.Session, now time.Time, source string) {
+	session.Status = state.SessionStatusSuccess
+	session.BlockedAt = ""
+	session.BlockedReason = state.BlockedReason{}
+	session.BlockedStage = ""
+	session.RetryPolicy = ""
+	session.ResumeRequired = false
+	session.ResumeHint = ""
+	session.RecoveredAt = now.Format(time.RFC3339)
+	session.UpdatedAt = session.RecoveredAt
+	session.LastError = ""
+	session.LastMaintenanceError = ""
+	session.LastResumeSource = source
+}
+
+func blockedStateLabel(session state.Session) string {
+	switch session.BlockedReason.Kind {
+	case "git_auth":
+		return "blocked_waiting_for_credentials"
+	case "gh_auth":
+		return "blocked_waiting_for_github_auth"
+	case "provider_auth":
+		return "blocked_waiting_for_provider_auth"
+	case "provider_missing":
+		return "blocked_waiting_for_provider_binary"
+	default:
+		return "blocked_waiting_for_operator"
+	}
+}
+
+func fallbackText(value string, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func (a *App) ensureTooling(ctx context.Context) error {
@@ -764,7 +1170,9 @@ func (a *App) printUsage() {
 	fmt.Fprintln(a.stderr, "  vigilante setup [-d]")
 	fmt.Fprintln(a.stderr, "  vigilante watch [-d] [--label value] [--assignee value] <path>")
 	fmt.Fprintln(a.stderr, "  vigilante unwatch <path>")
-	fmt.Fprintln(a.stderr, "  vigilante list")
+	fmt.Fprintln(a.stderr, "  vigilante list [--blocked]")
+	fmt.Fprintln(a.stderr, "  vigilante resume --repo <owner/name> --issue <n>")
+	fmt.Fprintln(a.stderr, "  vigilante resume --all-blocked")
 	fmt.Fprintln(a.stderr, "  vigilante daemon run [--once] [--interval duration]")
 }
 

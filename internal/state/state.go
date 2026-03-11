@@ -27,10 +27,19 @@ type WatchTarget struct {
 type SessionStatus string
 
 const (
-	SessionStatusRunning SessionStatus = "running"
-	SessionStatusSuccess SessionStatus = "success"
-	SessionStatusFailed  SessionStatus = "failed"
+	SessionStatusRunning  SessionStatus = "running"
+	SessionStatusBlocked  SessionStatus = "blocked"
+	SessionStatusResuming SessionStatus = "resuming"
+	SessionStatusSuccess  SessionStatus = "success"
+	SessionStatusFailed   SessionStatus = "failed"
 )
+
+type BlockedReason struct {
+	Kind      string `json:"kind,omitempty"`
+	Operation string `json:"operation,omitempty"`
+	Summary   string `json:"summary,omitempty"`
+	Detail    string `json:"detail,omitempty"`
+}
 
 type Session struct {
 	RepoPath             string        `json:"repo_path"`
@@ -47,6 +56,16 @@ type Session struct {
 	PullRequestMergedAt  string        `json:"pull_request_merged_at,omitempty"`
 	LastMaintainedAt     string        `json:"last_maintained_at,omitempty"`
 	LastMaintenanceError string        `json:"last_maintenance_error,omitempty"`
+	BlockedAt            string        `json:"blocked_at,omitempty"`
+	BlockedStage         string        `json:"blocked_stage,omitempty"`
+	BlockedReason        BlockedReason `json:"blocked_reason,omitempty"`
+	RetryPolicy          string        `json:"retry_policy,omitempty"`
+	ResumeRequired       bool          `json:"resume_required,omitempty"`
+	ResumeHint           string        `json:"resume_hint,omitempty"`
+	LastResumeSource     string        `json:"last_resume_source,omitempty"`
+	LastResumeCommentID  int64         `json:"last_resume_comment_id,omitempty"`
+	LastResumeCommentAt  string        `json:"last_resume_comment_at,omitempty"`
+	RecoveredAt          string        `json:"recovered_at,omitempty"`
 	MonitoringStoppedAt  string        `json:"monitoring_stopped_at,omitempty"`
 	CleanupCompletedAt   string        `json:"cleanup_completed_at,omitempty"`
 	CleanupError         string        `json:"cleanup_error,omitempty"`

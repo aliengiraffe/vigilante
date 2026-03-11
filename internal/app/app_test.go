@@ -119,7 +119,7 @@ func TestWatchListAndUnwatch(t *testing.T) {
 	}
 
 	stdout.Reset()
-	if err := app.List(); err != nil {
+	if err := app.List(false); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(stdout.String(), "\"repo\": \"nicobistolfi/vigilante\"") {
@@ -196,6 +196,139 @@ func TestWatchUpdatesExistingTarget(t *testing.T) {
 	}
 	if targets[0].Assignee != "nicobistolfi" {
 		t.Fatalf("expected assignee to be preserved: %#v", targets[0])
+	}
+}
+
+func TestListBlockedSessions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		Repo:                 "owner/repo",
+		IssueNumber:          44,
+		Status:               state.SessionStatusBlocked,
+		BlockedAt:            "2026-03-11T13:20:13Z",
+		BlockedStage:         "pr_maintenance",
+		BlockedReason:        state.BlockedReason{Kind: "git_auth", Operation: "git fetch origin main"},
+		ResumeHint:           "vigilante resume --repo owner/repo --issue 44",
+		ResumeRequired:       true,
+		RetryPolicy:          "paused",
+		WorktreePath:         "/tmp/repo/.worktrees/vigilante/issue-44",
+		Branch:               "vigilante/issue-44",
+		LastMaintenanceError: "git fetch origin main: exit status 128",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.List(true); err != nil {
+		t.Fatal(err)
+	}
+	got := stdout.String()
+	for _, want := range []string{
+		"owner/repo issue #44  blocked_waiting_for_credentials",
+		"cause: git_auth",
+		"failed op: git fetch origin main",
+		"resume: vigilante resume --repo owner/repo --issue 44",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected blocked list output to contain %q, got: %s", want, got)
+		}
+	}
+}
+
+func TestScanOnceProcessesGitHubCommentResumeRequest(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1":          `{"labels":[]}`,
+			"gh api repos/owner/repo/issues/1/comments": `[{"id":101,"body":"@vigilanteai resume","created_at":"2026-03-10T12:30:00Z","user":{"login":"nicobistolfi"}}]`,
+			"gh api --method POST -H Accept: application/vnd.github+json repos/owner/repo/issues/comments/101/reactions -f content=salute": "{}",
+			"codex --version": "codex 1.0.0",
+			"codex exec --cd " + worktreePath + " --dangerously-bypass-approvals-and-sandbox Use the `vigilante-issue-implementation` skill for this task.\nRepository: owner/repo\nLocal repository path: " + repoPath + "\nIssue: #1 - first\nIssue URL: https://github.com/owner/repo/issues/1\nWorktree path: " + worktreePath + "\nBranch: vigilante/issue-1\nUse `gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch, open a pull request, and report any execution failure back to the issue.\nUse the same GitHub comment structure for every non-terminal milestone comment: a short header with the current stage and optional emoji, a 10-cell progress bar with percentage, an `ETA: ~N minutes` line, 1-3 concise bullets covering what just happened and what is next, and an optional short playful quote or tagline.\nUse the issue as the source of truth for the requested behavior and keep the implementation minimal.": "done",
+			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Recovered",
+				Emoji:      "🫡",
+				Percent:    92,
+				ETAMinutes: 5,
+				Items: []string{
+					"The previous `provider_auth` block was cleared for `vigilante/issue-1`.",
+					"Resume source: `comment`.",
+					"Next step: Vigilante resumed `issue_execution` successfully.",
+				},
+				Tagline: "Back on the wire.",
+			}): "ok",
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:        repoPath,
+		Repo:            "owner/repo",
+		IssueNumber:     1,
+		IssueTitle:      "first",
+		IssueURL:        "https://github.com/owner/repo/issues/1",
+		Branch:          "vigilante/issue-1",
+		WorktreePath:    worktreePath,
+		Status:          state.SessionStatusBlocked,
+		BlockedAt:       "2026-03-11T13:19:12Z",
+		BlockedStage:    "issue_execution",
+		BlockedReason:   state.BlockedReason{Kind: "provider_auth", Operation: "codex exec", Summary: "session expired", Detail: "session expired"},
+		RetryPolicy:     "paused",
+		ResumeRequired:  true,
+		ResumeHint:      "vigilante resume --repo owner/repo --issue 1",
+		UpdatedAt:       "2026-03-11T13:19:12Z",
+		LastHeartbeatAt: "2026-03-11T13:19:12Z",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+	if sessions[0].Status != state.SessionStatusSuccess {
+		t.Fatalf("expected resumed session to be successful: %#v", sessions[0])
+	}
+	if sessions[0].LastResumeCommentID != 101 || sessions[0].LastResumeSource != "comment" {
+		t.Fatalf("expected claimed comment metadata to be persisted: %#v", sessions[0])
+	}
+	if sessions[0].RecoveredAt == "" {
+		t.Fatalf("expected recovery timestamp to be recorded: %#v", sessions[0])
 	}
 }
 

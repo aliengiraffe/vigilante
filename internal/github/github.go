@@ -31,6 +31,19 @@ type PullRequest struct {
 	MergedAt *time.Time `json:"mergedAt"`
 }
 
+type IssueComment struct {
+	ID        int64     `json:"id"`
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"created_at"`
+	User      struct {
+		Login string `json:"login"`
+	} `json:"user"`
+}
+
+type IssueDetails struct {
+	Labels []Label `json:"labels"`
+}
+
 func ListOpenIssues(ctx context.Context, runner environment.Runner, repo string, assignee string) ([]Issue, error) {
 	resolvedAssignee, err := resolveAssignee(ctx, runner, assignee)
 	if err != nil {
@@ -89,7 +102,7 @@ func SelectNextIssue(issues []Issue, sessions []state.Session, target state.Watc
 }
 
 func sessionBlocksRedispatch(session state.Session) bool {
-	if session.Status == state.SessionStatusRunning {
+	if session.Status == state.SessionStatusRunning || session.Status == state.SessionStatusBlocked || session.Status == state.SessionStatusResuming {
 		return true
 	}
 	if session.Status != state.SessionStatusSuccess {
@@ -121,6 +134,79 @@ func CommentOnIssue(ctx context.Context, runner environment.Runner, repo string,
 	return err
 }
 
+func GetIssueDetails(ctx context.Context, runner environment.Runner, repo string, number int) (*IssueDetails, error) {
+	output, err := runner.Run(ctx, "", "gh", "api", issueAPIPath(repo, number))
+	if err != nil {
+		return nil, err
+	}
+
+	var details IssueDetails
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &details); err != nil {
+		return nil, fmt.Errorf("parse gh issue details output: %w", err)
+	}
+	return &details, nil
+}
+
+func ListIssueComments(ctx context.Context, runner environment.Runner, repo string, number int) ([]IssueComment, error) {
+	output, err := runner.Run(ctx, "", "gh", "api", issueAPIPath(repo, number)+"/comments")
+	if err != nil {
+		return nil, err
+	}
+
+	var comments []IssueComment
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &comments); err != nil {
+		return nil, fmt.Errorf("parse gh issue comments output: %w", err)
+	}
+	sort.Slice(comments, func(i, j int) bool {
+		return comments[i].CreatedAt.Before(comments[j].CreatedAt)
+	})
+	return comments, nil
+}
+
+func AddIssueCommentReaction(ctx context.Context, runner environment.Runner, repo string, commentID int64, content string) error {
+	_, err := runner.Run(
+		ctx,
+		"",
+		"gh",
+		"api",
+		"--method", "POST",
+		"-H", "Accept: application/vnd.github+json",
+		fmt.Sprintf("repos/%s/issues/comments/%d/reactions", repo, commentID),
+		"-f", "content="+content,
+	)
+	return err
+}
+
+func RemoveIssueLabel(ctx context.Context, runner environment.Runner, repo string, number int, label string) error {
+	_, err := runner.Run(ctx, "", "gh", "issue", "edit", "--repo", repo, fmt.Sprintf("%d", number), "--remove-label", label)
+	return err
+}
+
+func HasAnyLabel(labels []Label, wanted ...string) bool {
+	for _, label := range labels {
+		for _, candidate := range wanted {
+			if label.Name == candidate {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func FindResumeComment(comments []IssueComment, claimedCommentID int64) *IssueComment {
+	for i := len(comments) - 1; i >= 0; i-- {
+		body := strings.TrimSpace(comments[i].Body)
+		if body != "@vigilanteai resume" {
+			continue
+		}
+		if claimedCommentID != 0 && comments[i].ID == claimedCommentID {
+			return nil
+		}
+		return &comments[i]
+	}
+	return nil
+}
+
 func FindPullRequestForBranch(ctx context.Context, runner environment.Runner, repo string, branch string) (*PullRequest, error) {
 	output, err := runner.Run(ctx, "", "gh", "pr", "list", "--repo", repo, "--head", branch, "--state", "all", "--json", "number,url,state,mergedAt")
 	if err != nil {
@@ -135,4 +221,8 @@ func FindPullRequestForBranch(ctx context.Context, runner environment.Runner, re
 		return nil, nil
 	}
 	return &prs[0], nil
+}
+
+func issueAPIPath(repo string, number int) string {
+	return "repos/" + repo + "/issues/" + fmt.Sprintf("%d", number)
 }
