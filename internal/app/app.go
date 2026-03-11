@@ -974,8 +974,19 @@ func (a *App) resumeBlockedMaintenance(ctx context.Context, session *state.Sessi
 func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Session) error {
 	issue := ghcli.Issue{Number: session.IssueNumber, Title: session.IssueTitle, URL: session.IssueURL}
 	target := state.WatchTarget{Path: session.RepoPath, Repo: session.Repo, Branch: "main"}
-	prompt := skill.BuildIssuePrompt(target, issue, *session)
-	output, err := a.env.Runner.Run(ctx, "", "codex", "exec", "--cd", session.WorktreePath, "--dangerously-bypass-approvals-and-sandbox", prompt)
+	selectedProvider, err := provider.Resolve(session.Provider)
+	if err != nil {
+		return err
+	}
+	invocation, err := selectedProvider.BuildIssueInvocation(provider.IssueTask{
+		Target:  target,
+		Issue:   issue,
+		Session: *session,
+	})
+	if err != nil {
+		return err
+	}
+	output, err := a.env.Runner.Run(ctx, invocation.Dir, invocation.Name, invocation.Args...)
 	session.EndedAt = a.clock().Format(time.RFC3339)
 	session.LastHeartbeatAt = session.EndedAt
 	session.UpdatedAt = session.EndedAt
