@@ -14,6 +14,7 @@ import (
 )
 
 const VigilanteIssueImplementation = "vigilante-issue-implementation"
+const VigilanteGradleMultiProjectIssueImplementation = "vigilante-gradle-multi-project-issue-implementation"
 const VigilanteConflictResolution = "vigilante-conflict-resolution"
 const VigilanteCreateIssue = "vigilante-create-issue"
 
@@ -23,6 +24,7 @@ const RuntimeClaude = "claude"
 func VigilanteSkillNames() []string {
 	return []string{
 		VigilanteIssueImplementation,
+		VigilanteGradleMultiProjectIssueImplementation,
 		VigilanteConflictResolution,
 		VigilanteCreateIssue,
 	}
@@ -105,10 +107,11 @@ func BuildIssuePrompt(target state.WatchTarget, issue ghcli.Issue, session state
 
 func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue ghcli.Issue, session state.Session) string {
 	lines := []string{}
+	issueSkillName := issueImplementationSkillName(target.Path)
 	if strings.TrimSpace(runtime) == RuntimeClaude {
-		lines = append(lines, InlineSkillHeader(VigilanteIssueImplementation))
+		lines = append(lines, InlineSkillHeader(issueSkillName))
 	} else {
-		lines = append(lines, fmt.Sprintf("Use the `%s` skill for this task.", VigilanteIssueImplementation))
+		lines = append(lines, fmt.Sprintf("Use the `%s` skill for this task.", issueSkillName))
 	}
 	lines = append(lines,
 		fmt.Sprintf("Repository: %s", target.Repo),
@@ -123,6 +126,27 @@ func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue 
 		"Use the issue as the source of truth for the requested behavior and keep the implementation minimal.",
 	)
 	return strings.Join(lines, "\n")
+}
+
+func issueImplementationSkillName(repoPath string) string {
+	if isGradleMultiProjectRepo(repoPath) {
+		return VigilanteGradleMultiProjectIssueImplementation
+	}
+	return VigilanteIssueImplementation
+}
+
+func isGradleMultiProjectRepo(repoPath string) bool {
+	for _, name := range []string{"settings.gradle", "settings.gradle.kts"} {
+		body, err := os.ReadFile(filepath.Join(repoPath, name))
+		if err != nil {
+			continue
+		}
+		text := string(body)
+		if strings.Contains(text, "include(") || strings.Contains(text, "include ") || strings.Contains(text, "includeFlat(") {
+			return true
+		}
+	}
+	return false
 }
 
 func BuildIssuePreflightPrompt(target state.WatchTarget, issue ghcli.Issue, session state.Session) string {

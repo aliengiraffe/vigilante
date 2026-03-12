@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vigilante Gradle Multi-Project Issue Implementation"
+  short_description: "Implement a Vigilante-dispatched GitHub issue in a Gradle multi-project repository with subproject-aware validation and database-service setup"
+  default_prompt: "Use $vigilante-gradle-multi-project-issue-implementation to implement the assigned issue in the provided Gradle multi-project worktree, keep validation scoped to the right subprojects, use docker-compose-launch when local databases are required, push the branch, open a PR, and comment progress or failures back to the linked GitHub issue."

@@ -44,7 +44,7 @@ For each watched repository:
    - `git`
    - `gh`
    - the configured coding-agent provider CLI (`codex` or `claude`)
-4. Ensure the coding-agent issue implementation skill from `skills/vigilante-issue-implementation/` is installed during setup, including its companion agent metadata.
+4. Ensure the coding-agent issue implementation skills from `skills/` are installed during setup, including their companion agent metadata.
 5. Query GitHub for open issues.
 6. Determine which issues are eligible for execution.
 7. Create a git worktree for the selected issue.
@@ -168,6 +168,7 @@ Expected behavior:
 - verifies `git`, `gh`, and the selected coding-agent provider CLI
 - installs the bundled coding-agent skills for regular runtime use, including any companion files under each skill directory
   - `vigilante-issue-implementation`
+  - `vigilante-gradle-multi-project-issue-implementation`
   - `vigilante-conflict-resolution`
   - `vigilante-create-issue`
 - installs or updates the daemon definition when requested

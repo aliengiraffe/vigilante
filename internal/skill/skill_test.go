@@ -140,6 +140,44 @@ func TestBuildIssuePrompt(t *testing.T) {
 	}
 }
 
+func TestBuildIssuePromptUsesGradleMultiProjectSkillWhenSettingsIncludesSubprojects(t *testing.T) {
+	repoDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repoDir, "settings.gradle.kts"), []byte("include(\":api\", \":worker\")\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	target := state.WatchTarget{Path: repoDir, Repo: "owner/repo"}
+	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
+	prompt := BuildIssuePrompt(target, issue, session)
+
+	if !strings.Contains(prompt, "Use the `vigilante-gradle-multi-project-issue-implementation` skill") {
+		t.Fatalf("prompt missing gradle multi-project skill routing: %s", prompt)
+	}
+}
+
+func TestGradleMultiProjectSkillContentCoversScopedValidationAndDatabaseFlows(t *testing.T) {
+	skillDir := repoSkillDir(VigilanteGradleMultiProjectIssueImplementation)
+	body, err := os.ReadFile(filepath.Join(skillDir, "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, needle := range []string{"selected subproject", "Gradle task scope", "docker-compose-launch", "Postgres", "MySQL"} {
+		if !strings.Contains(text, needle) {
+			t.Fatalf("gradle skill missing %q: %s", needle, text)
+		}
+	}
+
+	agentBody, err := os.ReadFile(filepath.Join(skillDir, "agents", "openai.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(agentBody), "docker-compose-launch") {
+		t.Fatalf("gradle skill agent metadata missing docker-compose-launch guidance: %s", string(agentBody))
+	}
+}
+
 func TestBuildIssuePreflightPrompt(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
