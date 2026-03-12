@@ -97,7 +97,7 @@ func SelectIssues(issues []Issue, sessions []state.Session, target state.WatchTa
 
 	active := map[int]bool{}
 	for _, session := range sessions {
-		if session.Repo == target.Repo && sessionBlocksRedispatch(session) {
+		if session.Repo == target.Repo && sessionPreventsRedispatch(session) {
 			active[session.IssueNumber] = true
 		}
 	}
@@ -122,15 +122,15 @@ func SelectIssues(issues []Issue, sessions []state.Session, target state.WatchTa
 func ActiveSessionCount(sessions []state.Session, target state.WatchTarget) int {
 	count := 0
 	for _, session := range sessions {
-		if session.Repo == target.Repo && sessionBlocksRedispatch(session) {
+		if session.Repo == target.Repo && sessionConsumesDispatchCapacity(session) {
 			count++
 		}
 	}
 	return count
 }
 
-func sessionBlocksRedispatch(session state.Session) bool {
-	if session.Status == state.SessionStatusRunning || session.Status == state.SessionStatusBlocked || session.Status == state.SessionStatusResuming {
+func sessionPreventsRedispatch(session state.Session) bool {
+	if sessionConsumesDispatchCapacity(session) || session.Status == state.SessionStatusBlocked {
 		return true
 	}
 	if session.Status != state.SessionStatusSuccess {
@@ -140,6 +140,10 @@ func sessionBlocksRedispatch(session state.Session) bool {
 		return false
 	}
 	return true
+}
+
+func sessionConsumesDispatchCapacity(session state.Session) bool {
+	return session.Status == state.SessionStatusRunning || session.Status == state.SessionStatusResuming
 }
 
 func matchesLabelAllowlist(issue Issue, allowlist []string) bool {

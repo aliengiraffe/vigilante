@@ -493,7 +493,7 @@ func TestScanOncePrintsNoEligibleIssues(t *testing.T) {
 	}
 }
 
-func TestScanOnceSkipsRedispatchForMaintainedIssueAndStartsNextEligibleIssue(t *testing.T) {
+func TestScanOnceMaintainedIssueDoesNotConsumeOnlyDispatchSlot(t *testing.T) {
 	home := t.TempDir()
 	repoPath := filepath.Join(home, "repo")
 	worktreePath1 := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
@@ -558,7 +558,7 @@ func TestScanOnceSkipsRedispatchForMaintainedIssueAndStartsNextEligibleIssue(t *
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me", Labels: []string{"to-do"}, MaxParallel: 2}}); err != nil {
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me", Labels: []string{"to-do"}, MaxParallel: 1}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := app.state.SaveSessions([]state.Session{{

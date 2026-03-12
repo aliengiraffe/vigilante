@@ -92,6 +92,10 @@ func (p testProvider) EnsureRuntimeInstalled(store *state.Store) error {
 	return nil
 }
 
+func (p testProvider) BuildIssuePreflightInvocation(task IssueTask) (Invocation, error) {
+	return Invocation{}, nil
+}
+
 func (p testProvider) BuildIssueInvocation(task IssueTask) (Invocation, error) {
 	return Invocation{}, nil
 }
