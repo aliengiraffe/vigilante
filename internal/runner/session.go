@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nicobistolfi/vigilante/internal/blocking"
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
 	"github.com/nicobistolfi/vigilante/internal/logtime"
@@ -89,8 +90,8 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 			Percent:    25,
 			ETAMinutes: 15,
 			Items: []string{
-				"Repository baseline validation failed before issue implementation began.",
-				fmt.Sprintf("Cause class: `%s`.", blocked.Kind),
+				blockedPreflightMessage(blocked, selectedProvider.ID()),
+				blocking.CauseLine(blocked),
 				fmt.Sprintf("Next step: restore the repository baseline, then run `%s` or request resume from GitHub.", session.ResumeHint),
 			},
 			Tagline: "Strong foundations make calm debugging sessions.",
@@ -131,8 +132,8 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 			Percent:    95,
 			ETAMinutes: 10,
 			Items: []string{
-				fmt.Sprintf("The `%s` provider stopped before the issue implementation completed.", selectedProvider.ID()),
-				fmt.Sprintf("Cause class: `%s`.", blocked.Kind),
+				blockedExecutionMessage(blocked, selectedProvider.ID()),
+				blocking.CauseLine(blocked),
 				fmt.Sprintf("Next step: fix the blocker, then run `%s` or request resume from GitHub.", session.ResumeHint),
 			},
 			Tagline: "Plans are only good intentions unless they immediately degenerate into hard work.",
@@ -171,8 +172,8 @@ func RunConflictResolutionSession(ctx context.Context, env *environment.Environm
 			Percent:    90,
 			ETAMinutes: 12,
 			Items: []string{
-				fmt.Sprintf("Conflict resolution for PR #%d on `%s` through provider `%s` did not complete.", pr.Number, session.Branch, selectedProvider.ID()),
-				fmt.Sprintf("Cause class: `%s`.", blocked.Kind),
+				blockedConflictMessage(blocked, pr.Number, session.Branch, selectedProvider.ID()),
+				blocking.CauseLine(blocked),
 				fmt.Sprintf("Next step: fix the blocker, then run `%s` or request resume from GitHub.", buildResumeHint(session)),
 			},
 			Tagline: "An obstacle is often a stepping stone.",
@@ -210,35 +211,28 @@ func buildResumeHint(session state.Session) string {
 }
 
 func classifyBlockedFailure(stage string, operation string, output string, err error) state.BlockedReason {
-	text := strings.ToLower(strings.TrimSpace(output + "\n" + err.Error()))
-	reason := state.BlockedReason{
-		Kind:      "unknown_operator_action_required",
-		Operation: operation,
-		Summary:   summarizeError(err),
-		Detail:    summarizeError(errors.New(strings.TrimSpace(output))),
+	return blocking.Classify(stage, operation, strings.TrimSpace(output+"\n"+err.Error()), summarizeError(err))
+}
+
+func blockedPreflightMessage(blocked state.BlockedReason, providerID string) string {
+	if blocked.Kind == "provider_quota" {
+		return fmt.Sprintf("The `%s` provider hit a usage or subscription limit during issue preflight.", providerID)
 	}
-	switch {
-	case strings.Contains(text, "permission denied (publickey)") || strings.Contains(text, "sign_and_send_pubkey") || strings.Contains(text, "could not read from remote repository"):
-		reason.Kind = "git_auth"
-	case strings.Contains(text, "gh auth") || strings.Contains(text, "not logged into") || strings.Contains(text, "authentication failed"):
-		reason.Kind = "gh_auth"
-	case strings.Contains(text, "session expired") || strings.Contains(text, "re-auth") || strings.Contains(text, "login required") || strings.Contains(text, "unauthorized"):
-		reason.Kind = "provider_auth"
-	case strings.Contains(text, "executable file not found") || strings.Contains(text, "no such file or directory"):
-		reason.Kind = "provider_missing"
-	case strings.Contains(text, "worktree is not clean"):
-		reason.Kind = "dirty_worktree"
-	case strings.Contains(text, "go test") || strings.Contains(text, "validation") || strings.Contains(text, "build failed") || strings.Contains(text, "tests failed"):
-		reason.Kind = "validation_failed"
-	case strings.Contains(text, "network is unreachable") || strings.Contains(text, "timed out"):
-		reason.Kind = "network_unreachable"
-	case strings.Contains(strings.ToLower(stage), "issue") || strings.Contains(strings.ToLower(stage), "conflict") || strings.Contains(strings.ToLower(stage), "preflight"):
-		reason.Kind = "provider_runtime_error"
+	return "Repository baseline validation failed before issue implementation began."
+}
+
+func blockedExecutionMessage(blocked state.BlockedReason, providerID string) string {
+	if blocked.Kind == "provider_quota" {
+		return fmt.Sprintf("The `%s` provider hit a usage or subscription limit before the issue implementation completed.", providerID)
 	}
-	if reason.Detail == "" {
-		reason.Detail = reason.Summary
+	return fmt.Sprintf("The `%s` provider stopped before the issue implementation completed.", providerID)
+}
+
+func blockedConflictMessage(blocked state.BlockedReason, prNumber int, branch string, providerID string) string {
+	if blocked.Kind == "provider_quota" {
+		return fmt.Sprintf("Conflict resolution for PR #%d on `%s` stopped because provider `%s` hit a usage or subscription limit.", prNumber, branch, providerID)
 	}
-	return reason
+	return fmt.Sprintf("Conflict resolution for PR #%d on `%s` through provider `%s` did not complete.", prNumber, branch, providerID)
 }
 
 func appendSessionLog(path string, event string, session state.Session, details string) {

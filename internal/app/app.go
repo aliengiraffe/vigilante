@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nicobistolfi/vigilante/internal/blocking"
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
 	"github.com/nicobistolfi/vigilante/internal/provider"
@@ -696,8 +697,8 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 						Percent:    85,
 						ETAMinutes: 15,
 						Items: []string{
-							fmt.Sprintf("Vigilante could not keep PR #%d merge-ready on `%s`.", pr.Number, session.Branch),
-							fmt.Sprintf("Cause class: `%s`.", blocked.Kind),
+							maintenanceBlockedMessage(blocked, pr.Number, session.Branch),
+							blocking.CauseLine(blocked),
 							fmt.Sprintf("Next step: fix the blocker, then run `%s` or request resume from GitHub.", session.ResumeHint),
 						},
 						Tagline: "Difficulties strengthen the mind, as labor does the body.",
@@ -859,6 +860,9 @@ func (a *App) listBlockedSessions() error {
 		count++
 		fmt.Fprintf(a.stdout, "%s issue #%d  %s\n", session.Repo, session.IssueNumber, blockedStateLabel(session))
 		fmt.Fprintf(a.stdout, "  cause: %s\n", fallbackText(session.BlockedReason.Kind, "unknown_operator_action_required"))
+		if session.BlockedReason.Summary != "" {
+			fmt.Fprintf(a.stdout, "  summary: %s\n", session.BlockedReason.Summary)
+		}
 		if session.BlockedReason.Operation != "" {
 			fmt.Fprintf(a.stdout, "  failed op: %s\n", session.BlockedReason.Operation)
 		}
@@ -1207,8 +1211,8 @@ func (a *App) resumeBlockedSession(ctx context.Context, session *state.Session, 
 			Percent:    88,
 			ETAMinutes: 10,
 			Items: []string{
-				fmt.Sprintf("Resume preflight did not pass for `%s`.", session.Branch),
-				fmt.Sprintf("Cause class: `%s`.", blocked.Kind),
+				resumePreflightBlockedMessage(blocked, session.Branch),
+				blocking.CauseLine(blocked),
 				fmt.Sprintf("Next step: fix the blocker, then run `%s` or request resume from GitHub again.", session.ResumeHint),
 			},
 			Tagline: "Clear eyes, full hearts, can’t lose.",
@@ -1235,8 +1239,8 @@ func (a *App) resumeBlockedSession(ctx context.Context, session *state.Session, 
 			Percent:    90,
 			ETAMinutes: 12,
 			Items: []string{
-				fmt.Sprintf("Resume did not complete for `%s`.", session.Branch),
-				fmt.Sprintf("Cause class: `%s`.", blocked.Kind),
+				resumeBlockedMessage(blocked, session.Branch),
+				blocking.CauseLine(blocked),
 				fmt.Sprintf("Next step: fix the blocker, then run `%s` or request resume from GitHub again.", session.ResumeHint),
 			},
 			Tagline: "The comeback is always stronger than the setback.",
@@ -1497,32 +1501,7 @@ func (a *App) recordSessionFailure(session *state.Session, stage string, operati
 }
 
 func classifyBlockedReason(stage string, operation string, err error) state.BlockedReason {
-	text := strings.ToLower(strings.TrimSpace(err.Error()))
-	reason := state.BlockedReason{
-		Kind:      "unknown_operator_action_required",
-		Operation: operation,
-		Summary:   summarizeMaintenanceError(err),
-		Detail:    summarizeMaintenanceError(err),
-	}
-	switch {
-	case strings.Contains(text, "permission denied (publickey)") || strings.Contains(text, "sign_and_send_pubkey") || strings.Contains(text, "could not read from remote repository"):
-		reason.Kind = "git_auth"
-	case strings.Contains(text, "gh auth") || strings.Contains(text, "not logged into") || strings.Contains(text, "authentication failed"):
-		reason.Kind = "gh_auth"
-	case strings.Contains(text, "session expired") || strings.Contains(text, "re-auth") || strings.Contains(text, "login required") || strings.Contains(text, "unauthorized"):
-		reason.Kind = "provider_auth"
-	case strings.Contains(text, "executable file not found") || strings.Contains(text, "no such file or directory"):
-		reason.Kind = "provider_missing"
-	case strings.Contains(text, "worktree is not clean"):
-		reason.Kind = "dirty_worktree"
-	case strings.Contains(text, "go test") || strings.Contains(text, "validation") || strings.Contains(text, "build failed") || strings.Contains(text, "tests failed"):
-		reason.Kind = "validation_failed"
-	case strings.Contains(text, "network is unreachable") || strings.Contains(text, "timed out"):
-		reason.Kind = "network_unreachable"
-	case stage == "issue_execution" || stage == "conflict_resolution" || stage == "baseline_preflight":
-		reason.Kind = "provider_runtime_error"
-	}
-	return reason
+	return blocking.Classify(stage, operation, err.Error(), summarizeMaintenanceError(err))
 }
 
 func markSessionBlocked(session *state.Session, stage string, blocked state.BlockedReason, now time.Time) {
@@ -1552,18 +1531,28 @@ func clearBlockedState(session *state.Session, now time.Time, source string) {
 }
 
 func blockedStateLabel(session state.Session) string {
-	switch session.BlockedReason.Kind {
-	case "git_auth":
-		return "blocked_waiting_for_credentials"
-	case "gh_auth":
-		return "blocked_waiting_for_github_auth"
-	case "provider_auth":
-		return "blocked_waiting_for_provider_auth"
-	case "provider_missing":
-		return "blocked_waiting_for_provider_binary"
-	default:
-		return "blocked_waiting_for_operator"
+	return blocking.StateLabel(session.BlockedReason.Kind)
+}
+
+func maintenanceBlockedMessage(blocked state.BlockedReason, prNumber int, branch string) string {
+	if blocked.Kind == "provider_quota" {
+		return fmt.Sprintf("Vigilante could not keep PR #%d merge-ready on `%s` because the coding-agent account hit a usage or subscription limit.", prNumber, branch)
 	}
+	return fmt.Sprintf("Vigilante could not keep PR #%d merge-ready on `%s`.", prNumber, branch)
+}
+
+func resumePreflightBlockedMessage(blocked state.BlockedReason, branch string) string {
+	if blocked.Kind == "provider_quota" {
+		return fmt.Sprintf("Resume preflight stopped for `%s` because the coding-agent account hit a usage or subscription limit.", branch)
+	}
+	return fmt.Sprintf("Resume preflight did not pass for `%s`.", branch)
+}
+
+func resumeBlockedMessage(blocked state.BlockedReason, branch string) string {
+	if blocked.Kind == "provider_quota" {
+		return fmt.Sprintf("Resume stopped for `%s` because the coding-agent account hit a usage or subscription limit.", branch)
+	}
+	return fmt.Sprintf("Resume did not complete for `%s`.", branch)
 }
 
 func cleanupResultComment(session state.Session, cleanupErr error) string {

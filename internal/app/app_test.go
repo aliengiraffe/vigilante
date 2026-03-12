@@ -251,6 +251,64 @@ func TestListBlockedSessions(t *testing.T) {
 	}
 }
 
+func TestListBlockedSessionsShowsProviderQuotaSummary(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		Repo:         "owner/repo",
+		IssueNumber:  45,
+		Status:       state.SessionStatusBlocked,
+		BlockedAt:    "2026-03-11T13:20:13Z",
+		BlockedStage: "issue_execution",
+		BlockedReason: state.BlockedReason{
+			Kind:      "provider_quota",
+			Operation: "codex exec",
+			Summary:   "Coding-agent account hit a usage or subscription limit. Try again at 2026-03-13 09:00 PDT.",
+		},
+		ResumeHint:     "vigilante resume --repo owner/repo --issue 45",
+		ResumeRequired: true,
+		RetryPolicy:    "paused",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.List(true, false); err != nil {
+		t.Fatal(err)
+	}
+	got := stdout.String()
+	for _, want := range []string{
+		"owner/repo issue #45  blocked_waiting_for_provider_quota",
+		"cause: provider_quota",
+		"summary: Coding-agent account hit a usage or subscription limit. Try again at 2026-03-13 09:00 PDT.",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected blocked list output to contain %q, got: %s", want, got)
+		}
+	}
+}
+
+func TestClassifyBlockedReasonDetectsProviderQuota(t *testing.T) {
+	err := errors.New("You've hit your usage limit. Upgrade to Pro or purchase more credits. Try again at 2026-03-13 09:00 PDT.")
+
+	got := classifyBlockedReason("issue_execution", "codex exec", err)
+
+	if got.Kind != "provider_quota" {
+		t.Fatalf("expected provider_quota, got %#v", got)
+	}
+	if !strings.Contains(got.Summary, "Try again at 2026-03-13 09:00 PDT.") {
+		t.Fatalf("expected retry hint in summary, got %q", got.Summary)
+	}
+}
+
 func TestListRunningSessions(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))

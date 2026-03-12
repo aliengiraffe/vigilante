@@ -153,6 +153,30 @@ func TestRunConflictResolutionSessionFailureCommentsOnIssue(t *testing.T) {
 	}
 }
 
+func TestClassifyBlockedFailureDetectsProviderQuota(t *testing.T) {
+	err := errors.New("exit status 1")
+	output := "You've hit your usage limit. Upgrade to Pro or purchase more credits. Try again at 2026-03-13 09:00 PDT."
+
+	got := classifyBlockedFailure("issue_execution", "codex exec", output, err)
+
+	if got.Kind != "provider_quota" {
+		t.Fatalf("expected provider_quota, got %#v", got)
+	}
+	for _, want := range []string{
+		"usage or subscription limit",
+		"Try again at 2026-03-13 09:00 PDT.",
+		"upgrading the subscription",
+		"purchasing more credits",
+	} {
+		if !strings.Contains(got.Summary, want) {
+			t.Fatalf("expected summary to contain %q, got %q", want, got.Summary)
+		}
+	}
+	if !strings.Contains(got.Detail, "You've hit your usage limit.") {
+		t.Fatalf("expected detail to preserve provider output, got %q", got.Detail)
+	}
+}
+
 func TestAppendSessionLogUsesLocalTimezone(t *testing.T) {
 	originalLocal := time.Local
 	time.Local = time.FixedZone("TEST", -8*60*60)
