@@ -414,10 +414,9 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			issues, err := ghcli.ListOpenIssues(ctx, a.env.Runner, target.Repo, target.Assignee)
 			target.LastScanAt = a.clock().Format(time.RFC3339)
 			if err != nil {
-				if saveErr := a.state.SaveWatchTargets(targets); saveErr != nil {
-					return saveErr
-				}
-				return err
+				a.state.AppendDaemonLog("scan repo issues failed repo=%s err=%v", target.Repo, err)
+				fmt.Fprintf(a.stdout, "repo: %s scan failed: %s\n", target.Repo, summarizeText(err.Error()))
+				continue
 			}
 			a.state.AppendDaemonLog("scan repo issues repo=%s open_issues=%d", target.Repo, len(issues))
 
@@ -437,7 +436,14 @@ func (a *App) ScanOnce(ctx context.Context) error {
 
 				wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, *target, next.Number, next.Title)
 				if err != nil {
-					return err
+					session := blockedIssueSessionForDispatchFailure(*target, next, err, a.clock())
+					a.state.AppendDaemonLog("scan repo dispatch blocked repo=%s issue=%d err=%v", target.Repo, next.Number, err)
+					sessions = upsertSession(sessions, session)
+					if err := a.state.SaveSessions(sessions); err != nil {
+						return err
+					}
+					fmt.Fprintf(a.stdout, "repo: %s blocked issue #%d: %s\n", target.Repo, next.Number, summarizeText(err.Error()))
+					continue
 				}
 				a.state.AppendDaemonLog("scan repo worktree ready repo=%s issue=%d path=%s branch=%s", target.Repo, next.Number, wt.Path, wt.Branch)
 
@@ -502,7 +508,9 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 
 		pr, err := ghcli.FindPullRequestForBranch(ctx, a.env.Runner, session.Repo, session.Branch)
 		if err != nil {
-			return nil, err
+			a.recordSessionFailure(session, "issue_execution", "gh pr list", err)
+			a.state.AppendDaemonLog("stalled session pr lookup failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
+			continue
 		}
 		if pr != nil {
 			session.Status = state.SessionStatusSuccess
@@ -530,7 +538,9 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 				Tagline: "Fall seven times, stand up eight.",
 			})
 			if err := ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body); err != nil {
-				return nil, err
+				session.LastError = err.Error()
+				session.UpdatedAt = a.clock().Format(time.RFC3339)
+				a.state.AppendDaemonLog("stalled session recovery comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
 			}
 			continue
 		}
@@ -553,7 +563,9 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 				Tagline: "The gem cannot be polished without friction.",
 			})
 			if commentErr := ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body); commentErr != nil {
-				return nil, commentErr
+				session.LastError = commentErr.Error()
+				session.UpdatedAt = a.clock().Format(time.RFC3339)
+				a.state.AppendDaemonLog("stalled session cleanup comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, commentErr)
 			}
 			continue
 		}
@@ -580,7 +592,9 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 			Tagline: "A smooth sea never made a skilled sailor.",
 		})
 		if err := ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body); err != nil {
-			return nil, err
+			session.LastError = err.Error()
+			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			a.state.AppendDaemonLog("stalled session redispatch comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
 		}
 	}
 
@@ -806,38 +820,53 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 
 		details, err := ghcli.GetIssueDetails(ctx, a.env.Runner, session.Repo, session.IssueNumber)
 		if err != nil {
-			return nil, err
+			a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), "gh issue view", err)
+			a.state.AppendDaemonLog("resume issue details failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
+			continue
 		}
 		if ghcli.HasAnyLabel(details.Labels, "resume", "vigilante:resume") {
+			labelRemovalFailed := false
 			for _, label := range []string{"resume", "vigilante:resume"} {
 				if ghcli.HasAnyLabel(details.Labels, label) {
 					if err := ghcli.RemoveIssueLabel(ctx, a.env.Runner, session.Repo, session.IssueNumber, label); err != nil {
-						return nil, err
+						a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), "gh issue edit --remove-label", err)
+						a.state.AppendDaemonLog("resume label removal failed repo=%s issue=%d label=%s err=%v", session.Repo, session.IssueNumber, label, err)
+						labelRemovalFailed = true
+						break
 					}
 				}
 			}
+			if labelRemovalFailed {
+				continue
+			}
 			if err := a.resumeBlockedSession(ctx, session, "label"); err != nil {
-				return nil, err
+				a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), fallbackText(session.BlockedReason.Operation, "resume"), err)
+				a.state.AppendDaemonLog("resume by label failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
 			}
 			continue
 		}
 
 		comments, err := ghcli.ListIssueComments(ctx, a.env.Runner, session.Repo, session.IssueNumber)
 		if err != nil {
-			return nil, err
+			a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), "gh issue comments", err)
+			a.state.AppendDaemonLog("resume comment lookup failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
+			continue
 		}
 		comment := ghcli.FindResumeComment(comments, session.LastResumeCommentID)
 		if comment == nil {
 			continue
 		}
 		if err := ghcli.AddIssueCommentReaction(ctx, a.env.Runner, session.Repo, comment.ID, "salute"); err != nil {
-			return nil, err
+			a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), "gh api issue comment reactions", err)
+			a.state.AppendDaemonLog("resume reaction failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
+			continue
 		}
 		session.LastResumeCommentID = comment.ID
 		session.LastResumeCommentAt = comment.CreatedAt.UTC().Format(time.RFC3339)
 		session.LastResumeSource = "comment"
 		if err := a.resumeBlockedSession(ctx, session, "comment"); err != nil {
-			return nil, err
+			a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), fallbackText(session.BlockedReason.Operation, "resume"), err)
+			a.state.AppendDaemonLog("resume by comment failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
 		}
 	}
 	return sessions, nil
@@ -1146,6 +1175,33 @@ func summarizeText(text string) string {
 		return text[:400]
 	}
 	return text
+}
+
+func blockedIssueSessionForDispatchFailure(target state.WatchTarget, issue ghcli.Issue, err error, now time.Time) state.Session {
+	session := state.Session{
+		RepoPath:     target.Path,
+		Repo:         target.Repo,
+		Provider:     target.Provider,
+		IssueNumber:  issue.Number,
+		IssueTitle:   issue.Title,
+		IssueURL:     issue.URL,
+		Branch:       worktree.IssueBranchName(issue.Number, issue.Title),
+		WorktreePath: worktree.IssueWorktreePath(target.Path, issue.Number),
+		Status:       state.SessionStatusFailed,
+		StartedAt:    now.Format(time.RFC3339),
+		UpdatedAt:    now.Format(time.RFC3339),
+		LastError:    err.Error(),
+	}
+	markSessionBlocked(&session, "issue_execution", classifyBlockedReason("issue_execution", "git worktree add", err), now)
+	session.LastError = err.Error()
+	session.UpdatedAt = now.Format(time.RFC3339)
+	return session
+}
+
+func (a *App) recordSessionFailure(session *state.Session, stage string, operation string, err error) {
+	markSessionBlocked(session, stage, classifyBlockedReason(stage, operation, err), a.clock())
+	session.LastError = err.Error()
+	session.UpdatedAt = a.clock().Format(time.RFC3339)
 }
 
 func classifyBlockedReason(stage string, operation string, err error) state.BlockedReason {

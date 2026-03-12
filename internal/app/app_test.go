@@ -713,6 +713,69 @@ func TestScanOnceDoesNotExceedConfiguredLimit(t *testing.T) {
 	}
 }
 
+func TestScanOnceBlocksFailedIssueDispatchAndContinuesToNextIssue(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath1 := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	worktreePath2 := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-2")
+	branch2 := "vigilante/issue-2-second"
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	var stdout bytes.Buffer
+	app := New()
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[]}]`,
+			"git worktree prune": "ok",
+			"git worktree add -b " + branch2 + " " + worktreePath2 + " main":                                                          "ok",
+			sessionStartCommentCommand("owner/repo", 2, worktreePath2, branch2):                                                       "ok",
+			issuePromptCommand(worktreePath2, "owner/repo", repoPath, 2, "second", "https://github.com/owner/repo/issues/2", branch2): "done",
+		},
+		Errors: map[string]error{
+			"git worktree add -b vigilante/issue-1-first " + worktreePath1 + " main": errors.New("exit status 1: worktree add failed"),
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me", MaxParallel: 2}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.waitForSessions()
+
+	got := stdout.String()
+	if !strings.Contains(got, "repo: owner/repo blocked issue #1: exit status 1: worktree add failed") {
+		t.Fatalf("expected blocked issue output, got: %s", got)
+	}
+	if !strings.Contains(got, "repo: owner/repo started issue #2 in "+worktreePath2) {
+		t.Fatalf("expected second issue to start, got: %s", got)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+	if sessions[0].IssueNumber != 1 || sessions[0].Status != state.SessionStatusBlocked {
+		t.Fatalf("expected first issue to be blocked, got: %#v", sessions[0])
+	}
+	if sessions[1].IssueNumber != 2 || sessions[1].Status != state.SessionStatusSuccess {
+		t.Fatalf("expected second issue to succeed, got: %#v", sessions[1])
+	}
+}
+
 func TestScanOnceEnforcesLimitsIndependentlyAcrossRepositories(t *testing.T) {
 	home := t.TempDir()
 	repoPathA := filepath.Join(home, "repo-a")
@@ -770,6 +833,66 @@ func TestScanOnceEnforcesLimitsIndependentlyAcrossRepositories(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(sessions) != 3 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+}
+
+func TestScanOnceContinuesWhenOneRepositoryScanFails(t *testing.T) {
+	home := t.TempDir()
+	repoPathA := filepath.Join(home, "repo-a")
+	repoPathB := filepath.Join(home, "repo-b")
+	worktreeB10 := filepath.Join(repoPathB, ".worktrees", "vigilante", "issue-10")
+	branchB10 := "vigilante/issue-10-first-b"
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	var stdout bytes.Buffer
+	app := New()
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo-b --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":10,"title":"first-b","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo-b/issues/10","labels":[]}]`,
+			"git worktree prune": "ok",
+			"git worktree add -b " + branchB10 + " " + worktreeB10 + " main":                                                                  "ok",
+			sessionStartCommentCommand("owner/repo-b", 10, worktreeB10, branchB10):                                                            "ok",
+			issuePromptCommand(worktreeB10, "owner/repo-b", repoPathB, 10, "first-b", "https://github.com/owner/repo-b/issues/10", branchB10): "done",
+		},
+		Errors: map[string]error{
+			"gh issue list --repo owner/repo-a --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": errors.New("gh auth status failed"),
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{
+		{Path: repoPathA, Repo: "owner/repo-a", Branch: "main", Assignee: "me", MaxParallel: 1},
+		{Path: repoPathB, Repo: "owner/repo-b", Branch: "main", Assignee: "me", MaxParallel: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.waitForSessions()
+
+	got := stdout.String()
+	if !strings.Contains(got, "repo: owner/repo-a scan failed: gh auth status failed") {
+		t.Fatalf("expected repo-a scan failure output, got: %s", got)
+	}
+	if !strings.Contains(got, "repo: owner/repo-b started issue #10 in "+worktreeB10) {
+		t.Fatalf("expected repo-b issue to start, got: %s", got)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].Repo != "owner/repo-b" || sessions[0].Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected sessions: %#v", sessions)
 	}
 }
@@ -979,13 +1102,14 @@ func TestScanOnceUsesExplicitAssigneeFilter(t *testing.T) {
 	}
 }
 
-func TestScanOnceReturnsErrorWhenResolvingDefaultAssigneeFails(t *testing.T) {
+func TestScanOnceReportsRepoScanFailureWhenResolvingDefaultAssigneeFails(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 	t.Setenv("HOME", home)
 
 	app := New()
-	app.stdout = &bytes.Buffer{}
+	var stdout bytes.Buffer
+	app.stdout = &stdout
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
@@ -1001,11 +1125,11 @@ func TestScanOnceReturnsErrorWhenResolvingDefaultAssigneeFails(t *testing.T) {
 	}
 
 	err := app.ScanOnce(context.Background())
-	if err == nil {
-		t.Fatal("expected assignee resolution error")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if got := err.Error(); got != `resolve assignee "me": context deadline exceeded` {
-		t.Fatalf("unexpected error: %s", got)
+	if got := stdout.String(); !strings.Contains(got, `repo: owner/repo scan failed: resolve assignee "me": context deadline exceeded`) {
+		t.Fatalf("unexpected output: %s", got)
 	}
 }
 
