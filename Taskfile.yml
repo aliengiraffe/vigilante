@@ -1,0 +1,41 @@
+version: "3"
+
+vars:
+  LOCAL_BIN_DIR: "{{.HOME}}/.local/bin"
+  INSTALL_PATH: "{{.LOCAL_BIN_DIR}}/vigilante"
+
+tasks:
+  test:
+    desc: Run the Go test suite
+    cmds:
+      - go test ./...
+
+  build:
+    desc: Build the repo-local vigilante binary
+    cmds:
+      - go build -o ./vigilante ./cmd/vigilante
+
+  install:
+    desc: Install the built binary into ~/.local/bin
+    deps: [build]
+    cmds:
+      - mkdir -p "{{.LOCAL_BIN_DIR}}"
+      - cp ./vigilante "{{.INSTALL_PATH}}"
+
+  setup:
+    desc: Run setup with the repo-local binary
+    deps: [build]
+    cmds:
+      - ./vigilante setup
+
+  install-setup:
+    desc: Run setup with the installed local binary
+    deps: [install]
+    cmds:
+      - '{{.INSTALL_PATH}} setup'
+
+  setup-daemon:
+    desc: Refresh the installed daemon or service definition
+    deps: [install]
+    cmds:
+      - '{{.INSTALL_PATH}} setup -d'

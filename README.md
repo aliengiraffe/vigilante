@@ -171,12 +171,33 @@ Expected behavior:
 
 For fast local iteration, prefer running `vigilante` in the foreground instead of going through the installed OS service on every change.
 
+If you use [`go-task`](https://taskfile.dev/), the repository includes a root `Taskfile.yml` for the main local workflows. Install `task` with either:
+
+```sh
+brew install go-task/tap/go-task
+```
+
+or:
+
+```sh
+go install github.com/go-task/task/v3/cmd/task@latest
+```
+
+Primary tasks:
+
+- `task test` runs `go test ./...`
+- `task build` builds `./vigilante`
+- `task install` copies the built binary to `~/.local/bin/vigilante`
+- `task setup` runs `./vigilante setup`
+- `task install-setup` runs `~/.local/bin/vigilante setup`
+- `task setup-daemon` runs `~/.local/bin/vigilante setup -d`
+
 Recommended loop:
 
 ```sh
-go test ./...
-go build -o ./vigilante ./cmd/vigilante
-./vigilante setup
+task test
+task build
+task setup
 ./vigilante watch /path/to/repo
 ./vigilante daemon run --once
 ```
@@ -198,14 +219,14 @@ go run ./cmd/vigilante daemon run --interval 30s
 - rebuild the installed binary and refresh the installed Codex skill:
 
 ```sh
-go build -o /Users/$USER/.local/bin/vigilante ./cmd/vigilante
-/Users/$USER/.local/bin/vigilante setup
+task install
+task install-setup
 ```
 
 - reinstall the OS service after changing daemon or service behavior:
 
 ```sh
-/Users/$USER/.local/bin/vigilante setup -d
+task setup-daemon
 ```
 
 Notes:
