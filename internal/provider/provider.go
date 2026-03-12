@@ -42,6 +42,32 @@ var registry = map[string]Provider{
 	DefaultID: codexProvider{},
 }
 
+func RegisteredIDs() []string {
+	ids := make([]string, 0, len(registry))
+	for id := range registry {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func ResolveIssueLabel(labels []ghcli.Label) (string, error) {
+	matches := make([]string, 0, len(registry))
+	for _, providerID := range RegisteredIDs() {
+		if ghcli.HasAnyLabel(labels, providerID) {
+			matches = append(matches, providerID)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return "", nil
+	case 1:
+		return matches[0], nil
+	default:
+		return "", fmt.Errorf("multiple provider labels: %s", strings.Join(matches, ", "))
+	}
+}
+
 func Resolve(id string) (Provider, error) {
 	resolved := strings.TrimSpace(id)
 	if resolved == "" {

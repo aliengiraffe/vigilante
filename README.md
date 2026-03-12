@@ -251,6 +251,8 @@ Initial rules:
 - enforce `max_parallel_sessions` independently for each watched repository
 - count both running implementation sessions and open-PR maintenance sessions against that repository limit
 - avoid duplicate work across multiple daemon scans
+- allow an issue label that exactly matches a registered provider id, such as `codex`, to override the watch target provider for that issue only
+- if more than one provider-id label is present on the same issue, skip dispatch instead of choosing a provider arbitrarily
 - prefer oldest eligible open issue first unless later prioritization rules are added
 
 Future policy can expand to richer label filters, assignment rules, and priority queues.

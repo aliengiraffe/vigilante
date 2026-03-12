@@ -434,9 +434,19 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			for _, next := range nextIssues {
 				a.state.AppendDaemonLog("scan repo selected issue repo=%s issue=%d title=%q", target.Repo, next.Number, next.Title)
 
+				selectedProvider, providerErr := resolveIssueProvider(*target, next)
+				if providerErr != nil {
+					a.state.AppendDaemonLog("scan repo issue provider conflict repo=%s issue=%d err=%v", target.Repo, next.Number, providerErr)
+					fmt.Fprintf(a.stdout, "repo: %s skipped issue #%d: %s\n", target.Repo, next.Number, summarizeText(providerErr.Error()))
+					continue
+				}
+				if selectedProvider != target.Provider {
+					a.state.AppendDaemonLog("scan repo issue provider override repo=%s issue=%d provider=%s source=label", target.Repo, next.Number, selectedProvider)
+				}
+
 				wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, *target, next.Number, next.Title)
 				if err != nil {
-					session := blockedIssueSessionForDispatchFailure(*target, next, err, a.clock())
+					session := blockedIssueSessionForDispatchFailure(*target, next, selectedProvider, err, a.clock())
 					a.state.AppendDaemonLog("scan repo dispatch blocked repo=%s issue=%d err=%v", target.Repo, next.Number, err)
 					sessions = upsertSession(sessions, session)
 					if err := a.state.SaveSessions(sessions); err != nil {
@@ -450,7 +460,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				session := state.Session{
 					RepoPath:        target.Path,
 					Repo:            target.Repo,
-					Provider:        target.Provider,
+					Provider:        selectedProvider,
 					IssueNumber:     next.Number,
 					IssueTitle:      next.Title,
 					IssueURL:        next.URL,
@@ -1177,11 +1187,27 @@ func summarizeText(text string) string {
 	return text
 }
 
-func blockedIssueSessionForDispatchFailure(target state.WatchTarget, issue ghcli.Issue, err error, now time.Time) state.Session {
+func resolveIssueProvider(target state.WatchTarget, issue ghcli.Issue) (string, error) {
+	selected := strings.TrimSpace(target.Provider)
+	if selected == "" {
+		selected = provider.DefaultID
+	}
+
+	override, err := provider.ResolveIssueLabel(issue.Labels)
+	if err != nil {
+		return "", fmt.Errorf("issue #%d has conflicting provider labels: %w", issue.Number, err)
+	}
+	if override == "" {
+		return selected, nil
+	}
+	return override, nil
+}
+
+func blockedIssueSessionForDispatchFailure(target state.WatchTarget, issue ghcli.Issue, selectedProvider string, err error, now time.Time) state.Session {
 	session := state.Session{
 		RepoPath:     target.Path,
 		Repo:         target.Repo,
-		Provider:     target.Provider,
+		Provider:     selectedProvider,
 		IssueNumber:  issue.Number,
 		IssueTitle:   issue.Title,
 		IssueURL:     issue.URL,
