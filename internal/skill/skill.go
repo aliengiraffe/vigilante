@@ -1,6 +1,7 @@
 package skill
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -14,12 +15,14 @@ import (
 )
 
 const VigilanteIssueImplementation = "vigilante-issue-implementation"
+const TurborepoIssueImplementation = "turborepo-issue-implementation"
 const VigilanteConflictResolution = "vigilante-conflict-resolution"
 const VigilanteCreateIssue = "vigilante-create-issue"
 
 func VigilanteSkillNames() []string {
 	return []string{
 		VigilanteIssueImplementation,
+		TurborepoIssueImplementation,
 		VigilanteConflictResolution,
 		VigilanteCreateIssue,
 	}
@@ -44,8 +47,9 @@ func EnsureInstalled(codexHome string) error {
 
 func BuildIssuePrompt(target state.WatchTarget, issue ghcli.Issue, session state.Session) string {
 	providerName := displayProviderName(session.Provider)
+	skillName := SelectIssueImplementationSkill(target.Path, session.WorktreePath)
 	lines := []string{
-		fmt.Sprintf("Use the `%s` skill for this task.", VigilanteIssueImplementation),
+		fmt.Sprintf("Use the `%s` skill for this task.", skillName),
 		fmt.Sprintf("Repository: %s", target.Repo),
 		fmt.Sprintf("Local repository path: %s", target.Path),
 		fmt.Sprintf("Issue: #%d - %s", issue.Number, issue.Title),
@@ -58,6 +62,39 @@ func BuildIssuePrompt(target state.WatchTarget, issue ghcli.Issue, session state
 		"Use the issue as the source of truth for the requested behavior and keep the implementation minimal.",
 	}
 	return strings.Join(lines, "\n")
+}
+
+func SelectIssueImplementationSkill(repoPath string, worktreePath string) string {
+	for _, candidate := range []string{worktreePath, repoPath} {
+		if isTurborepo(candidate) {
+			return TurborepoIssueImplementation
+		}
+	}
+	return VigilanteIssueImplementation
+}
+
+func isTurborepo(root string) bool {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(root, "turbo.json")); err != nil {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(root, "pnpm-workspace.yaml")); err == nil {
+		return true
+	}
+	data, err := os.ReadFile(filepath.Join(root, "package.json"))
+	if err != nil {
+		return false
+	}
+	var manifest struct {
+		Workspaces json.RawMessage `json:"workspaces"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return false
+	}
+	return len(manifest.Workspaces) > 0 && string(manifest.Workspaces) != "null"
 }
 
 func BuildIssuePreflightPrompt(target state.WatchTarget, issue ghcli.Issue, session state.Session) string {

@@ -163,6 +163,7 @@ Expected behavior:
 - verifies `git`, `gh`, and `codex`
 - installs the bundled coding-agent skills for regular runtime use, including any companion files under each skill directory
   - `vigilante-issue-implementation`
+  - `turborepo-issue-implementation`
   - `vigilante-conflict-resolution`
   - `vigilante-create-issue`
 - installs or updates the daemon definition when requested

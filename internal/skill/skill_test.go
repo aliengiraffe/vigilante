@@ -140,6 +140,45 @@ func TestBuildIssuePrompt(t *testing.T) {
 	}
 }
 
+func TestBuildIssuePromptUsesTurborepoSkillWhenMarkersPresent(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "turbo.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "pnpm-workspace.yaml"), []byte("packages:\n  - apps/*\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
+	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	session := state.Session{WorktreePath: root, Branch: "vigilante/issue-12", Provider: "Codex"}
+	prompt := BuildIssuePrompt(target, issue, session)
+	if !strings.Contains(prompt, "Use the `turborepo-issue-implementation` skill") {
+		t.Fatalf("expected turborepo issue skill, got: %s", prompt)
+	}
+}
+
+func TestSelectIssueImplementationSkillDetectsPackageJSONWorkspaces(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "turbo.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte("{\"workspaces\":[\"apps/*\",\"packages/*\"]}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := SelectIssueImplementationSkill(root, ""); got != TurborepoIssueImplementation {
+		t.Fatalf("got %s want %s", got, TurborepoIssueImplementation)
+	}
+}
+
+func TestSelectIssueImplementationSkillFallsBackWhenMarkersAbsent(t *testing.T) {
+	root := t.TempDir()
+	if got := SelectIssueImplementationSkill(root, ""); got != VigilanteIssueImplementation {
+		t.Fatalf("got %s want %s", got, VigilanteIssueImplementation)
+	}
+}
+
 func TestBuildIssuePreflightPrompt(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
@@ -160,6 +199,19 @@ func TestBuildConflictResolutionPrompt(t *testing.T) {
 	for _, text := range []string{"Use the `vigilante-conflict-resolution` skill", "Pull Request: #88", "Base branch: origin/main", "go test ./...", "merge-ready state"} {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q: %s", text, prompt)
+		}
+	}
+}
+
+func TestEmbeddedTurborepoSkillDocumentsScopedValidationAndDatabaseLaunch(t *testing.T) {
+	body, err := fs.ReadFile(skillassets.Skills, "skills/turborepo-issue-implementation/SKILL.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	for _, snippet := range []string{"smallest relevant workspace", "pnpm --filter <workspace> test", "turbo run build --filter <workspace>", "docker-compose-launch"} {
+		if !strings.Contains(text, snippet) {
+			t.Fatalf("embedded Turborepo skill missing %q: %s", snippet, text)
 		}
 	}
 }

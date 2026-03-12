@@ -1,0 +1,4 @@
+interface:
+  display_name: "Turborepo Issue Implementation"
+  short_description: "Implement a Vigilante-dispatched GitHub issue in a Turborepo using scoped workspace-aware commands"
+  default_prompt: "Use $turborepo-issue-implementation to implement the assigned issue in the provided Turborepo worktree, choose the smallest relevant workspace scope, run workspace-aware validation, use docker-compose-launch when local database services are required, push the branch, open a PR, comment on the issue as progress is made, and report failures clearly."
