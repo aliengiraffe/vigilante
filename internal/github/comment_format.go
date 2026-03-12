@@ -22,8 +22,8 @@ func FormatProgressComment(comment ProgressComment) string {
 
 	lines := []string{
 		fmt.Sprintf("## %s", header),
-		fmt.Sprintf("`%s %d%%`", progressBar(comment.Percent), clampPercent(comment.Percent)),
-		fmt.Sprintf("`ETA: ~%s`", formatMinutes(comment.ETAMinutes)),
+		fmt.Sprintf("Progress: [%s] %d%%", progressBar(comment.Percent), clampPercent(comment.Percent)),
+		fmt.Sprintf("ETA: ~%s", formatMinutes(comment.ETAMinutes)),
 	}
 	for _, item := range comment.Items {
 		item = strings.TrimSpace(item)
@@ -41,7 +41,7 @@ func FormatProgressComment(comment ProgressComment) string {
 func progressBar(percent int) string {
 	percent = clampPercent(percent)
 	filled := percent / 10
-	return strings.Repeat("█", filled) + strings.Repeat("░", 10-filled)
+	return strings.Repeat("#", filled) + strings.Repeat("-", 10-filled)
 }
 
 func clampPercent(percent int) int {
