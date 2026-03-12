@@ -109,6 +109,25 @@ Expected fields:
 - last scan time
 - active issue/session, if any
 
+### `vigilante list --running`
+
+Show currently running sessions with their repository, issue number, branch, and worktree path.
+
+### `vigilante cleanup --repo <owner/name> [--issue <n>]`
+
+Clean up running sessions without touching unrelated historical session records.
+
+Expected behavior:
+
+- `--repo <owner/name> --issue <n>` cleans up one running session for a single issue
+- `--repo <owner/name>` cleans up all running sessions for one repository
+- removes the running-session blockage from local state
+- removes the local worktree and issue branch when those artifacts are present and safe to delete
+
+### `vigilante cleanup --all`
+
+Clean up all running sessions across all watched repositories.
+
 ### `vigilante unwatch <path>`
 
 Remove a repository from the watchlist without deleting the repository itself.

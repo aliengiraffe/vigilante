@@ -120,7 +120,7 @@ func TestWatchListAndUnwatch(t *testing.T) {
 	}
 
 	stdout.Reset()
-	if err := app.List(false); err != nil {
+	if err := app.List(false, false); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(stdout.String(), "\"repo\": \"nicobistolfi/vigilante\"") {
@@ -235,7 +235,7 @@ func TestListBlockedSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := app.List(true); err != nil {
+	if err := app.List(true, false); err != nil {
 		t.Fatal(err)
 	}
 	got := stdout.String()
@@ -248,6 +248,228 @@ func TestListBlockedSessions(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("expected blocked list output to contain %q, got: %s", want, got)
 		}
+	}
+}
+
+func TestListRunningSessions(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{
+		{
+			Repo:         "owner/repo",
+			IssueNumber:  44,
+			Status:       state.SessionStatusRunning,
+			Branch:       "vigilante/issue-44",
+			WorktreePath: "/tmp/repo/.worktrees/vigilante/issue-44",
+			StartedAt:    "2026-03-11T13:20:13Z",
+		},
+		{
+			Repo:        "owner/repo",
+			IssueNumber: 45,
+			Status:      state.SessionStatusBlocked,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.List(false, true); err != nil {
+		t.Fatal(err)
+	}
+	got := stdout.String()
+	for _, want := range []string{
+		"owner/repo issue #44  running",
+		"branch: vigilante/issue-44",
+		"worktree: /tmp/repo/.worktrees/vigilante/issue-44",
+		"started at: 2026-03-11T13:20:13Z",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected running list output to contain %q, got: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "issue #45") {
+		t.Fatalf("unexpected non-running session in output: %s", got)
+	}
+}
+
+func TestCleanupSessionByIssue(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-44")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"git worktree prune":                                          "ok",
+			"git worktree remove --force " + worktreePath:                 "ok",
+			"git worktree list --porcelain":                               "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/main\n",
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-44": "ok",
+			"git branch -D vigilante/issue-44":                            "Deleted branch vigilante/issue-44\n",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:     repoPath,
+		Repo:         "owner/repo",
+		IssueNumber:  44,
+		Status:       state.SessionStatusRunning,
+		Branch:       "vigilante/issue-44",
+		WorktreePath: worktreePath,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.CleanupSession(context.Background(), "owner/repo", 44, "cli"); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+	if sessions[0].Status != state.SessionStatusFailed || sessions[0].CleanupCompletedAt == "" || sessions[0].LastCleanupSource != "cli" {
+		t.Fatalf("expected cleaned session metadata, got: %#v", sessions[0])
+	}
+	if sessions[0].CleanupError != "" {
+		t.Fatalf("unexpected cleanup error: %#v", sessions[0])
+	}
+	if got := stdout.String(); !strings.Contains(got, "cleaned up running session for owner/repo issue #44") {
+		t.Fatalf("unexpected output: %s", got)
+	}
+}
+
+func TestCleanupRepoRunningSessions(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath1 := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	worktreePath2 := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-2")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	for _, path := range []string{worktreePath1, worktreePath2} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"git worktree prune":                                         "ok",
+			"git worktree remove --force " + worktreePath1:               "ok",
+			"git worktree remove --force " + worktreePath2:               "ok",
+			"git worktree list --porcelain":                              "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/main\n",
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-1": "ok",
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-2": "ok",
+			"git branch -D vigilante/issue-1":                            "Deleted branch vigilante/issue-1\n",
+			"git branch -D vigilante/issue-2":                            "Deleted branch vigilante/issue-2\n",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{
+		{RepoPath: repoPath, Repo: "owner/repo", IssueNumber: 1, Status: state.SessionStatusRunning, Branch: "vigilante/issue-1", WorktreePath: worktreePath1},
+		{RepoPath: repoPath, Repo: "owner/repo", IssueNumber: 2, Status: state.SessionStatusRunning, Branch: "vigilante/issue-2", WorktreePath: worktreePath2},
+		{RepoPath: repoPath, Repo: "owner/other", IssueNumber: 3, Status: state.SessionStatusRunning, Branch: "vigilante/issue-3", WorktreePath: filepath.Join(repoPath, ".worktrees", "vigilante", "issue-3")},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.CleanupRepoRunningSessions(context.Background(), "owner/repo", "cli"); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].Status != state.SessionStatusFailed || sessions[1].Status != state.SessionStatusFailed || sessions[2].Status != state.SessionStatusRunning {
+		t.Fatalf("unexpected cleanup result: %#v", sessions)
+	}
+	if got := stdout.String(); !strings.Contains(got, "cleaned up 2 running session(s) in owner/repo") {
+		t.Fatalf("unexpected output: %s", got)
+	}
+}
+
+func TestCleanupAllRunningSessions(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath1 := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	worktreePath2 := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-2")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	for _, path := range []string{worktreePath1, worktreePath2} {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"git worktree prune":                                         "ok",
+			"git worktree remove --force " + worktreePath1:               "ok",
+			"git worktree remove --force " + worktreePath2:               "ok",
+			"git worktree list --porcelain":                              "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/main\n",
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-1": "ok",
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-2": "ok",
+			"git branch -D vigilante/issue-1":                            "Deleted branch vigilante/issue-1\n",
+			"git branch -D vigilante/issue-2":                            "Deleted branch vigilante/issue-2\n",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{
+		{RepoPath: repoPath, Repo: "owner/repo", IssueNumber: 1, Status: state.SessionStatusRunning, Branch: "vigilante/issue-1", WorktreePath: worktreePath1},
+		{RepoPath: repoPath, Repo: "owner/other", IssueNumber: 2, Status: state.SessionStatusRunning, Branch: "vigilante/issue-2", WorktreePath: worktreePath2},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.CleanupAllRunningSessions(context.Background(), "cli"); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].Status != state.SessionStatusFailed || sessions[1].Status != state.SessionStatusFailed {
+		t.Fatalf("unexpected cleanup result: %#v", sessions)
+	}
+	if got := stdout.String(); !strings.Contains(got, "cleaned up 2 running session(s)") {
+		t.Fatalf("unexpected output: %s", got)
 	}
 }
 
@@ -336,6 +558,142 @@ func TestScanOnceProcessesGitHubCommentResumeRequest(t *testing.T) {
 	}
 	if sessions[0].RecoveredAt == "" {
 		t.Fatalf("expected recovery timestamp to be recorded: %#v", sessions[0])
+	}
+}
+
+func TestScanOnceProcessesGitHubCommentCleanupRequest(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1/comments": `[{"id":101,"body":"@vigilanteai cleanup","created_at":"2026-03-10T12:30:00Z","user":{"login":"nicobistolfi"}}]`,
+			"gh api --method POST -H Accept: application/vnd.github+json repos/owner/repo/issues/comments/101/reactions -f content=+1": "{}",
+			"git worktree prune":                                         "ok",
+			"git worktree remove --force " + worktreePath:                "ok",
+			"git worktree list --porcelain":                              "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/main\n",
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-1": "ok",
+			"git branch -D vigilante/issue-1":                            "Deleted branch vigilante/issue-1\n",
+			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Cleanup Completed",
+				Emoji:      "🧹",
+				Percent:    100,
+				ETAMinutes: 1,
+				Items: []string{
+					"Removed the running Vigilante session for `vigilante/issue-1`.",
+					"Cleanup source: `comment`.",
+					"Local worktree artifacts were cleaned up at `" + worktreePath + "` when present.",
+				},
+				Tagline: "Leave no loose ends.",
+			}): "ok",
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:     repoPath,
+		Repo:         "owner/repo",
+		IssueNumber:  1,
+		Branch:       "vigilante/issue-1",
+		WorktreePath: worktreePath,
+		Status:       state.SessionStatusRunning,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+	if sessions[0].Status != state.SessionStatusFailed || sessions[0].CleanupCompletedAt == "" {
+		t.Fatalf("expected cleanup to remove running session: %#v", sessions[0])
+	}
+	if sessions[0].LastCleanupSource != "comment" || sessions[0].LastCleanupCommentID != 101 {
+		t.Fatalf("expected cleanup comment metadata to be recorded: %#v", sessions[0])
+	}
+}
+
+func TestScanOnceReportsNoMatchingRunningSessionForGitHubCleanupRequest(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1/comments": `[{"id":101,"body":"@vigilanteai cleanup","created_at":"2026-03-10T12:30:00Z","user":{"login":"nicobistolfi"}}]`,
+			"gh api --method POST -H Accept: application/vnd.github+json repos/owner/repo/issues/comments/101/reactions -f content=+1": "{}",
+			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Cleanup Checked",
+				Emoji:      "🧭",
+				Percent:    100,
+				ETAMinutes: 1,
+				Items: []string{
+					"Received `@vigilanteai cleanup` for this issue.",
+					"No running Vigilante session matched the request, so there was nothing active to clean up.",
+					"Next step: run `vigilante list --running` locally if dispatch still looks blocked.",
+				},
+				Tagline: "Trust, but verify.",
+			}): "ok",
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:     "/tmp/repo",
+		Repo:         "owner/repo",
+		IssueNumber:  1,
+		Branch:       "vigilante/issue-1",
+		WorktreePath: filepath.Join("/tmp/repo", ".worktrees", "vigilante", "issue-1"),
+		Status:       state.SessionStatusBlocked,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].Status != state.SessionStatusBlocked {
+		t.Fatalf("expected non-running session to remain unchanged: %#v", sessions[0])
+	}
+	if sessions[0].LastCleanupCommentID != 101 || sessions[0].LastCleanupSource != "comment" {
+		t.Fatalf("expected cleanup request to be recorded: %#v", sessions[0])
 	}
 }
 

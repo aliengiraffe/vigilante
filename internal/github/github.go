@@ -226,9 +226,17 @@ func HasAnyLabel(labels []Label, wanted ...string) bool {
 }
 
 func FindResumeComment(comments []IssueComment, claimedCommentID int64) *IssueComment {
+	return findCommandComment(comments, "@vigilanteai resume", claimedCommentID)
+}
+
+func FindCleanupComment(comments []IssueComment, claimedCommentID int64) *IssueComment {
+	return findCommandComment(comments, "@vigilanteai cleanup", claimedCommentID)
+}
+
+func findCommandComment(comments []IssueComment, command string, claimedCommentID int64) *IssueComment {
 	for i := len(comments) - 1; i >= 0; i-- {
 		body := strings.TrimSpace(comments[i].Body)
-		if body != "@vigilanteai resume" {
+		if body != command {
 			continue
 		}
 		if claimedCommentID != 0 && comments[i].ID == claimedCommentID {

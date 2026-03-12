@@ -70,6 +70,9 @@ type Session struct {
 	LastResumeSource     string        `json:"last_resume_source,omitempty"`
 	LastResumeCommentID  int64         `json:"last_resume_comment_id,omitempty"`
 	LastResumeCommentAt  string        `json:"last_resume_comment_at,omitempty"`
+	LastCleanupSource    string        `json:"last_cleanup_source,omitempty"`
+	LastCleanupCommentID int64         `json:"last_cleanup_comment_id,omitempty"`
+	LastCleanupCommentAt string        `json:"last_cleanup_comment_at,omitempty"`
 	RecoveredAt          string        `json:"recovered_at,omitempty"`
 	MonitoringStoppedAt  string        `json:"monitoring_stopped_at,omitempty"`
 	CleanupCompletedAt   string        `json:"cleanup_completed_at,omitempty"`

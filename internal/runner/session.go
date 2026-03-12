@@ -67,6 +67,15 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 	}
 	preflightOutput, err := env.Runner.Run(ctx, preflightInvocation.Dir, preflightInvocation.Name, preflightInvocation.Args...)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			session.Status = state.SessionStatusFailed
+			session.LastError = "session canceled"
+			session.EndedAt = time.Now().UTC().Format(time.RFC3339)
+			session.LastHeartbeatAt = session.EndedAt
+			session.UpdatedAt = session.EndedAt
+			appendSessionLog(logPath, "issue preflight canceled", session, combineLogDetails(preflightOutput, err.Error()))
+			return session
+		}
 		blocked := classifyBlockedFailure("baseline_preflight", preflightInvocation.Name, preflightOutput, err)
 		markSessionBlocked(&session, "baseline_preflight", blocked, time.Now().UTC())
 		session.LastError = err.Error()
@@ -106,6 +115,12 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 	session.LastHeartbeatAt = session.EndedAt
 	session.UpdatedAt = session.EndedAt
 	if err != nil {
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			session.Status = state.SessionStatusFailed
+			session.LastError = "session canceled"
+			appendSessionLog(logPath, "session canceled", session, combineLogDetails(output, err.Error()))
+			return session
+		}
 		blocked := classifyBlockedFailure("issue_execution", invocation.Name, output, err)
 		markSessionBlocked(&session, "issue_execution", blocked, time.Now().UTC())
 		session.LastError = err.Error()

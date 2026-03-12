@@ -204,3 +204,19 @@ func TestFindPullRequestForBranch(t *testing.T) {
 		t.Fatalf("unexpected merged time: %#v", pr.MergedAt)
 	}
 }
+
+func TestFindCleanupComment(t *testing.T) {
+	now := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
+	comments := []IssueComment{
+		{ID: 10, Body: "hello", CreatedAt: now.Add(-2 * time.Minute)},
+		{ID: 11, Body: "@vigilanteai cleanup", CreatedAt: now.Add(-1 * time.Minute)},
+	}
+
+	comment := FindCleanupComment(comments, 0)
+	if comment == nil || comment.ID != 11 {
+		t.Fatalf("expected cleanup comment to be found, got: %#v", comment)
+	}
+	if comment := FindCleanupComment(comments, 11); comment != nil {
+		t.Fatalf("expected claimed cleanup comment to be ignored, got: %#v", comment)
+	}
+}

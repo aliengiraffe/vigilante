@@ -39,6 +39,8 @@ type App struct {
 
 	sessionMu sync.Mutex
 	sessionWG sync.WaitGroup
+	cancelMu  sync.Mutex
+	cancels   map[string]context.CancelFunc
 }
 
 type stringListFlag []string
@@ -59,10 +61,11 @@ func (f *stringListFlag) Set(value string) error {
 func New() *App {
 	store := state.NewStore()
 	return &App{
-		stdout: os.Stdout,
-		stderr: os.Stderr,
-		state:  store,
-		clock:  time.Now().UTC,
+		stdout:  os.Stdout,
+		stderr:  os.Stderr,
+		state:   store,
+		clock:   time.Now().UTC,
+		cancels: make(map[string]context.CancelFunc),
 		env: &environment.Environment{
 			OS: runtime.GOOS,
 			Runner: environment.LoggingRunner{
@@ -121,10 +124,16 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		fs := flag.NewFlagSet("list", flag.ContinueOnError)
 		fs.SetOutput(a.stderr)
 		blockedOnly := fs.Bool("blocked", false, "show blocked sessions instead of watch targets")
+		runningOnly := fs.Bool("running", false, "show running sessions instead of watch targets")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		return a.List(*blockedOnly)
+		if *blockedOnly && *runningOnly {
+			return errors.New("usage: vigilante list [--blocked | --running]")
+		}
+		return a.List(*blockedOnly, *runningOnly)
+	case "cleanup":
+		return a.runCleanupCommand(ctx, args[1:])
 	case "resume":
 		return a.runResumeCommand(ctx, args[1:])
 	case "daemon":
@@ -153,6 +162,34 @@ func (a *App) runResumeCommand(ctx context.Context, args []string) error {
 		return errors.New("usage: vigilante resume --repo <owner/name> --issue <n>")
 	}
 	return a.ResumeSession(ctx, *repo, *issue, "cli")
+}
+
+func (a *App) runCleanupCommand(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("cleanup", flag.ContinueOnError)
+	fs.SetOutput(a.stderr)
+	repo := fs.String("repo", "", "repository slug")
+	issue := fs.Int("issue", 0, "issue number")
+	all := fs.Bool("all", false, "clean up all running sessions")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	switch {
+	case *all && (*repo != "" || *issue != 0):
+		return errors.New("usage: vigilante cleanup --all")
+	case *all:
+		return a.CleanupAllRunningSessions(ctx, "cli")
+	case *repo == "" && *issue == 0:
+		return errors.New("usage: vigilante cleanup --repo <owner/name> [--issue <n>]")
+	case *repo == "":
+		return errors.New("usage: vigilante cleanup --repo <owner/name> --issue <n>")
+	case *issue < 0:
+		return errors.New("issue number must be positive")
+	case *issue == 0:
+		return a.CleanupRepoRunningSessions(ctx, *repo, "cli")
+	default:
+		return a.CleanupSession(ctx, *repo, *issue, "cli")
+	}
 }
 
 func (a *App) runDaemonCommand(ctx context.Context, args []string) error {
@@ -318,12 +355,15 @@ func (a *App) Unwatch(rawPath string) error {
 	return nil
 }
 
-func (a *App) List(blockedOnly bool) error {
+func (a *App) List(blockedOnly bool, runningOnly bool) error {
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
 	}
 	if blockedOnly {
 		return a.listBlockedSessions()
+	}
+	if runningOnly {
+		return a.listRunningSessions()
 	}
 	targets, err := a.state.LoadWatchTargets()
 	if err != nil {
@@ -383,6 +423,10 @@ func (a *App) ScanOnce(ctx context.Context) error {
 		a.sessionMu.Lock()
 		defer a.sessionMu.Unlock()
 		sessions, err := a.state.LoadSessions()
+		if err != nil {
+			return err
+		}
+		sessions, err = a.processGitHubCleanupRequests(ctx, sessions)
 		if err != nil {
 			return err
 		}
@@ -695,11 +739,18 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 }
 
 func (a *App) launchIssueSession(ctx context.Context, target state.WatchTarget, issue ghcli.Issue, session state.Session) {
+	runCtx, cancel := context.WithCancel(ctx)
+	key := sessionKey(session.Repo, session.IssueNumber)
+	a.cancelMu.Lock()
+	a.cancels[key] = cancel
+	a.cancelMu.Unlock()
+
 	a.sessionWG.Add(1)
 	go func() {
 		defer a.sessionWG.Done()
+		defer a.clearSessionCancel(key)
 
-		result := issuerunner.RunIssueSession(ctx, a.env, a.state, target, issue, session)
+		result := issuerunner.RunIssueSession(runCtx, a.env, a.state, target, issue, session)
 
 		a.sessionMu.Lock()
 		defer a.sessionMu.Unlock()
@@ -707,6 +758,10 @@ func (a *App) launchIssueSession(ctx context.Context, target state.WatchTarget, 
 		sessions, err := a.state.LoadSessions()
 		if err != nil {
 			a.state.AppendDaemonLog("session result load failed repo=%s issue=%d err=%v", target.Repo, issue.Number, err)
+			return
+		}
+		if existing, ok := findSession(sessions, target.Repo, issue.Number); ok && existing.LastCleanupSource != "" {
+			a.state.AppendDaemonLog("session result ignored after cleanup repo=%s issue=%d source=%s", target.Repo, issue.Number, existing.LastCleanupSource)
 			return
 		}
 		sessions = upsertSession(sessions, result)
@@ -821,6 +876,88 @@ func (a *App) listBlockedSessions() error {
 	return nil
 }
 
+func (a *App) listRunningSessions() error {
+	sessions, err := a.state.LoadSessions()
+	if err != nil {
+		return err
+	}
+	count := 0
+	for _, session := range sessions {
+		if session.Status != state.SessionStatusRunning {
+			continue
+		}
+		count++
+		fmt.Fprintf(a.stdout, "%s issue #%d  running\n", session.Repo, session.IssueNumber)
+		fmt.Fprintf(a.stdout, "  branch: %s\n", session.Branch)
+		fmt.Fprintf(a.stdout, "  worktree: %s\n", session.WorktreePath)
+		if session.StartedAt != "" {
+			fmt.Fprintf(a.stdout, "  started at: %s\n", session.StartedAt)
+		}
+	}
+	if count == 0 {
+		fmt.Fprintln(a.stdout, "no running sessions")
+	}
+	return nil
+}
+
+func (a *App) processGitHubCleanupRequests(ctx context.Context, sessions []state.Session) ([]state.Session, error) {
+	for i := range sessions {
+		session := &sessions[i]
+
+		comments, err := ghcli.ListIssueComments(ctx, a.env.Runner, session.Repo, session.IssueNumber)
+		if err != nil {
+			a.state.AppendDaemonLog("cleanup comment lookup failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
+			session.LastError = err.Error()
+			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			continue
+		}
+		comment := ghcli.FindCleanupComment(comments, session.LastCleanupCommentID)
+		if comment == nil {
+			continue
+		}
+		if err := ghcli.AddIssueCommentReaction(ctx, a.env.Runner, session.Repo, comment.ID, "+1"); err != nil {
+			a.state.AppendDaemonLog("cleanup reaction failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
+			session.LastError = err.Error()
+			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			continue
+		}
+		session.LastCleanupCommentID = comment.ID
+		session.LastCleanupCommentAt = comment.CreatedAt.UTC().Format(time.RFC3339)
+
+		if session.Status != state.SessionStatusRunning {
+			session.LastCleanupSource = "comment"
+			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Cleanup Checked",
+				Emoji:      "🧭",
+				Percent:    100,
+				ETAMinutes: 1,
+				Items: []string{
+					"Received `@vigilanteai cleanup` for this issue.",
+					"No running Vigilante session matched the request, so there was nothing active to clean up.",
+					"Next step: run `vigilante list --running` locally if dispatch still looks blocked.",
+				},
+				Tagline: "Trust, but verify.",
+			})
+			if err := ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body); err != nil {
+				a.state.AppendDaemonLog("cleanup no-op comment failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
+				session.LastError = err.Error()
+				session.UpdatedAt = a.clock().Format(time.RFC3339)
+			}
+			continue
+		}
+
+		cleanupErr := a.cleanupRunningSession(ctx, session, "comment")
+		body := cleanupResultComment(*session, cleanupErr)
+		if err := ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body); err != nil {
+			a.state.AppendDaemonLog("cleanup result comment failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
+			session.LastError = err.Error()
+			session.UpdatedAt = a.clock().Format(time.RFC3339)
+		}
+	}
+	return sessions, nil
+}
+
 func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.Session) ([]state.Session, error) {
 	for i := range sessions {
 		session := &sessions[i]
@@ -907,6 +1044,52 @@ func (a *App) ResumeAllBlocked(ctx context.Context) error {
 	return nil
 }
 
+func (a *App) CleanupAllRunningSessions(ctx context.Context, source string) error {
+	return a.cleanupSessions(ctx, source, "cleaned up %d running session(s)\n", func(session state.Session) bool {
+		return session.Status == state.SessionStatusRunning
+	})
+}
+
+func (a *App) CleanupRepoRunningSessions(ctx context.Context, repo string, source string) error {
+	return a.cleanupSessions(ctx, source, "cleaned up %d running session(s) in %s\n", func(session state.Session) bool {
+		return session.Status == state.SessionStatusRunning && session.Repo == repo
+	}, repo)
+}
+
+func (a *App) CleanupSession(ctx context.Context, repo string, issue int, source string) error {
+	if err := a.state.EnsureLayout(); err != nil {
+		return err
+	}
+
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+
+	sessions, err := a.state.LoadSessions()
+	if err != nil {
+		return err
+	}
+
+	found := false
+	for i := range sessions {
+		if sessions[i].Status != state.SessionStatusRunning || sessions[i].Repo != repo || sessions[i].IssueNumber != issue {
+			continue
+		}
+		if err := a.cleanupRunningSession(ctx, &sessions[i], source); err != nil {
+			return err
+		}
+		found = true
+		break
+	}
+	if !found {
+		return fmt.Errorf("running session not found for %s issue #%d", repo, issue)
+	}
+	if err := a.state.SaveSessions(sessions); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.stdout, "cleaned up running session for %s issue #%d\n", repo, issue)
+	return nil
+}
+
 func (a *App) ResumeSession(ctx context.Context, repo string, issue int, source string) error {
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
@@ -936,6 +1119,73 @@ func (a *App) ResumeSession(ctx context.Context, repo string, issue int, source 
 		return err
 	}
 	fmt.Fprintf(a.stdout, "resume attempted for %s issue #%d\n", repo, issue)
+	return nil
+}
+
+func (a *App) cleanupSessions(ctx context.Context, source string, successFormat string, match func(state.Session) bool, args ...any) error {
+	if err := a.state.EnsureLayout(); err != nil {
+		return err
+	}
+
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+
+	sessions, err := a.state.LoadSessions()
+	if err != nil {
+		return err
+	}
+
+	cleaned := 0
+	for i := range sessions {
+		if !match(sessions[i]) {
+			continue
+		}
+		if err := a.cleanupRunningSession(ctx, &sessions[i], source); err != nil {
+			return err
+		}
+		cleaned++
+	}
+	if cleaned == 0 {
+		if len(args) == 2 {
+			return fmt.Errorf("running session not found for %s issue #%d", args[0], args[1])
+		}
+		if len(args) == 1 {
+			return fmt.Errorf("no running sessions found for %s", args[0])
+		}
+		return errors.New("no running sessions found")
+	}
+	if err := a.state.SaveSessions(sessions); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.stdout, successFormat, append([]any{cleaned}, args...)...)
+	return nil
+}
+
+func (a *App) cleanupRunningSession(ctx context.Context, session *state.Session, source string) error {
+	if session.Status != state.SessionStatusRunning {
+		return nil
+	}
+
+	a.cancelRunningSession(session.Repo, session.IssueNumber)
+
+	now := a.clock().Format(time.RFC3339)
+	err := worktree.CleanupIssueArtifacts(ctx, a.env.Runner, session.RepoPath, session.WorktreePath, session.Branch)
+	session.Status = state.SessionStatusFailed
+	session.ProcessID = 0
+	session.LastHeartbeatAt = ""
+	session.EndedAt = now
+	session.UpdatedAt = now
+	session.LastCleanupSource = source
+	session.LastError = fmt.Sprintf("cleanup requested via %s", source)
+	if err != nil {
+		session.CleanupError = err.Error()
+		session.LastError = fmt.Sprintf("cleanup requested via %s; artifact cleanup failed: %s", source, err)
+		a.state.AppendDaemonLog("running session cleanup failed repo=%s issue=%d source=%s branch=%s worktree=%s err=%v", session.Repo, session.IssueNumber, source, session.Branch, session.WorktreePath, err)
+		return nil
+	}
+	session.CleanupCompletedAt = now
+	session.CleanupError = ""
+	a.state.AppendDaemonLog("running session cleanup complete repo=%s issue=%d source=%s branch=%s worktree=%s", session.Repo, session.IssueNumber, source, session.Branch, session.WorktreePath)
 	return nil
 }
 
@@ -1316,11 +1566,70 @@ func blockedStateLabel(session state.Session) string {
 	}
 }
 
+func cleanupResultComment(session state.Session, cleanupErr error) string {
+	if cleanupErr == nil && session.CleanupError == "" {
+		return ghcli.FormatProgressComment(ghcli.ProgressComment{
+			Stage:      "Cleanup Completed",
+			Emoji:      "🧹",
+			Percent:    100,
+			ETAMinutes: 1,
+			Items: []string{
+				fmt.Sprintf("Removed the running Vigilante session for `%s`.", session.Branch),
+				fmt.Sprintf("Cleanup source: `%s`.", session.LastCleanupSource),
+				fmt.Sprintf("Local worktree artifacts were cleaned up at `%s` when present.", session.WorktreePath),
+			},
+			Tagline: "Leave no loose ends.",
+		})
+	}
+	return ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Cleanup Attempted",
+		Emoji:      "🛠️",
+		Percent:    100,
+		ETAMinutes: 1,
+		Items: []string{
+			fmt.Sprintf("Removed the running-session blockage for `%s`.", session.Branch),
+			fmt.Sprintf("Cleanup source: `%s`.", session.LastCleanupSource),
+			fmt.Sprintf("Local artifact cleanup still needs attention: `%s`.", summarizeMaintenanceError(errors.New(fallbackText(session.CleanupError, "unknown cleanup error")))),
+		},
+		Tagline: "Progress over paralysis.",
+	})
+}
+
 func fallbackText(value string, fallback string) string {
 	if strings.TrimSpace(value) == "" {
 		return fallback
 	}
 	return value
+}
+
+func sessionKey(repo string, issue int) string {
+	return fmt.Sprintf("%s#%d", repo, issue)
+}
+
+func (a *App) cancelRunningSession(repo string, issue int) {
+	key := sessionKey(repo, issue)
+	a.cancelMu.Lock()
+	cancel := a.cancels[key]
+	delete(a.cancels, key)
+	a.cancelMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (a *App) clearSessionCancel(key string) {
+	a.cancelMu.Lock()
+	delete(a.cancels, key)
+	a.cancelMu.Unlock()
+}
+
+func findSession(sessions []state.Session, repo string, issue int) (state.Session, bool) {
+	for _, session := range sessions {
+		if session.Repo == repo && session.IssueNumber == issue {
+			return session, true
+		}
+	}
+	return state.Session{}, false
 }
 
 func (a *App) ensureTooling(ctx context.Context, selectedProvider provider.Provider) error {
@@ -1340,7 +1649,9 @@ func (a *App) printUsage() {
 	fmt.Fprintln(a.stderr, "  vigilante setup [-d]")
 	fmt.Fprintln(a.stderr, "  vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] <path>")
 	fmt.Fprintln(a.stderr, "  vigilante unwatch <path>")
-	fmt.Fprintln(a.stderr, "  vigilante list [--blocked]")
+	fmt.Fprintln(a.stderr, "  vigilante list [--blocked | --running]")
+	fmt.Fprintln(a.stderr, "  vigilante cleanup --repo <owner/name> [--issue <n>]")
+	fmt.Fprintln(a.stderr, "  vigilante cleanup --all")
 	fmt.Fprintln(a.stderr, "  vigilante resume --repo <owner/name> --issue <n>")
 	fmt.Fprintln(a.stderr, "  vigilante resume --all-blocked")
 	fmt.Fprintln(a.stderr, "  vigilante daemon run [--once] [--interval duration]")
