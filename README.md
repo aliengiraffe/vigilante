@@ -43,7 +43,7 @@ For each watched repository:
 3. Ensure required tools are available:
    - `git`
    - `gh`
-   - `codex`
+   - the configured coding-agent provider CLI (`codex` or `claude`)
 4. Ensure the coding-agent issue implementation skill from `skills/vigilante-issue-implementation/` is installed during setup, including its companion agent metadata.
 5. Query GitHub for open issues.
 6. Determine which issues are eligible for execution.
@@ -73,7 +73,7 @@ Upgrade later with:
 brew upgrade --cask vigilante
 ```
 
-### `vigilante watch [--assignee <value>] [--max-parallel <value>] <path>`
+### `vigilante watch [--assignee <value>] [--max-parallel <value>] [--provider <codex|claude>] <path>`
 
 Register a local repository for issue monitoring.
 
@@ -84,6 +84,7 @@ Expected behavior:
 - discovers the GitHub remote from git config
 - defaults the assignee filter to `me` unless overridden
 - defaults `--max-parallel` to `3` when not configured
+- defaults `--provider` to `codex` unless overridden
 - resolves `me` to the authenticated GitHub login at runtime before issue queries
 - stores the target in `~/.vigilante/watchlist.json`
 
@@ -99,6 +100,10 @@ vigilante watch --assignee nicobistolfi ~/hello-world-app
 
 ```sh
 vigilante watch --max-parallel 3 ~/hello-world-app
+```
+
+```sh
+vigilante watch --provider claude ~/hello-world-app
 ```
 
 ### `vigilante watch -d <path>`
@@ -152,7 +157,7 @@ Remove a repository from the watchlist without deleting the repository itself.
 Run the long-lived watcher loop in the foreground. This is the process the OS service should execute.
 By default it scans watched repositories every 1 minute. Use `--interval` to override that cadence for manual runs.
 
-### `vigilante setup`
+### `vigilante setup [--provider <codex|claude>]`
 
 Prepare the machine for autonomous execution.
 
@@ -160,7 +165,7 @@ Expected behavior:
 
 - creates `~/.vigilante/`
 - initializes `watchlist.json`
-- verifies `git`, `gh`, and `codex`
+- verifies `git`, `gh`, and the selected coding-agent provider CLI
 - installs the bundled coding-agent skills for regular runtime use, including any companion files under each skill directory
   - `vigilante-issue-implementation`
   - `vigilante-conflict-resolution`
@@ -195,7 +200,7 @@ go run ./cmd/vigilante daemon run --once
 go run ./cmd/vigilante daemon run --interval 30s
 ```
 
-- rebuild the installed binary and refresh the installed Codex skill:
+- rebuild the installed binary and refresh the installed provider skills:
 
 ```sh
 go build -o /Users/$USER/.local/bin/vigilante ./cmd/vigilante
@@ -210,7 +215,7 @@ go build -o /Users/$USER/.local/bin/vigilante ./cmd/vigilante
 
 Notes:
 
-- foreground runs are the quickest way to iterate on scheduler, worktree, and Codex execution behavior
+- foreground runs are the quickest way to iterate on scheduler, worktree, and coding-agent execution behavior
 - when `vigilante` runs from a repository checkout, `setup` refreshes installed skills from the local repo `skills/` folder so skill edits are picked up immediately
 - when `vigilante` runs as an installed binary outside the repo checkout, `setup` uses skills embedded in the binary so it works from any directory without depending on the source tree
 - after changing service installation logic on macOS, rerun `setup -d` so the `launchd` plist is regenerated with the current shell-derived PATH
@@ -305,7 +310,7 @@ Initial rules:
 - enforce `max_parallel_sessions` independently for each watched repository
 - count both running implementation sessions and open-PR maintenance sessions against that repository limit
 - avoid duplicate work across multiple daemon scans
-- allow an issue label that exactly matches a registered provider id, such as `codex`, to override the watch target provider for that issue only
+- allow an issue label that exactly matches a registered provider id, such as `codex` or `claude`, to override the watch target provider for that issue only
 - if more than one provider-id label is present on the same issue, skip dispatch instead of choosing a provider arbitrarily
 - prefer oldest eligible open issue first unless later prioritization rules are added
 
@@ -322,7 +327,7 @@ When `vigilante` launches a coding agent for an issue, it should:
 - instruct the agent to post progress comments during execution
 - instruct the agent to report failures on the issue if execution aborts
 
-The first implementation can treat the agent invocation as a subprocess wrapper around an installed coding CLI such as `codex`, while keeping the wording compatible with future providers.
+The agent invocation remains a subprocess wrapper around an installed coding CLI such as `codex` or `claude`, while keeping the orchestration behavior provider-neutral.
 
 ## GitHub Integration
 

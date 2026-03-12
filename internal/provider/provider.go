@@ -10,6 +10,7 @@ import (
 )
 
 const DefaultID = "codex"
+const ClaudeID = "claude"
 
 type Invocation struct {
 	Dir  string
@@ -41,6 +42,7 @@ type Provider interface {
 
 var registry = map[string]Provider{
 	DefaultID: codexProvider{},
+	ClaudeID:  claudeProvider{},
 }
 
 func RegisteredIDs() []string {

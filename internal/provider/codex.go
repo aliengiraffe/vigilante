@@ -20,7 +20,7 @@ func (codexProvider) RequiredTools() []string {
 }
 
 func (codexProvider) EnsureRuntimeInstalled(store *state.Store) error {
-	return skill.EnsureInstalled(store.CodexHome())
+	return skill.EnsureInstalled(skill.RuntimeCodex, store.CodexHome())
 }
 
 func (codexProvider) BuildIssuePreflightInvocation(task IssueTask) (Invocation, error) {
