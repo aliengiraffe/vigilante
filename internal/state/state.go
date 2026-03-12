@@ -159,6 +159,9 @@ func (s *Store) LoadWatchTargets() ([]WatchTarget, error) {
 		if strings.TrimSpace(targets[i].Provider) == "" {
 			targets[i].Provider = "codex"
 		}
+		if targets[i].Profile.Shape == "" {
+			targets[i].Profile = repo.Classify(targets[i].Path)
+		}
 		targets[i].MaxParallel = normalizeMaxParallelSessions(targets[i].MaxParallel)
 	}
 	return targets, nil
@@ -166,6 +169,9 @@ func (s *Store) LoadWatchTargets() ([]WatchTarget, error) {
 
 func (s *Store) SaveWatchTargets(targets []WatchTarget) error {
 	for i := range targets {
+		if targets[i].Profile.Shape == "" {
+			targets[i].Profile = repo.Classify(targets[i].Path)
+		}
 		targets[i].MaxParallel = normalizeMaxParallelSessions(targets[i].MaxParallel)
 	}
 	return writeJSONFile(s.watchlistPath(), targets)

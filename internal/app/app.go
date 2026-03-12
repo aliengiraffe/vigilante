@@ -266,6 +266,7 @@ func (a *App) Watch(ctx context.Context, rawPath string, daemon bool, labels []s
 		if target.Path == info.Path {
 			targets[i].Repo = info.Repo
 			targets[i].Branch = info.Branch
+			targets[i].Profile = info.Profile
 			if strings.TrimSpace(targets[i].Provider) == "" {
 				targets[i].Provider = provider.DefaultID
 			}
@@ -289,6 +290,7 @@ func (a *App) Watch(ctx context.Context, rawPath string, daemon bool, labels []s
 			Path:          info.Path,
 			Repo:          info.Repo,
 			Branch:        info.Branch,
+			Profile:       info.Profile,
 			Provider:      provider.DefaultID,
 			Labels:        labels,
 			Assignee:      assigneeOrDefault(assignee),
