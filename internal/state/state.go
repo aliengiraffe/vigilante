@@ -20,10 +20,13 @@ type WatchTarget struct {
 	Provider      string   `json:"provider,omitempty"`
 	Labels        []string `json:"labels,omitempty"`
 	Assignee      string   `json:"assignee,omitempty"`
+	MaxParallel   int      `json:"max_parallel_sessions"`
 	DaemonEnabled bool     `json:"daemon_enabled"`
 	LastScanAt    string   `json:"last_scan_at,omitempty"`
 	AddedAt       string   `json:"added_at,omitempty"`
 }
+
+const DefaultMaxParallelSessions = 1
 
 type SessionStatus string
 
@@ -149,11 +152,15 @@ func (s *Store) LoadWatchTargets() ([]WatchTarget, error) {
 		if strings.TrimSpace(targets[i].Provider) == "" {
 			targets[i].Provider = "codex"
 		}
+		targets[i].MaxParallel = normalizeMaxParallelSessions(targets[i].MaxParallel)
 	}
 	return targets, nil
 }
 
 func (s *Store) SaveWatchTargets(targets []WatchTarget) error {
+	for i := range targets {
+		targets[i].MaxParallel = normalizeMaxParallelSessions(targets[i].MaxParallel)
+	}
 	return writeJSONFile(s.watchlistPath(), targets)
 }
 
@@ -172,6 +179,13 @@ func (s *Store) LoadSessions() ([]Session, error) {
 
 func (s *Store) SaveSessions(sessions []Session) error {
 	return writeJSONFile(s.sessionsPath(), sessions)
+}
+
+func normalizeMaxParallelSessions(value int) int {
+	if value < 1 {
+		return DefaultMaxParallelSessions
+	}
+	return value
 }
 
 func discoverStateRoot() string {

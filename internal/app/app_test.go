@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -114,7 +115,7 @@ func TestWatchListAndUnwatch(t *testing.T) {
 		},
 	}
 
-	if err := app.Watch(context.Background(), repoPath, false, []string{"to-do", "good first issue"}, ""); err != nil {
+	if err := app.Watch(context.Background(), repoPath, false, []string{"to-do", "good first issue"}, "", 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -130,6 +131,9 @@ func TestWatchListAndUnwatch(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "\"assignee\": \"me\"") {
 		t.Fatalf("expected default assignee in list output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "\"max_parallel_sessions\": 1") {
+		t.Fatalf("expected default max_parallel_sessions in list output: %s", stdout.String())
 	}
 
 	if err := app.Unwatch(repoPath); err != nil {
@@ -169,12 +173,12 @@ func TestWatchUpdatesExistingTarget(t *testing.T) {
 		},
 	}
 
-	if err := app.Watch(context.Background(), repoPath, false, nil, "nicobistolfi"); err != nil {
+	if err := app.Watch(context.Background(), repoPath, false, nil, "nicobistolfi", 3); err != nil {
 		t.Fatal(err)
 	}
 
 	stdout.Reset()
-	if err := app.Watch(context.Background(), repoPath, true, []string{"vibe-code", "vibe-code"}, ""); err != nil {
+	if err := app.Watch(context.Background(), repoPath, true, []string{"vibe-code", "vibe-code"}, "", 0); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(stdout.String(), "updated "+repoPath) {
@@ -196,6 +200,9 @@ func TestWatchUpdatesExistingTarget(t *testing.T) {
 	}
 	if targets[0].Assignee != "nicobistolfi" {
 		t.Fatalf("expected assignee to be preserved: %#v", targets[0])
+	}
+	if targets[0].MaxParallel != 3 {
+		t.Fatalf("expected max_parallel_sessions to be preserved: %#v", targets[0])
 	}
 }
 
@@ -380,6 +387,7 @@ func TestScanOnceSelectsEligibleIssueAndPersistsSession(t *testing.T) {
 	if err := app.ScanOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	app.waitForSessions()
 	if got := app.stdout.(*bytes.Buffer).String(); !strings.Contains(got, "repo: owner/repo started issue #1 in "+worktreePath) || !strings.Contains(got, "scanned 1 watch target(s), started 1 issue session(s)") {
 		t.Fatalf("unexpected output: %s", got)
 	}
@@ -428,6 +436,7 @@ func TestScanOncePrintsNoEligibleIssues(t *testing.T) {
 	if err := app.ScanOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	app.waitForSessions()
 	if got := stdout.String(); !strings.Contains(got, "repo: owner/repo no eligible issues (1 open)") || !strings.Contains(got, "scanned 1 watch target(s), started 0 issue session(s)") {
 		t.Fatalf("unexpected output: %s", got)
 	}
@@ -498,7 +507,7 @@ func TestScanOnceSkipsRedispatchForMaintainedIssueAndStartsNextEligibleIssue(t *
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me", Labels: []string{"to-do"}}}); err != nil {
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me", Labels: []string{"to-do"}, MaxParallel: 2}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := app.state.SaveSessions([]state.Session{{
@@ -517,6 +526,7 @@ func TestScanOnceSkipsRedispatchForMaintainedIssueAndStartsNextEligibleIssue(t *
 	if err := app.ScanOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	app.waitForSessions()
 
 	if got := stdout.String(); !strings.Contains(got, "repo: owner/repo started issue #2 in "+worktreePath2) || !strings.Contains(got, "scanned 1 watch target(s), started 1 issue session(s)") {
 		t.Fatalf("unexpected output: %s", got)
@@ -534,6 +544,233 @@ func TestScanOnceSkipsRedispatchForMaintainedIssueAndStartsNextEligibleIssue(t *
 	}
 	if sessions[1].IssueNumber != 2 || sessions[1].Status != state.SessionStatusSuccess {
 		t.Fatalf("expected issue #2 to complete a new session: %#v", sessions[1])
+	}
+}
+
+func TestScanOnceWithMaxParallelOnePreservesSerialBehavior(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath1 := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	var stdout bytes.Buffer
+	app := New()
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[]}]`,
+			"git worktree prune": "ok",
+			"git worktree add -b vigilante/issue-1-first " + worktreePath1 + " main":                                                                   "ok",
+			sessionStartCommentCommand("owner/repo", 1, worktreePath1, "vigilante/issue-1-first"):                                                      "ok",
+			issuePromptCommand(worktreePath1, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", "vigilante/issue-1-first"): "done",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me", MaxParallel: 1}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.waitForSessions()
+
+	if got := stdout.String(); !strings.Contains(got, "repo: owner/repo started issue #1 in "+worktreePath1) || strings.Contains(got, "issue #2") {
+		t.Fatalf("unexpected output: %s", got)
+	}
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].IssueNumber != 1 || sessions[0].Status != state.SessionStatusSuccess {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+}
+
+func TestScanOnceStartsMultipleIssuesUpToConfiguredLimit(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath1 := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	worktreePath2 := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-2")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	var stdout bytes.Buffer
+	app := New()
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[]},{"number":3,"title":"third","createdAt":"2026-03-11T12:00:00Z","url":"https://github.com/owner/repo/issues/3","labels":[]}]`,
+			"git worktree prune": "ok",
+			"git worktree add -b vigilante/issue-1-first " + worktreePath1 + " main":                                                                     "ok",
+			"git worktree add -b vigilante/issue-2-second " + worktreePath2 + " main":                                                                    "ok",
+			sessionStartCommentCommand("owner/repo", 1, worktreePath1, "vigilante/issue-1-first"):                                                        "ok",
+			sessionStartCommentCommand("owner/repo", 2, worktreePath2, "vigilante/issue-2-second"):                                                       "ok",
+			issuePromptCommand(worktreePath1, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", "vigilante/issue-1-first"):   "done",
+			issuePromptCommand(worktreePath2, "owner/repo", repoPath, 2, "second", "https://github.com/owner/repo/issues/2", "vigilante/issue-2-second"): "done",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me", MaxParallel: 2}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.waitForSessions()
+
+	got := stdout.String()
+	if !strings.Contains(got, "repo: owner/repo started issue #1 in "+worktreePath1) || !strings.Contains(got, "repo: owner/repo started issue #2 in "+worktreePath2) || strings.Contains(got, "issue #3") {
+		t.Fatalf("unexpected output: %s", got)
+	}
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+	for _, session := range sessions {
+		if session.Status != state.SessionStatusSuccess {
+			t.Fatalf("expected successful sessions: %#v", sessions)
+		}
+	}
+}
+
+func TestScanOnceDoesNotExceedConfiguredLimit(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath2 := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-2")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	var stdout bytes.Buffer
+	app := New()
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[]},{"number":3,"title":"third","createdAt":"2026-03-11T12:00:00Z","url":"https://github.com/owner/repo/issues/3","labels":[]}]`,
+			"git worktree prune": "ok",
+			"git worktree add -b vigilante/issue-2-second " + worktreePath2 + " main":                                                                    "ok",
+			sessionStartCommentCommand("owner/repo", 2, worktreePath2, "vigilante/issue-2-second"):                                                       "ok",
+			issuePromptCommand(worktreePath2, "owner/repo", repoPath, 2, "second", "https://github.com/owner/repo/issues/2", "vigilante/issue-2-second"): "done",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me", MaxParallel: 2}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:        repoPath,
+		Repo:            "owner/repo",
+		IssueNumber:     1,
+		Branch:          "vigilante/issue-1",
+		WorktreePath:    filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1"),
+		Status:          state.SessionStatusRunning,
+		ProcessID:       os.Getpid(),
+		StartedAt:       time.Now().UTC().Format(time.RFC3339),
+		LastHeartbeatAt: time.Now().UTC().Format(time.RFC3339),
+		UpdatedAt:       time.Now().UTC().Format(time.RFC3339),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.waitForSessions()
+
+	got := stdout.String()
+	if !strings.Contains(got, "repo: owner/repo started issue #2 in "+worktreePath2) || strings.Contains(got, "issue #3") {
+		t.Fatalf("unexpected output: %s", got)
+	}
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+}
+
+func TestScanOnceEnforcesLimitsIndependentlyAcrossRepositories(t *testing.T) {
+	home := t.TempDir()
+	repoPathA := filepath.Join(home, "repo-a")
+	repoPathB := filepath.Join(home, "repo-b")
+	worktreeA1 := filepath.Join(repoPathA, ".worktrees", "vigilante", "issue-1")
+	worktreeA2 := filepath.Join(repoPathA, ".worktrees", "vigilante", "issue-2")
+	worktreeB10 := filepath.Join(repoPathB, ".worktrees", "vigilante", "issue-10")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	var stdout bytes.Buffer
+	app := New()
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo-a --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first-a","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo-a/issues/1","labels":[]},{"number":2,"title":"second-a","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo-a/issues/2","labels":[]}]`,
+			"gh issue list --repo owner/repo-b --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":10,"title":"first-b","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo-b/issues/10","labels":[]},{"number":11,"title":"second-b","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo-b/issues/11","labels":[]}]`,
+			"git worktree prune": "ok",
+			"git worktree add -b vigilante/issue-1-first-a " + worktreeA1 + " main":                                                                              "ok",
+			"git worktree add -b vigilante/issue-2-second-a " + worktreeA2 + " main":                                                                             "ok",
+			"git worktree add -b vigilante/issue-10-first-b " + worktreeB10 + " main":                                                                            "ok",
+			sessionStartCommentCommand("owner/repo-a", 1, worktreeA1, "vigilante/issue-1-first-a"):                                                               "ok",
+			sessionStartCommentCommand("owner/repo-a", 2, worktreeA2, "vigilante/issue-2-second-a"):                                                              "ok",
+			sessionStartCommentCommand("owner/repo-b", 10, worktreeB10, "vigilante/issue-10-first-b"):                                                            "ok",
+			issuePromptCommand(worktreeA1, "owner/repo-a", repoPathA, 1, "first-a", "https://github.com/owner/repo-a/issues/1", "vigilante/issue-1-first-a"):     "done",
+			issuePromptCommand(worktreeA2, "owner/repo-a", repoPathA, 2, "second-a", "https://github.com/owner/repo-a/issues/2", "vigilante/issue-2-second-a"):   "done",
+			issuePromptCommand(worktreeB10, "owner/repo-b", repoPathB, 10, "first-b", "https://github.com/owner/repo-b/issues/10", "vigilante/issue-10-first-b"): "done",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{
+		{Path: repoPathA, Repo: "owner/repo-a", Branch: "main", Assignee: "me", MaxParallel: 2},
+		{Path: repoPathB, Repo: "owner/repo-b", Branch: "main", Assignee: "me", MaxParallel: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.waitForSessions()
+
+	got := stdout.String()
+	if !strings.Contains(got, "repo: owner/repo-a started issue #1 in "+worktreeA1) || !strings.Contains(got, "repo: owner/repo-a started issue #2 in "+worktreeA2) || !strings.Contains(got, "repo: owner/repo-b started issue #10 in "+worktreeB10) || strings.Contains(got, "issue #11") {
+		t.Fatalf("unexpected output: %s", got)
+	}
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 3 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
 	}
 }
 
@@ -578,6 +815,7 @@ func TestScanOnceCleansUpMergedIssueSession(t *testing.T) {
 	if err := app.ScanOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	app.waitForSessions()
 
 	sessions, err := app.state.LoadSessions()
 	if err != nil {
@@ -662,6 +900,7 @@ func TestScanOnceMaintainsOpenPullRequest(t *testing.T) {
 	if err := app.ScanOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	app.waitForSessions()
 
 	sessions, err := app.state.LoadSessions()
 	if err != nil {
@@ -857,6 +1096,7 @@ func TestScanOnceRecoversStalledSessionAndRedispatchesIssue(t *testing.T) {
 	if err := app.ScanOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	app.waitForSessions()
 
 	sessions, err := app.state.LoadSessions()
 	if err != nil {
@@ -949,4 +1189,23 @@ func TestScanOnceRecoversStalledSessionIntoPRMaintenance(t *testing.T) {
 	if sessions[0].PullRequestNumber != 31 || sessions[0].LastMaintainedAt == "" {
 		t.Fatalf("expected PR maintenance tracking after recovery: %#v", sessions[0])
 	}
+}
+
+func sessionStartCommentCommand(repo string, issueNumber int, worktreePath string, branch string) string {
+	return "gh issue comment --repo " + repo + " " + fmt.Sprintf("%d", issueNumber) + " --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Session Start",
+		Emoji:      "🚦",
+		Percent:    20,
+		ETAMinutes: 25,
+		Items: []string{
+			"Vigilante launched this implementation session in `" + worktreePath + "`.",
+			"Branch: `" + branch + "`.",
+			"Current stage: handing the issue off to the configured coding agent (`codex`) for investigation and implementation.",
+		},
+		Tagline: "Make it simple, but significant.",
+	})
+}
+
+func issuePromptCommand(worktreePath string, repo string, repoPath string, issueNumber int, title string, issueURL string, branch string) string {
+	return "codex exec --cd " + worktreePath + " --dangerously-bypass-approvals-and-sandbox Use the `vigilante-issue-implementation` skill for this task.\nRepository: " + repo + "\nLocal repository path: " + repoPath + "\nIssue: #" + fmt.Sprintf("%d", issueNumber) + " - " + title + "\nIssue URL: " + issueURL + "\nWorktree path: " + worktreePath + "\nBranch: " + branch + "\nUse `gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch, open a pull request, and report any execution failure back to the issue.\nUse the same GitHub comment structure for every non-terminal milestone comment: a short header with the current stage and optional emoji, a 10-cell progress bar with percentage, an `ETA: ~N minutes` line, 1-3 concise bullets covering what just happened and what is next, and an optional short playful quote or tagline.\nUse the issue as the source of truth for the requested behavior and keep the implementation minimal."
 }

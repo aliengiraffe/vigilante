@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -35,6 +36,9 @@ type App struct {
 	state  *state.Store
 	clock  func() time.Time
 	env    *environment.Environment
+
+	sessionMu sync.Mutex
+	sessionWG sync.WaitGroup
 }
 
 type stringListFlag []string
@@ -100,13 +104,14 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		var labels stringListFlag
 		fs.Var(&labels, "label", "allow only issues with this label; repeatable")
 		assignee := fs.String("assignee", "", "issue assignee filter (defaults to me)")
+		maxParallel := fs.Int("max-parallel", 0, "maximum concurrent issue sessions for this repository")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
 		if fs.NArg() != 1 {
-			return errors.New("usage: vigilante watch [-d] [--label value] [--assignee value] <path>")
+			return errors.New("usage: vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] <path>")
 		}
-		return a.Watch(ctx, fs.Arg(0), *daemon, labels, *assignee)
+		return a.Watch(ctx, fs.Arg(0), *daemon, labels, *assignee, *maxParallel)
 	case "unwatch":
 		if len(args) != 2 {
 			return errors.New("usage: vigilante unwatch <path>")
@@ -191,10 +196,13 @@ func (a *App) Setup(ctx context.Context, installDaemon bool) error {
 	return nil
 }
 
-func (a *App) Watch(ctx context.Context, rawPath string, daemon bool, labels []string, assignee string) error {
-	a.state.AppendDaemonLog("watch start raw_path=%q daemon=%t assignee=%q", rawPath, daemon, assignee)
+func (a *App) Watch(ctx context.Context, rawPath string, daemon bool, labels []string, assignee string, maxParallel int) error {
+	a.state.AppendDaemonLog("watch start raw_path=%q daemon=%t assignee=%q max_parallel=%d", rawPath, daemon, assignee, maxParallel)
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
+	}
+	if maxParallel < 0 {
+		return errors.New("max parallel must be at least 1")
 	}
 
 	repoPath, err := ExpandPath(rawPath)
@@ -228,6 +236,9 @@ func (a *App) Watch(ctx context.Context, rawPath string, daemon bool, labels []s
 			} else if targets[i].Assignee == "" {
 				targets[i].Assignee = defaultAssigneeFilter
 			}
+			if maxParallel > 0 {
+				targets[i].MaxParallel = maxParallel
+			}
 			targets[i].DaemonEnabled = daemon
 			updated = true
 			break
@@ -242,6 +253,7 @@ func (a *App) Watch(ctx context.Context, rawPath string, daemon bool, labels []s
 			Provider:      provider.DefaultID,
 			Labels:        labels,
 			Assignee:      assigneeOrDefault(assignee),
+			MaxParallel:   configuredMaxParallel(maxParallel),
 			DaemonEnabled: daemon,
 			AddedAt:       a.clock().Format(time.RFC3339),
 		}
@@ -261,10 +273,10 @@ func (a *App) Watch(ctx context.Context, rawPath string, daemon bool, labels []s
 	}
 
 	if updated {
-		a.state.AppendDaemonLog("watch updated path=%s repo=%s branch=%s assignee=%s daemon=%t", info.Path, info.Repo, info.Branch, assigneeOrDefault(findWatchTargetAssignee(targets, info.Path)), daemon)
+		a.state.AppendDaemonLog("watch updated path=%s repo=%s branch=%s assignee=%s max_parallel=%d daemon=%t", info.Path, info.Repo, info.Branch, assigneeOrDefault(findWatchTargetAssignee(targets, info.Path)), findWatchTargetMaxParallel(targets, info.Path), daemon)
 		fmt.Fprintln(a.stdout, "updated", info.Path)
 	} else {
-		a.state.AppendDaemonLog("watch added path=%s repo=%s branch=%s assignee=%s daemon=%t", info.Path, info.Repo, info.Branch, assigneeOrDefault(assignee), daemon)
+		a.state.AppendDaemonLog("watch added path=%s repo=%s branch=%s assignee=%s max_parallel=%d daemon=%t", info.Path, info.Repo, info.Branch, assigneeOrDefault(assignee), configuredMaxParallel(maxParallel), daemon)
 		fmt.Fprintln(a.stdout, "watching", info.Path)
 	}
 	return nil
@@ -333,7 +345,11 @@ func (a *App) DaemonRun(ctx context.Context, interval time.Duration, once bool) 
 	a.state.AppendDaemonLog("daemon run start once=%t interval=%s", once, interval)
 
 	if once {
-		return a.ScanOnce(ctx)
+		if err := a.ScanOnce(ctx); err != nil {
+			return err
+		}
+		a.waitForSessions()
+		return nil
 	}
 
 	ticker := time.NewTicker(interval)
@@ -364,6 +380,8 @@ func (a *App) ScanOnce(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		a.sessionMu.Lock()
+		defer a.sessionMu.Unlock()
 		sessions, err := a.state.LoadSessions()
 		if err != nil {
 			return err
@@ -391,7 +409,8 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			if strings.TrimSpace(target.Provider) == "" {
 				target.Provider = provider.DefaultID
 			}
-			a.state.AppendDaemonLog("scan repo start repo=%s path=%s", target.Repo, target.Path)
+			target.MaxParallel = configuredMaxParallel(target.MaxParallel)
+			a.state.AppendDaemonLog("scan repo start repo=%s path=%s max_parallel=%d", target.Repo, target.Path, target.MaxParallel)
 			issues, err := ghcli.ListOpenIssues(ctx, a.env.Runner, target.Repo, target.Assignee)
 			target.LastScanAt = a.clock().Format(time.RFC3339)
 			if err != nil {
@@ -402,48 +421,50 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			}
 			a.state.AppendDaemonLog("scan repo issues repo=%s open_issues=%d", target.Repo, len(issues))
 
-			next := ghcli.SelectNextIssue(issues, sessions, *target)
-			if next == nil {
+			activeCount := ghcli.ActiveSessionCount(sessions, *target)
+			availableSlots := target.MaxParallel - activeCount
+			if availableSlots < 0 {
+				availableSlots = 0
+			}
+			nextIssues := ghcli.SelectIssues(issues, sessions, *target, availableSlots)
+			if len(nextIssues) == 0 {
 				a.state.AppendDaemonLog("scan repo no eligible issues repo=%s", target.Repo)
 				fmt.Fprintf(a.stdout, "repo: %s no eligible issues (%d open)\n", target.Repo, len(issues))
 				continue
 			}
-			a.state.AppendDaemonLog("scan repo selected issue repo=%s issue=%d title=%q", target.Repo, next.Number, next.Title)
+			for _, next := range nextIssues {
+				a.state.AppendDaemonLog("scan repo selected issue repo=%s issue=%d title=%q", target.Repo, next.Number, next.Title)
 
-			wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, *target, next.Number, next.Title)
-			if err != nil {
-				return err
-			}
-			a.state.AppendDaemonLog("scan repo worktree ready repo=%s issue=%d path=%s branch=%s", target.Repo, next.Number, wt.Path, wt.Branch)
+				wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, *target, next.Number, next.Title)
+				if err != nil {
+					return err
+				}
+				a.state.AppendDaemonLog("scan repo worktree ready repo=%s issue=%d path=%s branch=%s", target.Repo, next.Number, wt.Path, wt.Branch)
 
-			session := state.Session{
-				RepoPath:        target.Path,
-				Repo:            target.Repo,
-				Provider:        target.Provider,
-				IssueNumber:     next.Number,
-				IssueTitle:      next.Title,
-				IssueURL:        next.URL,
-				Branch:          wt.Branch,
-				WorktreePath:    wt.Path,
-				Status:          state.SessionStatusRunning,
-				ProcessID:       os.Getpid(),
-				StartedAt:       a.clock().Format(time.RFC3339),
-				LastHeartbeatAt: a.clock().Format(time.RFC3339),
-				UpdatedAt:       a.clock().Format(time.RFC3339),
-			}
-			sessions = upsertSession(sessions, session)
-			if err := a.state.SaveSessions(sessions); err != nil {
-				return err
-			}
-			startedCount++
-			fmt.Fprintf(a.stdout, "repo: %s started issue #%d in %s\n", target.Repo, next.Number, wt.Path)
+				session := state.Session{
+					RepoPath:        target.Path,
+					Repo:            target.Repo,
+					Provider:        target.Provider,
+					IssueNumber:     next.Number,
+					IssueTitle:      next.Title,
+					IssueURL:        next.URL,
+					Branch:          wt.Branch,
+					WorktreePath:    wt.Path,
+					Status:          state.SessionStatusRunning,
+					ProcessID:       os.Getpid(),
+					StartedAt:       a.clock().Format(time.RFC3339),
+					LastHeartbeatAt: a.clock().Format(time.RFC3339),
+					UpdatedAt:       a.clock().Format(time.RFC3339),
+				}
+				sessions = upsertSession(sessions, session)
+				if err := a.state.SaveSessions(sessions); err != nil {
+					return err
+				}
+				startedCount++
+				fmt.Fprintf(a.stdout, "repo: %s started issue #%d in %s\n", target.Repo, next.Number, wt.Path)
 
-			result := issuerunner.RunIssueSession(ctx, a.env, a.state, *target, *next, session)
-			sessions = upsertSession(sessions, result)
-			if err := a.state.SaveSessions(sessions); err != nil {
-				return err
+				a.launchIssueSession(ctx, *target, next, session)
 			}
-			a.state.AppendDaemonLog("scan repo session finished repo=%s issue=%d status=%s", target.Repo, next.Number, result.Status)
 		}
 
 		fmt.Fprintf(a.stdout, "scanned %d watch target(s), started %d issue session(s)\n", len(targets), startedCount)
@@ -647,6 +668,34 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 	}
 
 	return sessions, nil
+}
+
+func (a *App) launchIssueSession(ctx context.Context, target state.WatchTarget, issue ghcli.Issue, session state.Session) {
+	a.sessionWG.Add(1)
+	go func() {
+		defer a.sessionWG.Done()
+
+		result := issuerunner.RunIssueSession(ctx, a.env, a.state, target, issue, session)
+
+		a.sessionMu.Lock()
+		defer a.sessionMu.Unlock()
+
+		sessions, err := a.state.LoadSessions()
+		if err != nil {
+			a.state.AppendDaemonLog("session result load failed repo=%s issue=%d err=%v", target.Repo, issue.Number, err)
+			return
+		}
+		sessions = upsertSession(sessions, result)
+		if err := a.state.SaveSessions(sessions); err != nil {
+			a.state.AppendDaemonLog("session result save failed repo=%s issue=%d err=%v", target.Repo, issue.Number, err)
+			return
+		}
+		a.state.AppendDaemonLog("scan repo session finished repo=%s issue=%d status=%s", target.Repo, issue.Number, result.Status)
+	}()
+}
+
+func (a *App) waitForSessions() {
+	a.sessionWG.Wait()
 }
 
 func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Session, pr ghcli.PullRequest) error {
@@ -1191,7 +1240,7 @@ func (a *App) ensureTooling(ctx context.Context, selectedProvider provider.Provi
 func (a *App) printUsage() {
 	fmt.Fprintln(a.stderr, "usage:")
 	fmt.Fprintln(a.stderr, "  vigilante setup [-d]")
-	fmt.Fprintln(a.stderr, "  vigilante watch [-d] [--label value] [--assignee value] <path>")
+	fmt.Fprintln(a.stderr, "  vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] <path>")
 	fmt.Fprintln(a.stderr, "  vigilante unwatch <path>")
 	fmt.Fprintln(a.stderr, "  vigilante list [--blocked]")
 	fmt.Fprintln(a.stderr, "  vigilante resume --repo <owner/name> --issue <n>")
@@ -1235,6 +1284,13 @@ func assigneeOrDefault(value string) string {
 	return value
 }
 
+func configuredMaxParallel(value int) int {
+	if value <= 0 {
+		return state.DefaultMaxParallelSessions
+	}
+	return value
+}
+
 func normalizeLabels(labels []string) []string {
 	if len(labels) == 0 {
 		return nil
@@ -1265,4 +1321,13 @@ func findWatchTargetAssignee(targets []state.WatchTarget, path string) string {
 		}
 	}
 	return ""
+}
+
+func findWatchTargetMaxParallel(targets []state.WatchTarget, path string) int {
+	for _, target := range targets {
+		if target.Path == path {
+			return configuredMaxParallel(target.MaxParallel)
+		}
+	}
+	return state.DefaultMaxParallelSessions
 }

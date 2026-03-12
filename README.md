@@ -58,7 +58,7 @@ For each watched repository:
 
 ## Commands
 
-### `vigilante watch [--assignee <value>] <path>`
+### `vigilante watch [--assignee <value>] [--max-parallel <value>] <path>`
 
 Register a local repository for issue monitoring.
 
@@ -68,6 +68,7 @@ Expected behavior:
 - validates the folder is a git repository
 - discovers the GitHub remote from git config
 - defaults the assignee filter to `me` unless overridden
+- defaults `--max-parallel` to `1` when not configured
 - resolves `me` to the authenticated GitHub login at runtime before issue queries
 - stores the target in `~/.vigilante/watchlist.json`
 
@@ -79,6 +80,10 @@ vigilante watch ~/hello-world-app
 
 ```sh
 vigilante watch --assignee nicobistolfi ~/hello-world-app
+```
+
+```sh
+vigilante watch --max-parallel 3 ~/hello-world-app
 ```
 
 ### `vigilante watch -d <path>`
@@ -99,6 +104,7 @@ Expected fields:
 
 - local path
 - GitHub repository slug
+- max parallel issue sessions
 - daemon status
 - last scan time
 - active issue/session, if any
@@ -227,6 +233,7 @@ Suggested `watchlist.json` shape:
     "repo": "owner/hello-world-app",
     "branch": "main",
     "assignee": "me",
+    "max_parallel_sessions": 1,
     "daemon_enabled": true,
     "last_scan_at": "2026-03-10T12:00:00Z"
   }
@@ -241,11 +248,12 @@ Initial rules:
 
 - only consider open issues
 - ignore pull requests
-- ignore issues already assigned to a running local session
+- enforce `max_parallel_sessions` independently for each watched repository
+- count both running implementation sessions and open-PR maintenance sessions against that repository limit
 - avoid duplicate work across multiple daemon scans
 - prefer oldest eligible open issue first unless later prioritization rules are added
 
-Future policy can expand to label filters, assignment rules, priority queues, and concurrency limits.
+Future policy can expand to richer label filters, assignment rules, and priority queues.
 
 ## Headless Agent Execution Contract
 
