@@ -6,10 +6,10 @@ description: Help a human author write an implementation-ready GitHub issue that
 # Vigilante Create Issue
 
 ## Overview
-Use this skill when a human wants to write or refine a GitHub issue that Vigilante will later implement. The goal is not to design the full solution for them. The goal is to turn a vague request into an issue with enough behavioral detail, constraints, and verification criteria for a headless coding agent to execute safely.
+Use this skill when a human wants to write or refine a GitHub issue that Vigilante will later implement. The default goal is to turn a vague request into an issue with enough behavioral detail, constraints, and verification criteria for a headless coding agent to execute safely, then create that issue on GitHub. If creation is not possible, fall back to returning a ready-to-file issue body. The goal is not to design the full solution for them.
 
 ## Outcome
-Produce a GitHub issue draft that is:
+Produce a GitHub issue that is:
 
 - specific about the problem and why it matters
 - grounded in repository or product context
@@ -17,6 +17,8 @@ Produce a GitHub issue draft that is:
 - realistic about implementation flexibility and hard constraints
 - testable through concrete acceptance criteria
 - clear about validation and regression coverage
+- created on GitHub by default when the target repository can be resolved and `gh` issue creation is available
+- returned as a polished Markdown draft only when the user explicitly asks for draft-only output or issue creation is blocked
 
 ## Workflow
 1. Clarify the request before writing
@@ -24,24 +26,36 @@ Produce a GitHub issue draft that is:
 - Ask for missing repository, product, or user context when it affects implementation.
 - Separate required behavior from guesses or preferences.
 
-2. Frame the issue around execution
+2. Resolve the target repository before finalizing output
+- Prefer local git context first when the user is working inside a repository.
+- Otherwise use an explicitly provided repository slug or URL.
+- If the repository cannot be resolved confidently, say so briefly and fall back to returning the ready-to-file issue body instead of guessing.
+
+3. Frame the issue around execution
 - Write for the agent that will implement the issue later, not for a broad brainstorming audience.
 - Prefer observable behavior over vague aspirations.
 - Note any constraints that must be preserved: CLI flags, APIs, config compatibility, UX expectations, rollout limits, or performance boundaries.
 
-3. Capture implementation guidance without over-constraining
+4. Capture implementation guidance without over-constraining
 - Include likely solution paths when they materially reduce ambiguity.
 - Mark which implementation details are required and which are flexible.
 - Call out known tradeoffs or rejected alternatives when relevant.
 
-4. Make completion testable
+5. Make completion testable
 - Convert expectations into pass/fail acceptance criteria.
 - State what tests should be added or updated.
 - Mention the key regressions or failure modes that must be prevented.
 
-5. Deliver a ready-to-file issue
-- Return a polished issue draft in Markdown.
-- Keep it concise, but do not omit information needed for reliable execution.
+6. Create the GitHub issue by default
+- When the repository is known and the user did not explicitly ask for draft-only output, use `gh issue create` to open the issue.
+- Use the polished Markdown body as the issue content instead of stopping at the draft.
+- In the final response, include the created issue URL or issue number and keep the body available if useful.
+
+7. Fall back cleanly when issue creation is blocked
+- If issue creation cannot be completed because repository context is missing, `gh` auth is unavailable, network access is blocked, or sandbox restrictions prevent GitHub access, say so briefly and return the ready-to-file Markdown issue instead.
+- If the environment supports requesting escalation for GitHub/network access, do that before giving up.
+- If the user explicitly asks for a draft only, honor that request and do not create the issue.
+- Keep failure messaging short, specific, and factual.
 
 ## Required Sections
 Every issue draft should cover these sections when relevant:
@@ -97,7 +111,7 @@ Use these to tighten the issue before drafting:
 - What regressions must be prevented?
 
 ## Output Template
-Use this structure for the final issue draft:
+Use this structure for the issue body:
 
 ```md
 ## Summary
@@ -134,10 +148,13 @@ Use this structure for the final issue draft:
 ```
 
 ## Final Checks
-Before returning the issue draft, verify that:
+Before creating the issue or returning the fallback draft, verify that:
 
 - the problem is understandable without extra oral context
 - the desired outcome is observable
 - the acceptance criteria are testable
 - the testing section names the expected validation
 - the issue gives Vigilante enough direction to implement without guessing the basics
+- the target repository is known before attempting `gh issue create`
+- the final response includes the created issue URL or number when creation succeeds
+- the fallback response states briefly why issue creation was not completed when it fails
