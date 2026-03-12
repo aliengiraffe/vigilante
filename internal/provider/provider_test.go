@@ -1,6 +1,11 @@
 package provider
 
-import "testing"
+import (
+	"testing"
+
+	ghcli "github.com/nicobistolfi/vigilante/internal/github"
+	"github.com/nicobistolfi/vigilante/internal/state"
+)
 
 func TestResolveDefaultsToCodex(t *testing.T) {
 	selectedProvider, err := Resolve("")
@@ -27,4 +32,70 @@ func TestRequiredToolsetIncludesSharedAndProviderTools(t *testing.T) {
 			t.Fatalf("unexpected toolset: %#v", got)
 		}
 	}
+}
+
+func TestResolveIssueLabelUsesRegisteredProviderIDs(t *testing.T) {
+	original := registry
+	registry = map[string]Provider{
+		DefaultID: codexProvider{},
+		"cursor":  testProvider{id: "cursor"},
+	}
+	t.Cleanup(func() {
+		registry = original
+	})
+
+	selected, err := ResolveIssueLabel([]ghcli.Label{{Name: "cursor"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != "cursor" {
+		t.Fatalf("unexpected provider label match: %q", selected)
+	}
+}
+
+func TestResolveIssueLabelRejectsConflictingProviderLabels(t *testing.T) {
+	original := registry
+	registry = map[string]Provider{
+		DefaultID: codexProvider{},
+		"cursor":  testProvider{id: "cursor"},
+	}
+	t.Cleanup(func() {
+		registry = original
+	})
+
+	_, err := ResolveIssueLabel([]ghcli.Label{{Name: DefaultID}, {Name: "cursor"}})
+	if err == nil {
+		t.Fatal("expected conflict error")
+	}
+	if got := err.Error(); got != "multiple provider labels: codex, cursor" {
+		t.Fatalf("unexpected conflict error: %s", got)
+	}
+}
+
+type testProvider struct {
+	id string
+}
+
+func (p testProvider) ID() string {
+	return p.id
+}
+
+func (p testProvider) DisplayName() string {
+	return p.id
+}
+
+func (p testProvider) RequiredTools() []string {
+	return nil
+}
+
+func (p testProvider) EnsureRuntimeInstalled(store *state.Store) error {
+	return nil
+}
+
+func (p testProvider) BuildIssueInvocation(task IssueTask) (Invocation, error) {
+	return Invocation{}, nil
+}
+
+func (p testProvider) BuildConflictResolutionInvocation(task ConflictTask) (Invocation, error) {
+	return Invocation{}, nil
 }
