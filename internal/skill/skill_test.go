@@ -36,6 +36,9 @@ func TestEnsureInstalledPrefersRepoSkillsWhenAvailable(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(skillSourceDir, "scripts", "launch.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 				t.Fatal(err)
 			}
+			if err := os.WriteFile(filepath.Join(skillSourceDir, "scripts", "docker-compose-launch.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	wd, err := os.Getwd()
@@ -69,8 +72,13 @@ func TestEnsureInstalledPrefersRepoSkillsWhenAvailable(t *testing.T) {
 			t.Fatalf("unexpected agent body: %s", string(agentData))
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, "skills", DockerComposeLaunch, "scripts", "launch.sh")); err != nil {
-		t.Fatalf("expected docker compose launch helper to be installed: %v", err)
+	for _, path := range []string{
+		filepath.Join(dir, "skills", DockerComposeLaunch, "scripts", "launch.sh"),
+		filepath.Join(dir, "skills", DockerComposeLaunch, "scripts", "docker-compose-launch.sh"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected docker compose launch helper to be installed: %v", err)
+		}
 	}
 }
 
@@ -137,8 +145,13 @@ func TestEnsureInstalledUsesEmbeddedAssetsOutsideRepo(t *testing.T) {
 			t.Fatalf("expected %s to exist: %v", path, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(dir, "skills", DockerComposeLaunch, "scripts", "launch.sh")); err != nil {
-		t.Fatalf("expected docker compose launch helper to exist: %v", err)
+	for _, path := range []string{
+		filepath.Join(dir, "skills", DockerComposeLaunch, "scripts", "launch.sh"),
+		filepath.Join(dir, "skills", DockerComposeLaunch, "scripts", "docker-compose-launch.sh"),
+	} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected docker compose launch helper to exist: %v", err)
+		}
 	}
 }
 
