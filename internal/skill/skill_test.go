@@ -163,3 +163,43 @@ func TestBuildConflictResolutionPrompt(t *testing.T) {
 		}
 	}
 }
+
+func TestVigilanteCreateIssueSkillCoversIssueTypeClassification(t *testing.T) {
+	body, err := os.ReadFile(repoSkillPath(VigilanteCreateIssue))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := string(body)
+	for _, snippet := range []string{
+		"classified as a `feature`, `bug`, or `task` before the draft is finalized",
+		"Decide whether the request is best treated as a `feature`, `bug`, or `task`.",
+		"If the request is ambiguous, infer the most likely type and state briefly that the type was inferred.",
+		"Issue Type: <feature | bug | task>[ (inferred)]",
+	} {
+		if !strings.Contains(text, snippet) {
+			t.Fatalf("skill missing %q", snippet)
+		}
+	}
+}
+
+func TestVigilanteCreateIssueSkillIncludesTypeSpecificDetailGuidance(t *testing.T) {
+	body, err := os.ReadFile(repoSkillPath(VigilanteCreateIssue))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := string(body)
+	for _, snippet := range []string{
+		"For `bug` issues, prioritize current behavior, expected behavior, impact, reproduction clues, and regression risk.",
+		"For `feature` issues, prioritize the desired user-facing outcome, scope boundaries, and non-goals.",
+		"For `task` issues, prioritize the concrete deliverable, operational context, constraints, and completion conditions.",
+		"- `bug`: include current behavior, expected behavior, impact, and reproduction clues when available.",
+		"- `feature`: include the desired outcome, boundaries, and explicit non-goals.",
+		"- `task`: include the deliverable, operational context, constraints, and concrete done criteria.",
+	} {
+		if !strings.Contains(text, snippet) {
+			t.Fatalf("skill missing %q", snippet)
+		}
+	}
+}

@@ -11,6 +11,7 @@ Use this skill when a human wants to write or refine a GitHub issue that Vigilan
 ## Outcome
 Produce a GitHub issue that is:
 
+- classified as a `feature`, `bug`, or `task` before the draft is finalized
 - specific about the problem and why it matters
 - grounded in repository or product context
 - explicit about expected behavior and non-goals
@@ -26,36 +27,49 @@ Produce a GitHub issue that is:
 - Ask for missing repository, product, or user context when it affects implementation.
 - Separate required behavior from guesses or preferences.
 
-2. Resolve the target repository before finalizing output
+2. Classify the request before finalizing the issue body
+- Decide whether the request is best treated as a `feature`, `bug`, or `task`.
+- Base the classification on the user's stated problem and desired outcome rather than implementation details.
+- If the request is ambiguous, infer the most likely type and state briefly that the type was inferred.
+- Use the selected type to decide which details are required in the issue body, not just to append a label.
+
+3. Resolve the target repository before finalizing output
 - Prefer local git context first when the user is working inside a repository.
 - Otherwise use an explicitly provided repository slug or URL.
 - If the repository cannot be resolved confidently, say so briefly and fall back to returning the ready-to-file issue body instead of guessing.
 
-3. Frame the issue around execution
+4. Frame the issue around execution
 - Write for the agent that will implement the issue later, not for a broad brainstorming audience.
 - Prefer observable behavior over vague aspirations.
 - Note any constraints that must be preserved: CLI flags, APIs, config compatibility, UX expectations, rollout limits, or performance boundaries.
 
-4. Capture implementation guidance without over-constraining
+5. Capture implementation guidance without over-constraining
 - Include likely solution paths when they materially reduce ambiguity.
 - Mark which implementation details are required and which are flexible.
 - Call out known tradeoffs or rejected alternatives when relevant.
 
-5. Make completion testable
+6. Make completion testable
 - Convert expectations into pass/fail acceptance criteria.
 - State what tests should be added or updated.
 - Mention the key regressions or failure modes that must be prevented.
 
-6. Create the GitHub issue by default
+7. Create the GitHub issue by default
 - When the repository is known and the user did not explicitly ask for draft-only output, use `gh issue create` to open the issue.
 - Use the polished Markdown body as the issue content instead of stopping at the draft.
 - In the final response, include the created issue URL or issue number and keep the body available if useful.
 
-7. Fall back cleanly when issue creation is blocked
+8. Fall back cleanly when issue creation is blocked
 - If issue creation cannot be completed because repository context is missing, `gh` auth is unavailable, network access is blocked, or sandbox restrictions prevent GitHub access, say so briefly and return the ready-to-file Markdown issue instead.
 - If the environment supports requesting escalation for GitHub/network access, do that before giving up.
 - If the user explicitly asks for a draft only, honor that request and do not create the issue.
 - Keep failure messaging short, specific, and factual.
+
+## Issue Type Guidance
+- Always make the selected issue type explicit in the generated issue body using a consistent line such as `Issue Type: feature`, `Issue Type: bug`, or `Issue Type: task`.
+- When the type was inferred from an ambiguous request, note that clearly, for example `Issue Type: task (inferred)`.
+- For `bug` issues, prioritize current behavior, expected behavior, impact, reproduction clues, and regression risk.
+- For `feature` issues, prioritize the desired user-facing outcome, scope boundaries, and non-goals.
+- For `task` issues, prioritize the concrete deliverable, operational context, constraints, and completion conditions.
 
 ## Required Sections
 Every issue draft should cover these sections when relevant:
@@ -117,6 +131,8 @@ Use this structure for the issue body:
 ## Summary
 <One short paragraph describing the problem and desired change.>
 
+Issue Type: <feature | bug | task>[ (inferred)]
+
 ## Problem
 - <What is wrong, missing, or desired>
 - <Why it matters>
@@ -147,13 +163,21 @@ Use this structure for the issue body:
 - <Docs, logging, migration, compatibility, rollout, observability, etc.>
 ```
 
+Type-specific reminders:
+
+- `bug`: include current behavior, expected behavior, impact, and reproduction clues when available.
+- `feature`: include the desired outcome, boundaries, and explicit non-goals.
+- `task`: include the deliverable, operational context, constraints, and concrete done criteria.
+
 ## Final Checks
 Before creating the issue or returning the fallback draft, verify that:
 
 - the problem is understandable without extra oral context
+- the selected issue type is `feature`, `bug`, or `task` and is stated explicitly in the issue body
 - the desired outcome is observable
 - the acceptance criteria are testable
 - the testing section names the expected validation
+- the body includes the type-specific details that matter for the selected class instead of only a label
 - the issue gives Vigilante enough direction to implement without guessing the basics
 - the target repository is known before attempting `gh issue create`
 - the final response includes the created issue URL or number when creation succeeds
