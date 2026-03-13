@@ -108,3 +108,33 @@ func TestBuildConfigFailsWhenDaemonPathCannotResolveTools(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestBuildConfigSupportsClaudeProvider(t *testing.T) {
+	t.Setenv("HOME", "/Users/test")
+	t.Setenv("SHELL", "/bin/zsh")
+	t.Setenv("PATH", "/usr/bin:/bin")
+
+	env := &environment.Environment{
+		OS: "darwin",
+		Runner: testutil.FakeRunner{
+			Outputs: map[string]string{
+				`/bin/zsh -lic printf "%s" "$PATH"`: "/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin",
+				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" command -v 'git'`:    "/opt/homebrew/bin/git\n",
+				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" command -v 'gh'`:     "/opt/homebrew/bin/gh\n",
+				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" command -v 'claude'`: "/Users/test/.local/bin/claude\n",
+			},
+		},
+	}
+
+	selectedProvider, err := provider.Resolve(provider.ClaudeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := BuildConfig(context.Background(), env, selectedProvider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PathEnv != "/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" {
+		t.Fatalf("unexpected PATH: %#v", cfg)
+	}
+}

@@ -97,10 +97,11 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 		fs.SetOutput(a.stderr)
 		installDaemon := fs.Bool("d", false, "install daemon service")
+		selectedProvider := fs.String("provider", provider.DefaultID, "coding agent provider")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		return a.Setup(ctx, *installDaemon)
+		return a.SetupWithProvider(ctx, *installDaemon, *selectedProvider)
 	case "watch":
 		fs := flag.NewFlagSet("watch", flag.ContinueOnError)
 		fs.SetOutput(a.stderr)
@@ -109,13 +110,14 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		fs.Var(&labels, "label", "allow only issues with this label; repeatable")
 		assignee := fs.String("assignee", "", "issue assignee filter (defaults to me)")
 		maxParallel := fs.Int("max-parallel", 0, "maximum concurrent issue sessions for this repository")
+		selectedProvider := fs.String("provider", "", "coding agent provider")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
 		if fs.NArg() != 1 {
-			return errors.New("usage: vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] <path>")
+			return errors.New("usage: vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] [--provider value] <path>")
 		}
-		return a.Watch(ctx, fs.Arg(0), *daemon, labels, *assignee, *maxParallel)
+		return a.WatchWithProvider(ctx, fs.Arg(0), *daemon, labels, *assignee, *maxParallel, *selectedProvider)
 	case "unwatch":
 		if len(args) != 2 {
 			return errors.New("usage: vigilante unwatch <path>")
@@ -210,11 +212,15 @@ func (a *App) runDaemonCommand(ctx context.Context, args []string) error {
 }
 
 func (a *App) Setup(ctx context.Context, installDaemon bool) error {
+	return a.SetupWithProvider(ctx, installDaemon, provider.DefaultID)
+}
+
+func (a *App) SetupWithProvider(ctx context.Context, installDaemon bool, providerID string) error {
 	a.state.AppendDaemonLog("setup start install_daemon=%t", installDaemon)
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
 	}
-	selectedProvider, err := provider.Resolve(provider.DefaultID)
+	selectedProvider, err := provider.Resolve(providerID)
 	if err != nil {
 		return err
 	}
@@ -235,12 +241,23 @@ func (a *App) Setup(ctx context.Context, installDaemon bool) error {
 }
 
 func (a *App) Watch(ctx context.Context, rawPath string, daemon bool, labels []string, assignee string, maxParallel int) error {
+	return a.WatchWithProvider(ctx, rawPath, daemon, labels, assignee, maxParallel, "")
+}
+
+func (a *App) WatchWithProvider(ctx context.Context, rawPath string, daemon bool, labels []string, assignee string, maxParallel int, providerID string) error {
 	a.state.AppendDaemonLog("watch start raw_path=%q daemon=%t assignee=%q max_parallel=%d", rawPath, daemon, assignee, maxParallel)
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
 	}
 	if maxParallel < 0 {
 		return errors.New("max parallel must be at least 1")
+	}
+	if strings.TrimSpace(providerID) != "" {
+		resolvedProvider, err := provider.Resolve(providerID)
+		if err != nil {
+			return err
+		}
+		providerID = resolvedProvider.ID()
 	}
 
 	repoPath, err := ExpandPath(rawPath)
@@ -267,6 +284,9 @@ func (a *App) Watch(ctx context.Context, rawPath string, daemon bool, labels []s
 			targets[i].Branch = info.Branch
 			if strings.TrimSpace(targets[i].Provider) == "" {
 				targets[i].Provider = provider.DefaultID
+			}
+			if providerID != "" {
+				targets[i].Provider = providerID
 			}
 			targets[i].Labels = labels
 			if assignee != "" {
@@ -295,6 +315,9 @@ func (a *App) Watch(ctx context.Context, rawPath string, daemon bool, labels []s
 			DaemonEnabled: daemon,
 			AddedAt:       a.clock().Format(time.RFC3339),
 		}
+		if providerID != "" {
+			target.Provider = providerID
+		}
 		targets = append(targets, target)
 	}
 	sort.Slice(targets, func(i, j int) bool {
@@ -305,7 +328,11 @@ func (a *App) Watch(ctx context.Context, rawPath string, daemon bool, labels []s
 	}
 
 	if daemon {
-		if err := a.Setup(ctx, true); err != nil {
+		setupProvider := providerID
+		if setupProvider == "" {
+			setupProvider = findWatchTargetProvider(targets, info.Path)
+		}
+		if err := a.SetupWithProvider(ctx, true, setupProvider); err != nil {
 			return err
 		}
 	}
@@ -1243,24 +1270,29 @@ func (a *App) resumeBlockedSession(ctx context.Context, session *state.Session, 
 }
 
 func (a *App) preflightResume(ctx context.Context, session state.Session) error {
+	selectedProvider, err := provider.Resolve(session.Provider)
+	if err != nil {
+		return err
+	}
+	tool := providerRuntimeTool(selectedProvider)
 	switch session.BlockedReason.Kind {
 	case "git_auth":
-		_, err := a.env.Runner.Run(ctx, session.WorktreePath, "git", "fetch", "origin", "main")
+		_, err = a.env.Runner.Run(ctx, session.WorktreePath, "git", "fetch", "origin", "main")
 		return err
 	case "gh_auth":
 		if _, err := a.env.Runner.Run(ctx, "", "gh", "auth", "status"); err != nil {
 			return err
 		}
-		_, err := ghcli.GetIssueDetails(ctx, a.env.Runner, session.Repo, session.IssueNumber)
+		_, err = ghcli.GetIssueDetails(ctx, a.env.Runner, session.Repo, session.IssueNumber)
 		return err
 	case "provider_missing":
-		_, err := a.env.Runner.LookPath("codex")
+		_, err = a.env.Runner.LookPath(tool)
 		return err
 	case "provider_auth", "provider_runtime_error":
-		if _, err := a.env.Runner.LookPath("codex"); err != nil {
+		if _, err := a.env.Runner.LookPath(tool); err != nil {
 			return err
 		}
-		_, err := a.env.Runner.Run(ctx, "", "codex", "--version")
+		_, err = a.env.Runner.Run(ctx, "", tool, "--version")
 		return err
 	default:
 		return nil
@@ -1758,10 +1790,18 @@ func (a *App) ensureTooling(ctx context.Context, selectedProvider provider.Provi
 	return nil
 }
 
+func providerRuntimeTool(selectedProvider provider.Provider) string {
+	tools := selectedProvider.RequiredTools()
+	if len(tools) == 0 {
+		return selectedProvider.ID()
+	}
+	return tools[0]
+}
+
 func (a *App) printUsage() {
 	fmt.Fprintln(a.stderr, "usage:")
-	fmt.Fprintln(a.stderr, "  vigilante setup [-d]")
-	fmt.Fprintln(a.stderr, "  vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] <path>")
+	fmt.Fprintln(a.stderr, "  vigilante setup [-d] [--provider value]")
+	fmt.Fprintln(a.stderr, "  vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] [--provider value] <path>")
 	fmt.Fprintln(a.stderr, "  vigilante unwatch <path>")
 	fmt.Fprintln(a.stderr, "  vigilante list [--blocked | --running]")
 	fmt.Fprintln(a.stderr, "  vigilante cleanup --repo <owner/name> [--issue <n>]")
@@ -1853,4 +1893,16 @@ func findWatchTargetMaxParallel(targets []state.WatchTarget, path string) int {
 		}
 	}
 	return state.DefaultMaxParallelSessions
+}
+
+func findWatchTargetProvider(targets []state.WatchTarget, path string) string {
+	for _, target := range targets {
+		if target.Path == path {
+			if strings.TrimSpace(target.Provider) == "" {
+				return provider.DefaultID
+			}
+			return target.Provider
+		}
+	}
+	return provider.DefaultID
 }

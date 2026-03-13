@@ -17,6 +17,9 @@ const VigilanteIssueImplementation = "vigilante-issue-implementation"
 const VigilanteConflictResolution = "vigilante-conflict-resolution"
 const VigilanteCreateIssue = "vigilante-create-issue"
 
+const RuntimeCodex = "codex"
+const RuntimeClaude = "claude"
+
 func VigilanteSkillNames() []string {
 	return []string{
 		VigilanteIssueImplementation,
@@ -25,27 +28,89 @@ func VigilanteSkillNames() []string {
 	}
 }
 
-func EnsureInstalled(codexHome string) error {
+func EnsureInstalled(runtime string, home string) error {
 	for _, name := range VigilanteSkillNames() {
-		skillDir := filepath.Join(codexHome, "skills", name)
 		source, err := resolveSkillSource(name)
 		if err != nil {
 			return err
 		}
-		if err := os.RemoveAll(skillDir); err != nil {
+		targets, err := installTargets(runtime, home, name)
+		if err != nil {
 			return err
 		}
-		if err := source.install(skillDir); err != nil {
-			return err
+		for _, target := range targets {
+			if err := os.RemoveAll(target); err != nil {
+				return err
+			}
+			if err := source.install(target); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
 }
 
+func installTargets(runtime string, home string, name string) ([]string, error) {
+	switch strings.TrimSpace(runtime) {
+	case RuntimeCodex:
+		return []string{filepath.Join(home, "skills", name)}, nil
+	case RuntimeClaude:
+		return []string{
+			filepath.Join(home, "skills", name),
+			filepath.Join(home, "commands", name),
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported skill runtime %q", runtime)
+	}
+}
+
+func skillBody(name string) (string, error) {
+	source, err := resolveSkillSource(name)
+	if err != nil {
+		return "", err
+	}
+	switch s := source.(type) {
+	case dirSkillSource:
+		data, err := os.ReadFile(filepath.Join(string(s), "SKILL.md"))
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(data)), nil
+	case embeddedSkillSource:
+		data, err := fs.ReadFile(s.fs, pathJoin(s.root, "SKILL.md"))
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(data)), nil
+	default:
+		return "", fmt.Errorf("unsupported skill source %T", source)
+	}
+}
+
+func InlineSkillHeader(name string) string {
+	body, err := skillBody(name)
+	if err != nil {
+		return fmt.Sprintf("The `%s` skill was requested, but the bundled instructions could not be loaded: %v", name, err)
+	}
+	return strings.Join([]string{
+		fmt.Sprintf("Follow these `%s` skill instructions directly for this task:", name),
+		body,
+		"",
+	}, "\n")
+}
+
 func BuildIssuePrompt(target state.WatchTarget, issue ghcli.Issue, session state.Session) string {
-	providerName := displayProviderName(session.Provider)
-	lines := []string{
-		fmt.Sprintf("Use the `%s` skill for this task.", VigilanteIssueImplementation),
+	return BuildIssuePromptForRuntime(RuntimeCodex, target, issue, session)
+}
+
+func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue ghcli.Issue, session state.Session) string {
+	lines := []string{}
+	if strings.TrimSpace(runtime) == RuntimeClaude {
+		lines = append(lines, InlineSkillHeader(VigilanteIssueImplementation))
+	} else {
+		lines = append(lines, fmt.Sprintf("Use the `%s` skill for this task.", VigilanteIssueImplementation))
+	}
+	lines = append(lines,
 		fmt.Sprintf("Repository: %s", target.Repo),
 		fmt.Sprintf("Local repository path: %s", target.Path),
 		fmt.Sprintf("Issue: #%d - %s", issue.Number, issue.Title),
@@ -53,10 +118,10 @@ func BuildIssuePrompt(target state.WatchTarget, issue ghcli.Issue, session state
 		fmt.Sprintf("Worktree path: %s", session.WorktreePath),
 		fmt.Sprintf("Branch: %s", session.Branch),
 		"Use `gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch, open a pull request, and report any execution failure back to the issue.",
-		fmt.Sprintf("For the coding-agent start comment, use `## 🕹️ Coding Agent Launched: %s` instead of a generic session-start title.", providerName),
+		fmt.Sprintf("For the coding-agent start comment, use `## 🕹️ Coding Agent Launched: %s` instead of a generic session-start title.", displayProviderName(session.Provider)),
 		"Use the same GitHub comment structure for every non-terminal milestone comment: a short header with the current stage and optional emoji, a 10-cell progress bar with percentage, an `ETA: ~N minutes` line, 1-3 concise bullets covering what just happened and what is next, and an optional short playful quote or tagline.",
 		"Use the issue as the source of truth for the requested behavior and keep the implementation minimal.",
-	}
+	)
 	return strings.Join(lines, "\n")
 }
 
@@ -83,6 +148,12 @@ func displayProviderName(name string) string {
 	if name == "" {
 		return "Configured Coding Agent"
 	}
+	switch strings.ToLower(name) {
+	case RuntimeClaude:
+		return "Claude Code"
+	case RuntimeCodex:
+		return "Codex"
+	}
 	parts := strings.FieldsFunc(name, func(r rune) bool {
 		return r == '-' || r == '_' || r == ' '
 	})
@@ -96,8 +167,17 @@ func displayProviderName(name string) string {
 }
 
 func BuildConflictResolutionPrompt(target state.WatchTarget, session state.Session, pr ghcli.PullRequest) string {
-	lines := []string{
-		fmt.Sprintf("Use the `%s` skill for this task.", VigilanteConflictResolution),
+	return BuildConflictResolutionPromptForRuntime(RuntimeCodex, target, session, pr)
+}
+
+func BuildConflictResolutionPromptForRuntime(runtime string, target state.WatchTarget, session state.Session, pr ghcli.PullRequest) string {
+	lines := []string{}
+	if strings.TrimSpace(runtime) == RuntimeClaude {
+		lines = append(lines, InlineSkillHeader(VigilanteConflictResolution))
+	} else {
+		lines = append(lines, fmt.Sprintf("Use the `%s` skill for this task.", VigilanteConflictResolution))
+	}
+	lines = append(lines,
 		fmt.Sprintf("Repository: %s", target.Repo),
 		fmt.Sprintf("Local repository path: %s", target.Path),
 		fmt.Sprintf("Issue: #%d - %s", session.IssueNumber, session.IssueTitle),
@@ -109,7 +189,7 @@ func BuildConflictResolutionPrompt(target state.WatchTarget, session state.Sessi
 		"Base branch: origin/main",
 		"Resolve the current rebase conflicts in the assigned worktree, use `gh issue comment` for progress and failures, rerun `go test ./...` after conflict resolution if the rebase succeeds, and push the updated branch when finished.",
 		"Keep the changes minimal and focused on getting the PR back to a merge-ready state.",
-	}
+	)
 	return strings.Join(lines, "\n")
 }
 

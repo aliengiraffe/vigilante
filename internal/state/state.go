@@ -110,6 +110,17 @@ func (s *Store) CodexHome() string {
 	return filepath.Join(home, ".codex")
 }
 
+func (s *Store) ClaudeHome() string {
+	if value := os.Getenv("CLAUDE_HOME"); value != "" {
+		return value
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(s.root, ".claude")
+	}
+	return filepath.Join(home, ".claude")
+}
+
 func (s *Store) EnsureLayout() error {
 	for _, dir := range []string{s.root, s.LogsDir()} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {

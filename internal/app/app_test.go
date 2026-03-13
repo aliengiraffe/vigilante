@@ -206,6 +206,39 @@ func TestWatchUpdatesExistingTarget(t *testing.T) {
 	}
 }
 
+func TestWatchWithProviderPersistsClaudeSelection(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                  "true\n",
+			testutil.Key("git", "remote", "get-url", "origin"):                         "git@github.com:nicobistolfi/vigilante.git\n",
+			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): "origin/main\n",
+		},
+	}
+
+	if err := app.WatchWithProvider(context.Background(), repoPath, false, nil, "", 0, "claude"); err != nil {
+		t.Fatal(err)
+	}
+
+	targets, err := app.state.LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].Provider != "claude" {
+		t.Fatalf("expected claude provider to persist: %#v", targets)
+	}
+}
+
 func TestListBlockedSessions(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))

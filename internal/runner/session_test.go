@@ -153,6 +153,48 @@ func TestRunConflictResolutionSessionFailureCommentsOnIssue(t *testing.T) {
 	}
 }
 
+func TestRunIssueSessionSuccessWithClaudeProvider(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Vigilante Session Start",
+				Emoji:      "🧢",
+				Percent:    20,
+				ETAMinutes: 25,
+				Items: []string{
+					"Vigilante launched this implementation session in `/tmp/worktree`.",
+					"Branch: `vigilante/issue-7`.",
+					"Current stage: handing the issue off to the configured coding agent (`Claude Code`) for investigation and implementation.",
+				},
+				Tagline: "Make it simple, but significant.",
+			}): "ok",
+			testutil.Key("claude", "--print", "--cwd", "/tmp/worktree", "--permission-mode", "acceptEdits", skill.BuildIssuePreflightPrompt(
+				state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"},
+				ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
+				state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: "claude"},
+			)): "baseline ok",
+			testutil.Key("claude", "--print", "--cwd", "/tmp/worktree", "--permission-mode", "acceptEdits", skill.BuildIssuePromptForRuntime(
+				skill.RuntimeClaude,
+				state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"},
+				ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
+				state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: "claude"},
+			)): "done",
+		},
+	}
+	env := &environment.Environment{OS: "darwin", Runner: runner}
+	store := state.NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: "claude", Status: state.SessionStatusRunning}
+	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	if got.Status != state.SessionStatusSuccess {
+		t.Fatalf("unexpected status: %#v", got)
+	}
+}
+
 func TestClassifyBlockedFailureDetectsProviderQuota(t *testing.T) {
 	err := errors.New("exit status 1")
 	output := "You've hit your usage limit. Upgrade to Pro or purchase more credits. Try again at 2026-03-13 09:00 PDT."
