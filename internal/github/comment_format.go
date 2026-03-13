@@ -38,6 +38,54 @@ func FormatProgressComment(comment ProgressComment) string {
 	return strings.Join(lines, "\n")
 }
 
+type DispatchFailureComment struct {
+	Stage        string
+	Summary      string
+	Branch       string
+	WorktreePath string
+	NextStep     string
+}
+
+func FormatDispatchFailureComment(comment DispatchFailureComment) string {
+	stage := strings.TrimSpace(comment.Stage)
+	if stage == "" {
+		stage = "dispatch"
+	}
+	stage = strings.ReplaceAll(stage, "_", " ")
+
+	summary := strings.TrimSpace(comment.Summary)
+	if summary == "" {
+		summary = "Vigilante hit a local failure before implementation could proceed."
+	}
+
+	items := []string{
+		fmt.Sprintf("Failure stage: `%s`. Summary: `%s`.", stage, summary),
+	}
+	if branch := strings.TrimSpace(comment.Branch); branch != "" || strings.TrimSpace(comment.WorktreePath) != "" {
+		items = append(items, fmt.Sprintf("Branch: `%s`. Worktree: `%s`.", fallbackCommentValue(branch, "not created"), fallbackCommentValue(comment.WorktreePath, "not created")))
+	}
+	if next := strings.TrimSpace(comment.NextStep); next != "" {
+		items = append(items, fmt.Sprintf("Next step: %s", next))
+	}
+
+	return FormatProgressComment(ProgressComment{
+		Stage:      "Blocked",
+		Emoji:      "🧱",
+		Percent:    15,
+		ETAMinutes: 10,
+		Items:      items,
+		Tagline:    "No silent stalls.",
+	})
+}
+
+func fallbackCommentValue(value string, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
+}
+
 func progressLine(percent int) string {
 	percent = clampPercent(percent)
 	return fmt.Sprintf("Progress: [%s] %d%%", progressBar(percent), percent)

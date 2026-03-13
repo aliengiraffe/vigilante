@@ -54,6 +54,21 @@ func TestFormatProgressComment(t *testing.T) {
 	})
 }
 
+func TestFormatDispatchFailureComment(t *testing.T) {
+	comment := FormatDispatchFailureComment(DispatchFailureComment{
+		Stage:        "issue_startup",
+		Summary:      "codex CLI version 2.0.0 is incompatible with this Vigilante build",
+		Branch:       "vigilante/issue-149",
+		WorktreePath: "/tmp/repo/.worktrees/vigilante/issue-149",
+		NextStep:     "fix the local `codex` runtime, then run `vigilante resume --repo owner/repo --issue 149` or request resume from GitHub.",
+	})
+
+	expected := "## 🧱 Blocked\nProgress: [#---------] 15%\n`ETA: ~10 minutes`\n- Failure stage: `issue startup`. Summary: `codex CLI version 2.0.0 is incompatible with this Vigilante build`.\n- Branch: `vigilante/issue-149`. Worktree: `/tmp/repo/.worktrees/vigilante/issue-149`.\n- Next step: fix the local `codex` runtime, then run `vigilante resume --repo owner/repo --issue 149` or request resume from GitHub.\n> \"No silent stalls.\""
+	if comment != expected {
+		t.Fatalf("unexpected comment:\n%s", comment)
+	}
+}
+
 func firstBodyLine(comment string) string {
 	lines := strings.Split(comment, "\n")
 	if len(lines) < 2 {
