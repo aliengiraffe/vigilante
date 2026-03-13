@@ -841,6 +841,249 @@ func TestCleanupAllRunningSessions(t *testing.T) {
 	}
 }
 
+func TestRedispatchSessionResetsRunningIssueAndDispatchesImmediately(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-44")
+	branch := "vigilante/issue-44-first-run"
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":44,"title":"first run","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/44","labels":[]}]`,
+			"gh pr list --repo owner/repo --head vigilante/issue-44-first-run --state all --json number,url,state,mergedAt": "[]",
+			"gh pr list --repo owner/repo --head vigilante/issue-44 --state all --json number,url,state,mergedAt":           "[]",
+			"git worktree prune":                                          "ok",
+			"git worktree remove --force " + worktreePath:                 "ok",
+			"git worktree list --porcelain":                               "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/main\n",
+			"git show-ref --verify --quiet refs/heads/" + branch:          "ok",
+			"git branch -D " + branch:                                     "Deleted branch " + branch + "\n",
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-44": "ok",
+			"git worktree add " + worktreePath + " " + branch:             "ok",
+			localRedispatchCommentCommand("owner/repo", 44, state.Session{
+				Branch:       branch,
+				WorktreePath: worktreePath,
+			}): "ok",
+			"codex --version": "codex 1.0.0",
+			sessionStartCommentCommand("owner/repo", 44, worktreePath, state.Session{Branch: branch}):                                         "ok",
+			preflightPromptCommand(worktreePath, "owner/repo", repoPath, 44, "first run", "https://github.com/owner/repo/issues/44", branch): "baseline ok",
+			issuePromptCommand(worktreePath, "owner/repo", repoPath, 44, "first run", "https://github.com/owner/repo/issues/44", branch):     "done",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:     repoPath,
+		Repo:         "owner/repo",
+		IssueNumber:  44,
+		IssueTitle:   "first run",
+		IssueURL:     "https://github.com/owner/repo/issues/44",
+		Status:       state.SessionStatusRunning,
+		Branch:       branch,
+		WorktreePath: worktreePath,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.RedispatchSession(context.Background(), "owner/repo", 44, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	app.waitForSessions()
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].Status != state.SessionStatusSuccess {
+		t.Fatalf("expected redispatched session to finish successfully: %#v", sessions)
+	}
+	if got := stdout.String(); !strings.Contains(got, "redispatched owner/repo issue #44 in "+worktreePath) {
+		t.Fatalf("unexpected output: %s", got)
+	}
+}
+
+func TestResetSessionForRedispatchDeletesSluggedAndLegacyBranches(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-45")
+	sluggedBranch := "vigilante/issue-45-force-restart"
+	legacyBranch := "vigilante/issue-45"
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"git worktree prune":                                        "ok",
+			"git worktree remove --force " + worktreePath:               "ok",
+			"git worktree list --porcelain":                             "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/main\n",
+			"git show-ref --verify --quiet refs/heads/" + sluggedBranch: "ok",
+			"git show-ref --verify --quiet refs/heads/" + legacyBranch:  "ok",
+			"git branch -D " + sluggedBranch:                            "Deleted branch " + sluggedBranch + "\n",
+			"git branch -D " + legacyBranch:                             "Deleted branch " + legacyBranch + "\n",
+		},
+	}
+
+	session := state.Session{
+		RepoPath:     repoPath,
+		Repo:         "owner/repo",
+		IssueNumber:  45,
+		Status:       state.SessionStatusBlocked,
+		Branch:       legacyBranch,
+		WorktreePath: worktreePath,
+	}
+	issue := ghcli.Issue{Number: 45, Title: "force restart"}
+	if err := app.resetSessionForRedispatch(context.Background(), &session, issue, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	if session.CleanupCompletedAt == "" || session.CleanupError != "" || session.Status != state.SessionStatusFailed {
+		t.Fatalf("expected cleaned session metadata after redispatch reset: %#v", session)
+	}
+}
+
+func TestRedispatchSessionFailsWhenRepoIsNotWatched(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+
+	err := app.RedispatchSession(context.Background(), "owner/repo", 44, "cli")
+	if err == nil || !strings.Contains(err.Error(), "watch target not found") {
+		t.Fatalf("expected watched repo error, got %v", err)
+	}
+}
+
+func TestRedispatchSessionFailsWhenIssueIsNotOpenOrEligible(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := app.RedispatchSession(context.Background(), "owner/repo", 44, "cli")
+	if err == nil || !strings.Contains(err.Error(), "open watched issue not found") {
+		t.Fatalf("expected open issue eligibility error, got %v", err)
+	}
+}
+
+func TestRedispatchSessionFailsWhenRemotePRExists(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":44,"title":"first run","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/44","labels":[]}]`,
+			"gh pr list --repo owner/repo --head vigilante/issue-44-first-run --state all --json number,url,state,mergedAt": `[{"number":12,"url":"https://github.com/owner/repo/pull/12","state":"OPEN","mergedAt":null}]`,
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := app.RedispatchSession(context.Background(), "owner/repo", 44, "cli")
+	if err == nil || !strings.Contains(err.Error(), "remote PR #12 already exists") {
+		t.Fatalf("expected remote PR guardrail error, got %v", err)
+	}
+}
+
+func TestRedispatchSessionFailsWhenCleanupFails(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-44")
+	branch := "vigilante/issue-44-first-run"
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":44,"title":"first run","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/44","labels":[]}]`,
+			"gh pr list --repo owner/repo --head " + branch + " --state all --json number,url,state,mergedAt":               "[]",
+			"gh pr list --repo owner/repo --head vigilante/issue-44 --state all --json number,url,state,mergedAt":           "[]",
+			"git worktree prune": "ok",
+		},
+		Errors: map[string]error{
+			"git worktree remove --force " + worktreePath: errors.New("exit status 1"),
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:     repoPath,
+		Repo:         "owner/repo",
+		IssueNumber:  44,
+		Status:       state.SessionStatusRunning,
+		Branch:       branch,
+		WorktreePath: worktreePath,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := app.RedispatchSession(context.Background(), "owner/repo", 44, "cli")
+	if err == nil || !strings.Contains(err.Error(), "redispatch cleanup failed") {
+		t.Fatalf("expected cleanup failure, got %v", err)
+	}
+}
+
 func TestScanOnceProcessesGitHubCommentResumeRequest(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
@@ -3419,6 +3662,10 @@ func sessionStartCommentCommand(repo string, issueNumber int, worktreePath strin
 
 func localCleanupCommentCommand(repo string, issueNumber int, session state.Session) string {
 	return "gh issue comment --repo " + repo + " " + fmt.Sprintf("%d", issueNumber) + " --body " + localCleanupResultComment(session)
+}
+
+func localRedispatchCommentCommand(repo string, issueNumber int, session state.Session) string {
+	return "gh issue comment --repo " + repo + " " + fmt.Sprintf("%d", issueNumber) + " --body " + localRedispatchResultComment(session)
 }
 
 func localCleanupNoopCommentCommand(repo string, issueNumber int) string {

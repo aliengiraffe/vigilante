@@ -110,6 +110,10 @@ func Prune(ctx context.Context, runner environment.Runner, repoPath string) erro
 }
 
 func CleanupIssueArtifacts(ctx context.Context, runner environment.Runner, repoPath string, worktreePath string, branch string) error {
+	return CleanupIssueArtifactsForBranches(ctx, runner, repoPath, worktreePath, []string{branch})
+}
+
+func CleanupIssueArtifactsForBranches(ctx context.Context, runner environment.Runner, repoPath string, worktreePath string, branches []string) error {
 	if err := Prune(ctx, runner, repoPath); err != nil {
 		return err
 	}
@@ -126,24 +130,29 @@ func CleanupIssueArtifacts(ctx context.Context, runner environment.Runner, repoP
 		return err
 	}
 
-	attached, err := branchAttachedToWorktree(ctx, runner, repoPath, branch)
-	if err != nil {
-		return err
-	}
-	if attached {
-		return nil
+	for _, branch := range uniqueNonEmptyStrings(branches) {
+		attached, err := branchAttachedToWorktree(ctx, runner, repoPath, branch)
+		if err != nil {
+			return err
+		}
+		if attached {
+			continue
+		}
+
+		exists, err := branchExistsWithError(ctx, runner, repoPath, branch)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+
+		if _, err := runner.Run(ctx, repoPath, "git", "branch", "-D", branch); err != nil {
+			return err
+		}
 	}
 
-	exists, err := branchExistsWithError(ctx, runner, repoPath, branch)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return nil
-	}
-
-	_, err = runner.Run(ctx, repoPath, "git", "branch", "-D", branch)
-	return err
+	return nil
 }
 
 func branchExists(ctx context.Context, runner environment.Runner, repoPath string, branch string) bool {
@@ -185,4 +194,21 @@ func branchAttachedToWorktree(ctx context.Context, runner environment.Runner, re
 		}
 	}
 	return false, nil
+}
+
+func uniqueNonEmptyStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		unique = append(unique, value)
+	}
+	return unique
 }

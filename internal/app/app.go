@@ -146,6 +146,8 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		return a.List(*blockedOnly, *runningOnly)
 	case "cleanup":
 		return a.runCleanupCommand(ctx, args[1:])
+	case "redispatch":
+		return a.runRedispatchCommand(ctx, args[1:])
 	case "resume":
 		return a.runResumeCommand(ctx, args[1:])
 	case "daemon":
@@ -202,6 +204,20 @@ func (a *App) runCleanupCommand(ctx context.Context, args []string) error {
 	default:
 		return a.CleanupSession(ctx, *repo, *issue, "cli")
 	}
+}
+
+func (a *App) runRedispatchCommand(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("redispatch", flag.ContinueOnError)
+	fs.SetOutput(a.stderr)
+	repo := fs.String("repo", "", "repository slug")
+	issue := fs.Int("issue", 0, "issue number")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *repo == "" || *issue <= 0 {
+		return errors.New("usage: vigilante redispatch --repo <owner/name> --issue <n>")
+	}
+	return a.RedispatchSession(ctx, *repo, *issue, "cli")
 }
 
 func (a *App) runDaemonCommand(ctx context.Context, args []string) error {
@@ -537,8 +553,17 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				}
 				a.state.AppendDaemonLog("scan repo issue skill repo=%s issue=%d skill=%s shape=%s", target.Repo, next.Number, skill.IssueImplementationSkill(*target), target.Classification.Shape)
 
-				wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, *target, next.Number, next.Title)
+				session, err := a.startIssueDispatchLocked(ctx, *target, next, selectedProvider)
 				if err != nil {
+					if session.Status == state.SessionStatusBlocked {
+						a.state.AppendDaemonLog("scan repo dispatch blocked repo=%s issue=%d branch=%s err=%v", target.Repo, next.Number, session.Branch, err)
+						sessions = upsertSession(sessions, session)
+						if err := a.state.SaveSessions(sessions); err != nil {
+							return err
+						}
+						fmt.Fprintf(a.stdout, "repo: %s blocked issue #%d: %s\n", target.Repo, next.Number, summarizeText(session.LastError))
+						continue
+					}
 					session := blockedIssueSessionForDispatchFailure(*target, next, selectedProvider, err, a.clock())
 					a.state.AppendDaemonLog("scan repo dispatch blocked repo=%s issue=%d err=%v", target.Repo, next.Number, err)
 					sessions = upsertSession(sessions, session)
@@ -548,53 +573,12 @@ func (a *App) ScanOnce(ctx context.Context) error {
 					fmt.Fprintf(a.stdout, "repo: %s blocked issue #%d: %s\n", target.Repo, next.Number, summarizeText(err.Error()))
 					continue
 				}
-				a.state.AppendDaemonLog("scan repo worktree ready repo=%s issue=%d path=%s branch=%s reused_remote=%t", target.Repo, next.Number, wt.Path, wt.Branch, wt.ReusedRemoteBranch != "")
-
-				diffSummary := ""
-				if strings.TrimSpace(wt.ReusedRemoteBranch) != "" {
-					diffSummary, err = summarizeIssueBranchDiff(ctx, a.env.Runner, target.Path, target.Branch, wt.Branch)
-					if err != nil {
-						_ = worktree.CleanupIssueArtifacts(ctx, a.env.Runner, target.Path, wt.Path, wt.Branch)
-						session := blockedIssueSessionForDispatchFailure(*target, next, selectedProvider, fmt.Errorf("analyze reused remote issue branch %q against %q: %w", wt.Branch, target.Branch, err), a.clock())
-						session.Branch = wt.Branch
-						session.BaseBranch = target.Branch
-						session.WorktreePath = wt.Path
-						session.ReusedRemoteBranch = wt.ReusedRemoteBranch
-						a.state.AppendDaemonLog("scan repo dispatch blocked repo=%s issue=%d branch=%s err=%v", target.Repo, next.Number, wt.Branch, err)
-						sessions = upsertSession(sessions, session)
-						if err := a.state.SaveSessions(sessions); err != nil {
-							return err
-						}
-						fmt.Fprintf(a.stdout, "repo: %s blocked issue #%d: %s\n", target.Repo, next.Number, summarizeText(session.LastError))
-						continue
-					}
-					a.state.AppendDaemonLog("scan repo reused remote issue branch repo=%s issue=%d branch=%s base=%s diff=%s", target.Repo, next.Number, wt.Branch, target.Branch, summarizeText(diffSummary))
-				}
-
-				session := state.Session{
-					RepoPath:           target.Path,
-					Repo:               target.Repo,
-					Provider:           selectedProvider,
-					IssueNumber:        next.Number,
-					IssueTitle:         next.Title,
-					IssueURL:           next.URL,
-					BaseBranch:         target.Branch,
-					Branch:             wt.Branch,
-					WorktreePath:       wt.Path,
-					ReusedRemoteBranch: wt.ReusedRemoteBranch,
-					BranchDiffSummary:  diffSummary,
-					Status:             state.SessionStatusRunning,
-					ProcessID:          os.Getpid(),
-					StartedAt:          a.clock().Format(time.RFC3339),
-					LastHeartbeatAt:    a.clock().Format(time.RFC3339),
-					UpdatedAt:          a.clock().Format(time.RFC3339),
-				}
 				sessions = upsertSession(sessions, session)
 				if err := a.state.SaveSessions(sessions); err != nil {
 					return err
 				}
 				startedCount++
-				fmt.Fprintf(a.stdout, "repo: %s started issue #%d in %s\n", target.Repo, next.Number, wt.Path)
+				fmt.Fprintf(a.stdout, "repo: %s started issue #%d in %s\n", target.Repo, next.Number, session.WorktreePath)
 
 				a.launchIssueSession(ctx, *target, next, session)
 			}
@@ -844,6 +828,49 @@ func (a *App) launchIssueSession(ctx context.Context, target state.WatchTarget, 
 		}
 		a.state.AppendDaemonLog("scan repo session finished repo=%s issue=%d status=%s", target.Repo, issue.Number, result.Status)
 	}()
+}
+
+func (a *App) startIssueDispatchLocked(ctx context.Context, target state.WatchTarget, issue ghcli.Issue, selectedProvider string) (state.Session, error) {
+	wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, target, issue.Number, issue.Title)
+	if err != nil {
+		return state.Session{}, err
+	}
+	a.state.AppendDaemonLog("scan repo worktree ready repo=%s issue=%d path=%s branch=%s reused_remote=%t", target.Repo, issue.Number, wt.Path, wt.Branch, wt.ReusedRemoteBranch != "")
+
+	diffSummary := ""
+	if strings.TrimSpace(wt.ReusedRemoteBranch) != "" {
+		diffSummary, err = summarizeIssueBranchDiff(ctx, a.env.Runner, target.Path, target.Branch, wt.Branch)
+		if err != nil {
+			_ = worktree.CleanupIssueArtifacts(ctx, a.env.Runner, target.Path, wt.Path, wt.Branch)
+			session := blockedIssueSessionForDispatchFailure(target, issue, selectedProvider, fmt.Errorf("analyze reused remote issue branch %q against %q: %w", wt.Branch, target.Branch, err), a.clock())
+			session.Branch = wt.Branch
+			session.BaseBranch = target.Branch
+			session.WorktreePath = wt.Path
+			session.ReusedRemoteBranch = wt.ReusedRemoteBranch
+			return session, errors.New(session.LastError)
+		}
+		a.state.AppendDaemonLog("scan repo reused remote issue branch repo=%s issue=%d branch=%s base=%s diff=%s", target.Repo, issue.Number, wt.Branch, target.Branch, summarizeText(diffSummary))
+	}
+
+	now := a.clock().Format(time.RFC3339)
+	return state.Session{
+		RepoPath:           target.Path,
+		Repo:               target.Repo,
+		Provider:           selectedProvider,
+		IssueNumber:        issue.Number,
+		IssueTitle:         issue.Title,
+		IssueURL:           issue.URL,
+		BaseBranch:         target.Branch,
+		Branch:             wt.Branch,
+		WorktreePath:       wt.Path,
+		ReusedRemoteBranch: wt.ReusedRemoteBranch,
+		BranchDiffSummary:  diffSummary,
+		Status:             state.SessionStatusRunning,
+		ProcessID:          os.Getpid(),
+		StartedAt:          now,
+		LastHeartbeatAt:    now,
+		UpdatedAt:          now,
+	}, nil
 }
 
 func (a *App) waitForSessions() {
@@ -1171,6 +1198,82 @@ func (a *App) CleanupSession(ctx context.Context, repo string, issue int, source
 		a.commentOnIssueBestEffort(ctx, repo, issue, localCleanupResultComment(*cleanedSession), "local cleanup result")
 	}
 	fmt.Fprintf(a.stdout, "cleaned up running session for %s issue #%d\n", repo, issue)
+	return nil
+}
+
+func (a *App) RedispatchSession(ctx context.Context, repo string, issue int, source string) error {
+	if err := a.state.EnsureLayout(); err != nil {
+		return err
+	}
+
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+
+	targets, err := a.state.LoadWatchTargets()
+	if err != nil {
+		return err
+	}
+	target, found := findWatchTargetByRepo(targets, repo)
+	if !found {
+		return fmt.Errorf("watch target not found for %s", repo)
+	}
+	target.Assignee = assigneeOrDefault(target.Assignee)
+	if strings.TrimSpace(target.Provider) == "" {
+		target.Provider = provider.DefaultID
+	}
+	target.MaxParallel = configuredMaxParallel(target.MaxParallel)
+	target.Classification = repoClassOrCurrent(target)
+
+	sessions, err := a.state.LoadSessions()
+	if err != nil {
+		return err
+	}
+	openIssues, err := ghcli.ListOpenIssues(ctx, a.env.Runner, target.Repo, target.Assignee)
+	if err != nil {
+		return err
+	}
+	selectedIssue, err := validateRedispatchIssue(target, openIssues, sessions, issue)
+	if err != nil {
+		return err
+	}
+	selectedProvider, err := resolveIssueProvider(target, *selectedIssue)
+	if err != nil {
+		return err
+	}
+	if err := a.ensureNoRedispatchPullRequest(ctx, target, sessions, *selectedIssue); err != nil {
+		return err
+	}
+
+	resetPerformed := false
+	for i := range sessions {
+		if sessions[i].Repo != repo || sessions[i].IssueNumber != issue {
+			continue
+		}
+		if err := a.resetSessionForRedispatch(ctx, &sessions[i], *selectedIssue, source); err != nil {
+			return err
+		}
+		resetPerformed = true
+		break
+	}
+	if !resetPerformed {
+		if err := worktree.CleanupIssueArtifactsForBranches(ctx, a.env.Runner, target.Path, worktree.IssueWorktreePath(target.Path, issue), worktree.IssueBranchCandidates(issue, selectedIssue.Title)); err != nil {
+			return err
+		}
+	}
+
+	session, err := a.startIssueDispatchLocked(ctx, target, *selectedIssue, selectedProvider)
+	if err != nil {
+		return err
+	}
+	sessions = upsertSession(sessions, session)
+	if err := a.state.SaveSessions(sessions); err != nil {
+		return err
+	}
+	if source == "cli" {
+		a.commentOnIssueBestEffort(ctx, repo, issue, localRedispatchResultComment(session), "local redispatch result")
+	}
+	fmt.Fprintf(a.stdout, "redispatched %s issue #%d in %s\n", repo, issue, session.WorktreePath)
+	a.launchIssueSession(ctx, target, *selectedIssue, session)
 	return nil
 }
 
@@ -1862,6 +1965,21 @@ func localCleanupNoopComment() string {
 	})
 }
 
+func localRedispatchResultComment(session state.Session) string {
+	return ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Local Redispatch Started",
+		Emoji:      "🔁",
+		Percent:    30,
+		ETAMinutes: 20,
+		Items: []string{
+			"A local operator ran `vigilante redispatch` for this issue.",
+			fmt.Sprintf("Reset the previous local Vigilante artifacts for `%s` and started a fresh session.", session.Branch),
+			fmt.Sprintf("New worktree: `%s`.", session.WorktreePath),
+		},
+		Tagline: "Fresh worktree, fresh pass.",
+	})
+}
+
 func localResumeSuccessComment(session state.Session, previousStage string, previousKind string) string {
 	return ghcli.FormatProgressComment(ghcli.ProgressComment{
 		Stage:      "Local Resume Completed",
@@ -2178,6 +2296,7 @@ func (a *App) printUsage() {
 	fmt.Fprintln(a.stderr, "  vigilante list [--blocked | --running]")
 	fmt.Fprintln(a.stderr, "  vigilante cleanup --repo <owner/name> [--issue <n>]")
 	fmt.Fprintln(a.stderr, "  vigilante cleanup --all")
+	fmt.Fprintln(a.stderr, "  vigilante redispatch --repo <owner/name> --issue <n>")
 	fmt.Fprintln(a.stderr, "  vigilante resume --repo <owner/name> --issue <n>")
 	fmt.Fprintln(a.stderr, "  vigilante resume --all-blocked")
 	fmt.Fprintln(a.stderr, "  vigilante daemon run [--once] [--interval duration]")
@@ -2230,6 +2349,127 @@ func configuredMaxParallel(value int) int {
 		return state.DefaultMaxParallelSessions
 	}
 	return value
+}
+
+func findWatchTargetByRepo(targets []state.WatchTarget, repo string) (state.WatchTarget, bool) {
+	for _, target := range targets {
+		if target.Repo == repo {
+			return target, true
+		}
+	}
+	return state.WatchTarget{}, false
+}
+
+func repoClassOrCurrent(target state.WatchTarget) repo.Classification {
+	if target.Classification.Shape != "" {
+		return target.Classification
+	}
+	return repo.Classify(target.Path)
+}
+
+func validateRedispatchIssue(target state.WatchTarget, issues []ghcli.Issue, sessions []state.Session, issueNumber int) (*ghcli.Issue, error) {
+	filteredSessions := make([]state.Session, 0, len(sessions))
+	for _, session := range sessions {
+		if session.Repo == target.Repo && session.IssueNumber == issueNumber {
+			continue
+		}
+		filteredSessions = append(filteredSessions, session)
+	}
+
+	if target.MaxParallel > 0 && ghcli.ActiveSessionCount(filteredSessions, target) >= target.MaxParallel {
+		return nil, fmt.Errorf("issue #%d in %s is not eligible for redispatch: no dispatch slots are available", issueNumber, target.Repo)
+	}
+
+	for i := range issues {
+		if issues[i].Number != issueNumber {
+			continue
+		}
+		if len(ghcli.SelectIssues([]ghcli.Issue{issues[i]}, filteredSessions, target, 1)) == 0 {
+			return nil, fmt.Errorf("issue #%d in %s is not eligible for redispatch under the current watch configuration", issueNumber, target.Repo)
+		}
+		return &issues[i], nil
+	}
+
+	return nil, fmt.Errorf("open watched issue not found for %s issue #%d", target.Repo, issueNumber)
+}
+
+func (a *App) ensureNoRedispatchPullRequest(ctx context.Context, target state.WatchTarget, sessions []state.Session, issue ghcli.Issue) error {
+	branches := make([]string, 0, 3)
+	branches = append(branches, worktree.IssueBranchCandidates(issue.Number, issue.Title)...)
+	for _, session := range sessions {
+		if session.Repo != target.Repo || session.IssueNumber != issue.Number {
+			continue
+		}
+		branches = append(branches, session.Branch)
+	}
+
+	for _, branch := range uniqueBranches(branches) {
+		pr, err := ghcli.FindPullRequestForBranch(ctx, a.env.Runner, target.Repo, branch)
+		if err != nil {
+			return err
+		}
+		if pr != nil {
+			return fmt.Errorf("issue #%d in %s is not eligible for redispatch: remote PR #%d already exists for branch %s", issue.Number, target.Repo, pr.Number, branch)
+		}
+	}
+	return nil
+}
+
+func (a *App) resetSessionForRedispatch(ctx context.Context, session *state.Session, issue ghcli.Issue, source string) error {
+	if session.Status == state.SessionStatusRunning {
+		if err := a.cleanupRunningSession(ctx, session, source); err != nil {
+			return err
+		}
+		if session.CleanupError != "" {
+			return fmt.Errorf("redispatch cleanup failed for %s issue #%d: %s", session.Repo, session.IssueNumber, session.CleanupError)
+		}
+		return nil
+	}
+
+	branches := append(worktree.IssueBranchCandidates(issue.Number, issue.Title), session.Branch)
+	if err := worktree.CleanupIssueArtifactsForBranches(ctx, a.env.Runner, session.RepoPath, worktree.IssueWorktreePath(session.RepoPath, issue.Number), branches); err != nil {
+		now := a.clock().Format(time.RFC3339)
+		session.CleanupError = err.Error()
+		session.LastCleanupSource = source
+		session.LastError = fmt.Sprintf("redispatch requested via %s; artifact cleanup failed: %s", source, err)
+		session.UpdatedAt = now
+		return err
+	}
+
+	now := a.clock().Format(time.RFC3339)
+	session.Status = state.SessionStatusFailed
+	session.ProcessID = 0
+	session.LastHeartbeatAt = ""
+	session.BlockedAt = ""
+	session.BlockedStage = ""
+	session.BlockedReason = state.BlockedReason{}
+	session.RetryPolicy = ""
+	session.ResumeRequired = false
+	session.ResumeHint = ""
+	session.CleanupCompletedAt = now
+	session.CleanupError = ""
+	session.LastCleanupSource = source
+	session.LastError = fmt.Sprintf("redispatch requested via %s", source)
+	session.EndedAt = now
+	session.UpdatedAt = now
+	return nil
+}
+
+func uniqueBranches(branches []string) []string {
+	seen := make(map[string]struct{}, len(branches))
+	unique := make([]string, 0, len(branches))
+	for _, branch := range branches {
+		branch = strings.TrimSpace(branch)
+		if branch == "" {
+			continue
+		}
+		if _, ok := seen[branch]; ok {
+			continue
+		}
+		seen[branch] = struct{}{}
+		unique = append(unique, branch)
+	}
+	return unique
 }
 
 func normalizeLabels(labels []string) []string {
