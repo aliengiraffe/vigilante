@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
+	"github.com/nicobistolfi/vigilante/internal/skill"
 	"github.com/nicobistolfi/vigilante/internal/state"
 )
 
@@ -74,6 +75,48 @@ func TestResolveGeminiProvider(t *testing.T) {
 	}
 }
 
+func TestClaudeInvocationUsesWorktreeDirForHeadlessRuns(t *testing.T) {
+	selectedProvider, err := Resolve(ClaudeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
+	issue := ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}
+	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: ClaudeID}
+	pr := ghcli.PullRequest{Number: 11, URL: "https://github.com/owner/repo/pull/11"}
+
+	preflight, err := selectedProvider.BuildIssuePreflightInvocation(IssueTask{Target: target, Issue: issue, Session: session})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preflight.Dir != "/tmp/worktree" {
+		t.Fatalf("expected preflight dir to be worktree, got %#v", preflight)
+	}
+	wantPreflightArgs := []string{"--print", "--permission-mode", "acceptEdits", skill.BuildIssuePreflightPrompt(target, issue, session)}
+	assertInvocationArgs(t, preflight.Args, wantPreflightArgs)
+
+	issueInvocation, err := selectedProvider.BuildIssueInvocation(IssueTask{Target: target, Issue: issue, Session: session})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issueInvocation.Dir != "/tmp/worktree" {
+		t.Fatalf("expected issue dir to be worktree, got %#v", issueInvocation)
+	}
+	wantIssueArgs := []string{"--print", "--permission-mode", "acceptEdits", skill.BuildIssuePromptForRuntime(skill.RuntimeClaude, target, issue, session)}
+	assertInvocationArgs(t, issueInvocation.Args, wantIssueArgs)
+
+	conflictInvocation, err := selectedProvider.BuildConflictResolutionInvocation(ConflictTask{Target: target, Session: session, PR: pr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conflictInvocation.Dir != "/tmp/worktree" {
+		t.Fatalf("expected conflict dir to be worktree, got %#v", conflictInvocation)
+	}
+	wantConflictArgs := []string{"--print", "--permission-mode", "acceptEdits", skill.BuildConflictResolutionPromptForRuntime(skill.RuntimeClaude, target, session, pr)}
+	assertInvocationArgs(t, conflictInvocation.Args, wantConflictArgs)
+}
+
 func TestResolveIssueLabelUsesRegisteredProviderIDs(t *testing.T) {
 	original := registry
 	registry = map[string]Provider{
@@ -109,6 +152,18 @@ func TestResolveIssueLabelRejectsConflictingProviderLabels(t *testing.T) {
 	}
 	if got := err.Error(); got != "multiple provider labels: codex, cursor" {
 		t.Fatalf("unexpected conflict error: %s", got)
+	}
+}
+
+func assertInvocationArgs(t *testing.T, got []string, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("unexpected arg count: got %#v want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected args: got %#v want %#v", got, want)
+		}
 	}
 }
 

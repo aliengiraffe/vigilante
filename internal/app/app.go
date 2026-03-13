@@ -1674,10 +1674,10 @@ func buildResumeFailureSummaryInvocation(selectedProvider provider.Provider, wor
 	switch selectedProvider.ID() {
 	case provider.ClaudeID:
 		return provider.Invocation{
+			Dir:  workdir,
 			Name: "claude",
 			Args: []string{
 				"--print",
-				"--cwd", workdir,
 				"--permission-mode", "acceptEdits",
 				prompt,
 			},

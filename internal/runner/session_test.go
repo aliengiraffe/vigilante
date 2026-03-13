@@ -170,12 +170,12 @@ func TestRunIssueSessionSuccessWithClaudeProvider(t *testing.T) {
 				},
 				Tagline: "Make it simple, but significant.",
 			}): "ok",
-			testutil.Key("claude", "--print", "--cwd", "/tmp/worktree", "--permission-mode", "acceptEdits", skill.BuildIssuePreflightPrompt(
+			testutil.Key("claude", "--print", "--permission-mode", "acceptEdits", skill.BuildIssuePreflightPrompt(
 				state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"},
 				ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
 				state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: "claude"},
 			)): "baseline ok",
-			testutil.Key("claude", "--print", "--cwd", "/tmp/worktree", "--permission-mode", "acceptEdits", skill.BuildIssuePromptForRuntime(
+			testutil.Key("claude", "--print", "--permission-mode", "acceptEdits", skill.BuildIssuePromptForRuntime(
 				skill.RuntimeClaude,
 				state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"},
 				ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
