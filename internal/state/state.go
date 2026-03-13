@@ -29,6 +29,11 @@ type WatchTarget struct {
 }
 
 const DefaultMaxParallelSessions = 3
+const DefaultBlockedSessionInactivityTimeout = 20 * time.Minute
+
+type ServiceConfig struct {
+	BlockedSessionInactivityTimeout string `json:"blocked_session_inactivity_timeout,omitempty"`
+}
 
 type SessionStatus string
 
@@ -145,6 +150,9 @@ func (s *Store) EnsureLayout() error {
 			return err
 		}
 	}
+	if err := ensureJSONFile(s.serviceConfigPath(), defaultServiceConfig()); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -166,6 +174,10 @@ func (s *Store) watchlistPath() string {
 
 func (s *Store) sessionsPath() string {
 	return filepath.Join(s.root, "sessions.json")
+}
+
+func (s *Store) serviceConfigPath() string {
+	return filepath.Join(s.root, "config.json")
 }
 
 func (s *Store) scanLockPath() string {
@@ -210,11 +222,43 @@ func (s *Store) SaveSessions(sessions []Session) error {
 	return writeJSONFile(s.sessionsPath(), sessions)
 }
 
+func (s *Store) LoadServiceConfig() (ServiceConfig, error) {
+	config := defaultServiceConfig()
+	if err := readJSONFile(s.serviceConfigPath(), &config); err != nil {
+		return ServiceConfig{}, err
+	}
+	config.BlockedSessionInactivityTimeout = normalizeBlockedSessionInactivityTimeout(config.BlockedSessionInactivityTimeout)
+	return config, nil
+}
+
+func (s *Store) SaveServiceConfig(config ServiceConfig) error {
+	config.BlockedSessionInactivityTimeout = normalizeBlockedSessionInactivityTimeout(config.BlockedSessionInactivityTimeout)
+	return writeJSONFile(s.serviceConfigPath(), config)
+}
+
 func normalizeMaxParallelSessions(value int) int {
 	if value < 1 {
 		return DefaultMaxParallelSessions
 	}
 	return value
+}
+
+func normalizeBlockedSessionInactivityTimeout(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return DefaultBlockedSessionInactivityTimeout.String()
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed <= 0 {
+		return DefaultBlockedSessionInactivityTimeout.String()
+	}
+	return parsed.String()
+}
+
+func defaultServiceConfig() ServiceConfig {
+	return ServiceConfig{
+		BlockedSessionInactivityTimeout: DefaultBlockedSessionInactivityTimeout.String(),
+	}
 }
 
 func discoverStateRoot() string {
@@ -235,6 +279,15 @@ func ensureJSONArrayFile(path string) error {
 		return err
 	}
 	return os.WriteFile(path, []byte("[]\n"), 0o644)
+}
+
+func ensureJSONFile(path string, value any) error {
+	if _, err := os.Stat(path); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return writeJSONFile(path, value)
 }
 
 func readJSONFile(path string, dst any) error {

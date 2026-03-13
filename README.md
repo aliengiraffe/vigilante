@@ -308,9 +308,25 @@ You can also confirm the Homebrew cask will target the published release archive
 
 Initial files:
 
+- `config.json`: service-level daemon configuration
 - `watchlist.json`: configured repositories being monitored
 - `sessions.json`: active or recent issue execution sessions
 - `logs/`: daemon and run logs
+
+Suggested `config.json` shape:
+
+```json
+{
+  "blocked_session_inactivity_timeout": "20m"
+}
+```
+
+Notes:
+
+- `blocked_session_inactivity_timeout` is a service-level setting shared across all watched repositories.
+- The default is `20m`.
+- A blocked session is eligible for automatic local cleanup only after there have been no qualifying user comments on the issue, no session updates, and no worktree updates for longer than the configured timeout.
+- This inactivity cleanup is conservative: it clears local blocked-session artifacts so the issue can be redispatched later, but it does not delete remote pull requests or remote branches automatically.
 
 Suggested `watchlist.json` shape:
 

@@ -256,6 +256,26 @@ func FindCleanupComment(comments []IssueComment, claimedCommentID int64) *IssueC
 	return findCommandComment(comments, "@vigilanteai cleanup", claimedCommentID)
 }
 
+func LatestUserCommentTime(comments []IssueComment) time.Time {
+	for i := len(comments) - 1; i >= 0; i-- {
+		if IsUserComment(comments[i]) {
+			return comments[i].CreatedAt.UTC()
+		}
+	}
+	return time.Time{}
+}
+
+func IsUserComment(comment IssueComment) bool {
+	body := strings.TrimSpace(comment.Body)
+	if body == "" {
+		return false
+	}
+	if strings.HasPrefix(body, "@vigilanteai ") {
+		return true
+	}
+	return !isAutomationComment(body)
+}
+
 func findCommandComment(comments []IssueComment, command string, claimedCommentID int64) *IssueComment {
 	for i := len(comments) - 1; i >= 0; i-- {
 		body := strings.TrimSpace(comments[i].Body)
@@ -323,4 +343,17 @@ func summarizeForLog(text string) string {
 		return text
 	}
 	return text[:limit] + "...(truncated)"
+}
+
+func isAutomationComment(body string) bool {
+	if !strings.HasPrefix(body, "## ") {
+		return false
+	}
+	if strings.Contains(body, "\nProgress: [") && strings.Contains(body, "\n`ETA: ~") {
+		return true
+	}
+	if strings.Contains(body, "\nWorking branch: `") || strings.Contains(body, "\nETA: ~") {
+		return true
+	}
+	return false
 }

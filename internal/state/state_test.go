@@ -70,3 +70,42 @@ func TestWatchTargetMaxParallelDefaultsToSharedValue(t *testing.T) {
 		t.Fatalf("expected explicit max_parallel_sessions to be preserved, got %d", got)
 	}
 }
+
+func TestEnsureLayoutCreatesDefaultServiceConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+
+	store := NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+
+	config, err := store.LoadServiceConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := config.BlockedSessionInactivityTimeout; got != DefaultBlockedSessionInactivityTimeout.String() {
+		t.Fatalf("expected default blocked-session timeout %q, got %q", DefaultBlockedSessionInactivityTimeout.String(), got)
+	}
+}
+
+func TestSaveServiceConfigNormalizesInvalidBlockedSessionTimeout(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+
+	store := NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveServiceConfig(ServiceConfig{BlockedSessionInactivityTimeout: "not-a-duration"}); err != nil {
+		t.Fatal(err)
+	}
+
+	config, err := store.LoadServiceConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := config.BlockedSessionInactivityTimeout; got != DefaultBlockedSessionInactivityTimeout.String() {
+		t.Fatalf("expected invalid timeout to normalize to %q, got %q", DefaultBlockedSessionInactivityTimeout.String(), got)
+	}
+}

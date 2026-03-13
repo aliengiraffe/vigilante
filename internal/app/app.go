@@ -470,6 +470,10 @@ func (a *App) ScanOnce(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		sessions, err = a.cleanupInactiveBlockedSessions(ctx, sessions)
+		if err != nil {
+			return err
+		}
 		sessions, err = a.maintainPullRequests(ctx, sessions)
 		if err != nil {
 			return err
@@ -1389,6 +1393,99 @@ func (a *App) resumeBlockedConflictResolution(ctx context.Context, session *stat
 	return nil
 }
 
+func (a *App) cleanupInactiveBlockedSessions(ctx context.Context, sessions []state.Session) ([]state.Session, error) {
+	config, err := a.state.LoadServiceConfig()
+	if err != nil {
+		return nil, err
+	}
+	timeout := state.DefaultBlockedSessionInactivityTimeout
+	if parsed, err := time.ParseDuration(config.BlockedSessionInactivityTimeout); err == nil && parsed > 0 {
+		timeout = parsed
+	}
+
+	for i := range sessions {
+		session := &sessions[i]
+		if session.Status != state.SessionStatusBlocked {
+			continue
+		}
+
+		inactive, err := a.blockedSessionExceededInactivityTimeout(ctx, *session, timeout)
+		if err != nil {
+			session.LastError = err.Error()
+			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			a.state.AppendDaemonLog("blocked session inactivity evaluation failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
+			continue
+		}
+		if !inactive {
+			continue
+		}
+
+		a.state.AppendDaemonLog("blocked session inactivity timeout reached repo=%s issue=%d branch=%s timeout=%s", session.Repo, session.IssueNumber, session.Branch, timeout)
+		cleanupErr := a.cleanupBlockedSessionForInactivity(ctx, session, timeout)
+		body := inactiveBlockedCleanupComment(*session, timeout, cleanupErr)
+		if err := ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body); err != nil {
+			session.LastError = err.Error()
+			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			a.state.AppendDaemonLog("blocked session inactivity comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
+		}
+	}
+
+	return sessions, nil
+}
+
+func (a *App) blockedSessionExceededInactivityTimeout(ctx context.Context, session state.Session, timeout time.Duration) (bool, error) {
+	comments, err := ghcli.ListIssueCommentsForPolling(ctx, a.env.Runner, session.Repo, session.IssueNumber, "blocked-inactivity", a.state.AppendDaemonLog)
+	if err != nil {
+		return false, err
+	}
+
+	latestWorktreeActivity, err := latestWorktreeActivity(session.WorktreePath)
+	if err != nil {
+		return false, err
+	}
+
+	threshold := a.clock().Add(-timeout)
+	for _, activity := range []time.Time{
+		ghcli.LatestUserCommentTime(comments),
+		sessionActivityTime(session),
+		latestWorktreeActivity,
+	} {
+		if !activity.IsZero() && activity.After(threshold) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (a *App) cleanupBlockedSessionForInactivity(ctx context.Context, session *state.Session, timeout time.Duration) error {
+	now := a.clock().Format(time.RFC3339)
+	session.LastCleanupSource = "blocked_inactivity_timeout"
+	if err := worktree.CleanupIssueArtifacts(ctx, a.env.Runner, session.RepoPath, session.WorktreePath, session.Branch); err != nil {
+		session.CleanupError = err.Error()
+		session.LastError = fmt.Sprintf("blocked session exceeded inactivity timeout (%s) but cleanup failed: %s", timeout, err)
+		session.UpdatedAt = now
+		a.state.AppendDaemonLog("blocked session inactivity cleanup failed repo=%s issue=%d branch=%s timeout=%s err=%v", session.Repo, session.IssueNumber, session.Branch, timeout, err)
+		return err
+	}
+
+	session.Status = state.SessionStatusFailed
+	session.ProcessID = 0
+	session.BlockedAt = ""
+	session.BlockedStage = ""
+	session.BlockedReason = state.BlockedReason{}
+	session.RetryPolicy = ""
+	session.ResumeRequired = false
+	session.ResumeHint = ""
+	session.LastHeartbeatAt = ""
+	session.CleanupCompletedAt = now
+	session.CleanupError = ""
+	session.EndedAt = now
+	session.UpdatedAt = now
+	session.LastError = fmt.Sprintf("blocked session cleaned up after %s of inactivity", timeout)
+	a.state.AppendDaemonLog("blocked session inactivity cleanup complete repo=%s issue=%d branch=%s timeout=%s", session.Repo, session.IssueNumber, session.Branch, timeout)
+	return nil
+}
+
 func stalledSessionThreshold() time.Duration {
 	raw := strings.TrimSpace(os.Getenv("VIGILANTE_STALLED_SESSION_THRESHOLD"))
 	if raw == "" {
@@ -1432,6 +1529,37 @@ func sessionActivityTime(session state.Session) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+func latestWorktreeActivity(path string) (time.Time, error) {
+	if strings.TrimSpace(path) == "" {
+		return time.Time{}, nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return time.Time{}, nil
+		}
+		return time.Time{}, err
+	}
+
+	latest := info.ModTime().UTC()
+	err = filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+		if info.ModTime().After(latest) {
+			latest = info.ModTime().UTC()
+		}
+		return nil
+	})
+	if err != nil {
+		return time.Time{}, err
+	}
+	return latest, nil
 }
 
 func sessionProcessAlive(pid int) bool {
@@ -1598,6 +1726,35 @@ func cleanupResultComment(session state.Session, cleanupErr error) string {
 			fmt.Sprintf("Local artifact cleanup still needs attention: `%s`.", summarizeMaintenanceError(errors.New(fallbackText(session.CleanupError, "unknown cleanup error")))),
 		},
 		Tagline: "Progress over paralysis.",
+	})
+}
+
+func inactiveBlockedCleanupComment(session state.Session, timeout time.Duration, cleanupErr error) string {
+	if cleanupErr == nil && session.CleanupError == "" {
+		return ghcli.FormatProgressComment(ghcli.ProgressComment{
+			Stage:      "Inactive Blocked Session Cleaned Up",
+			Emoji:      "🧹",
+			Percent:    100,
+			ETAMinutes: 1,
+			Items: []string{
+				fmt.Sprintf("No qualifying user comments, session updates, or worktree changes were detected for `%s` longer than `%s`.", session.Branch, timeout),
+				"Vigilante cleaned up the local blocked-session artifacts conservatively.",
+				"Next step: the issue is ready for a future redispatch in a fresh worktree.",
+			},
+			Tagline: "What is left idle grows loud.",
+		})
+	}
+	return ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Blocked",
+		Emoji:      "🛠️",
+		Percent:    85,
+		ETAMinutes: 10,
+		Items: []string{
+			fmt.Sprintf("The blocked session on `%s` exceeded the inactivity timeout of `%s`.", session.Branch, timeout),
+			fmt.Sprintf("Automatic local cleanup failed: `%s`.", summarizeMaintenanceError(errors.New(fallbackText(session.CleanupError, "unknown cleanup error")))),
+			"Next step: fix the local cleanup problem before redispatching the issue.",
+		},
+		Tagline: "A knot is patient until you pull it.",
 	})
 }
 

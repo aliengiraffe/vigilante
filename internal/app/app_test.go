@@ -1454,6 +1454,368 @@ func TestScanOnceReportsNoMatchingRunningSessionForGitHubCleanupRequest(t *testi
 	}
 }
 
+func TestBlockedSessionExceededInactivityTimeoutTreatsUserCommentAsActivity(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 3, 12, 18, 0, 0, 0, time.UTC)
+	old := now.Add(-1 * time.Hour)
+	if err := os.Chtimes(worktreePath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.clock = func() time.Time { return now }
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1/comments": `[{"id":101,"body":"Still blocked on my side.","created_at":"2026-03-12T17:50:00Z","user":{"login":"nicobistolfi"}}]`,
+		},
+	}
+
+	inactive, err := app.blockedSessionExceededInactivityTimeout(context.Background(), state.Session{
+		Repo:         "owner/repo",
+		IssueNumber:  1,
+		Branch:       "vigilante/issue-1",
+		WorktreePath: worktreePath,
+		Status:       state.SessionStatusBlocked,
+		UpdatedAt:    old.Format(time.RFC3339),
+	}, 20*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inactive {
+		t.Fatal("expected recent user comment to prevent inactivity cleanup")
+	}
+}
+
+func TestBlockedSessionExceededInactivityTimeoutTreatsRecentSessionUpdateAsActivity(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 3, 12, 18, 0, 0, 0, time.UTC)
+	old := now.Add(-1 * time.Hour)
+	if err := os.Chtimes(worktreePath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.clock = func() time.Time { return now }
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1/comments": "[]",
+		},
+	}
+
+	inactive, err := app.blockedSessionExceededInactivityTimeout(context.Background(), state.Session{
+		Repo:         "owner/repo",
+		IssueNumber:  1,
+		Branch:       "vigilante/issue-1",
+		WorktreePath: worktreePath,
+		Status:       state.SessionStatusBlocked,
+		UpdatedAt:    now.Add(-10 * time.Minute).Format(time.RFC3339),
+	}, 20*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inactive {
+		t.Fatal("expected recent session update to prevent inactivity cleanup")
+	}
+}
+
+func TestBlockedSessionExceededInactivityTimeoutTreatsRecentWorktreeChangeAsActivity(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 3, 12, 18, 0, 0, 0, time.UTC)
+	old := now.Add(-1 * time.Hour)
+	recent := now.Add(-5 * time.Minute)
+	if err := os.Chtimes(worktreePath, old, old); err != nil {
+		t.Fatal(err)
+	}
+	worktreeFile := filepath.Join(worktreePath, "note.txt")
+	if err := os.WriteFile(worktreeFile, []byte("recent"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(worktreeFile, recent, recent); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.clock = func() time.Time { return now }
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1/comments": "[]",
+		},
+	}
+
+	inactive, err := app.blockedSessionExceededInactivityTimeout(context.Background(), state.Session{
+		Repo:         "owner/repo",
+		IssueNumber:  1,
+		Branch:       "vigilante/issue-1",
+		WorktreePath: worktreePath,
+		Status:       state.SessionStatusBlocked,
+		UpdatedAt:    old.Format(time.RFC3339),
+	}, 20*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inactive {
+		t.Fatal("expected recent worktree change to prevent inactivity cleanup")
+	}
+}
+
+func TestScanOnceCleansUpBlockedSessionAfterDefaultInactivityTimeout(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 3, 12, 18, 0, 0, 0, time.UTC)
+	old := now.Add(-45 * time.Minute)
+	if err := os.Chtimes(worktreePath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.clock = func() time.Time { return now }
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1/comments":                  "[]",
+			"gh api repos/owner/repo/issues/1":                           "{}",
+			"git worktree prune":                                         "ok",
+			"git worktree remove --force " + worktreePath:                "ok",
+			"git worktree list --porcelain":                              "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/main\n",
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-1": "ok",
+			"git branch -D vigilante/issue-1":                            "Deleted branch vigilante/issue-1\n",
+			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Inactive Blocked Session Cleaned Up",
+				Emoji:      "🧹",
+				Percent:    100,
+				ETAMinutes: 1,
+				Items: []string{
+					"No qualifying user comments, session updates, or worktree changes were detected for `vigilante/issue-1` longer than `20m0s`.",
+					"Vigilante cleaned up the local blocked-session artifacts conservatively.",
+					"Next step: the issue is ready for a future redispatch in a fresh worktree.",
+				},
+				Tagline: "What is left idle grows loud.",
+			}): "ok",
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:     repoPath,
+		Repo:         "owner/repo",
+		IssueNumber:  1,
+		IssueTitle:   "first",
+		IssueURL:     "https://github.com/owner/repo/issues/1",
+		Branch:       "vigilante/issue-1",
+		WorktreePath: worktreePath,
+		Status:       state.SessionStatusBlocked,
+		BlockedAt:    old.Format(time.RFC3339),
+		BlockedStage: "issue_execution",
+		BlockedReason: state.BlockedReason{
+			Kind:      "provider_auth",
+			Operation: "codex exec",
+			Summary:   "session expired",
+			Detail:    "session expired",
+		},
+		UpdatedAt: old.Format(time.RFC3339),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+	if sessions[0].Status != state.SessionStatusFailed || sessions[0].CleanupCompletedAt == "" || sessions[0].LastCleanupSource != "blocked_inactivity_timeout" {
+		t.Fatalf("expected blocked session cleanup to complete: %#v", sessions[0])
+	}
+	if sessions[0].BlockedStage != "" || sessions[0].ResumeRequired {
+		t.Fatalf("expected blocked state to be cleared after inactivity cleanup: %#v", sessions[0])
+	}
+}
+
+func TestScanOnceUsesOverriddenBlockedSessionInactivityTimeout(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 3, 12, 18, 0, 0, 0, time.UTC)
+	old := now.Add(-30 * time.Minute)
+	if err := os.Chtimes(worktreePath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.clock = func() time.Time { return now }
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1/comments": "[]",
+			"gh api repos/owner/repo/issues/1":          "{}",
+			"gh api user --jq .login":                   "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveServiceConfig(state.ServiceConfig{BlockedSessionInactivityTimeout: "45m"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:     repoPath,
+		Repo:         "owner/repo",
+		IssueNumber:  1,
+		IssueTitle:   "first",
+		IssueURL:     "https://github.com/owner/repo/issues/1",
+		Branch:       "vigilante/issue-1",
+		WorktreePath: worktreePath,
+		Status:       state.SessionStatusBlocked,
+		BlockedAt:    old.Format(time.RFC3339),
+		BlockedStage: "issue_execution",
+		UpdatedAt:    old.Format(time.RFC3339),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].Status != state.SessionStatusBlocked || sessions[0].CleanupCompletedAt != "" {
+		t.Fatalf("expected overridden timeout to keep session blocked: %#v", sessions[0])
+	}
+}
+
+func TestScanOnceLeavesBlockedSessionVisibleWhenInactivityCleanupFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 3, 12, 18, 0, 0, 0, time.UTC)
+	old := now.Add(-45 * time.Minute)
+	if err := os.Chtimes(worktreePath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.clock = func() time.Time { return now }
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1/comments": "[]",
+			"gh api repos/owner/repo/issues/1":          "{}",
+			"git worktree prune":                        "ok",
+			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Blocked",
+				Emoji:      "🛠️",
+				Percent:    85,
+				ETAMinutes: 10,
+				Items: []string{
+					"The blocked session on `vigilante/issue-1` exceeded the inactivity timeout of `20m0s`.",
+					"Automatic local cleanup failed: `exit status 1`.",
+					"Next step: fix the local cleanup problem before redispatching the issue.",
+				},
+				Tagline: "A knot is patient until you pull it.",
+			}): "ok",
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+		Errors: map[string]error{
+			"git worktree remove --force " + worktreePath: errors.New("exit status 1"),
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:     repoPath,
+		Repo:         "owner/repo",
+		IssueNumber:  1,
+		IssueTitle:   "first",
+		IssueURL:     "https://github.com/owner/repo/issues/1",
+		Branch:       "vigilante/issue-1",
+		WorktreePath: worktreePath,
+		Status:       state.SessionStatusBlocked,
+		BlockedAt:    old.Format(time.RFC3339),
+		BlockedStage: "issue_execution",
+		UpdatedAt:    old.Format(time.RFC3339),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].Status != state.SessionStatusBlocked || sessions[0].CleanupError == "" || sessions[0].LastCleanupSource != "blocked_inactivity_timeout" {
+		t.Fatalf("expected failed inactivity cleanup to leave a visible blocked state: %#v", sessions[0])
+	}
+}
+
 func TestScanOnceSelectsEligibleIssueAndPersistsSession(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))

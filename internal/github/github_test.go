@@ -220,3 +220,18 @@ func TestFindCleanupComment(t *testing.T) {
 		t.Fatalf("expected claimed cleanup comment to be ignored, got: %#v", comment)
 	}
 }
+
+func TestLatestUserCommentTimeIgnoresAutomationComments(t *testing.T) {
+	now := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
+	comments := []IssueComment{
+		{ID: 10, Body: FormatProgressComment(ProgressComment{Stage: "Blocked", Emoji: "🧱", Percent: 80, ETAMinutes: 5, Items: []string{"Agent update."}}), CreatedAt: now.Add(-3 * time.Minute)},
+		{ID: 11, Body: "Can you pick this back up tomorrow?", CreatedAt: now.Add(-2 * time.Minute)},
+		{ID: 12, Body: "## 🕹️ Coding Agent Launched: Codex\n\nWorking branch: `vigilante/issue-129`\n\nImplementation is in progress.", CreatedAt: now.Add(-1 * time.Minute)},
+	}
+
+	got := LatestUserCommentTime(comments)
+	want := now.Add(-2 * time.Minute)
+	if !got.Equal(want) {
+		t.Fatalf("expected latest user comment at %s, got %s", want, got)
+	}
+}
