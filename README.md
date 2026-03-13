@@ -175,7 +175,7 @@ Expected behavior:
 - creates `~/.vigilante/`
 - initializes `watchlist.json`
 - verifies `git`, `gh`, and the selected coding-agent provider CLI
-- verifies the selected provider CLI reports a compatible build-supported version range, currently `>=1.0.0, <2.0.0` for `codex`, `claude`, and `gemini`
+- verifies the selected provider CLI reports a compatible build-supported version range, currently `>=0.114.0, <2.0.0` for `codex` and `>=1.0.0, <2.0.0` for `claude` and `gemini`
 - installs the bundled coding-agent skills for regular runtime use, including any companion files under each skill directory
   - `vigilante-issue-implementation`
   - `vigilante-issue-implementation-on-monorepo`

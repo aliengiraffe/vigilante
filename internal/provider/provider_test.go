@@ -162,6 +162,7 @@ func TestValidateVersionOutputAcceptsSupportedVersions(t *testing.T) {
 		provider string
 		output   string
 	}{
+		{name: "codex current supported 0.x", provider: DefaultID, output: "codex 0.114.0"},
 		{name: "codex", provider: DefaultID, output: "codex 1.2.3"},
 		{name: "claude", provider: ClaudeID, output: "Claude Code v1.4.0"},
 		{name: "gemini", provider: GeminiID, output: "gemini-cli 1.9.9"},
@@ -186,11 +187,11 @@ func TestValidateVersionOutputRejectsTooOldVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = ValidateVersionOutput(selectedProvider, "codex 0.9.9")
+	err = ValidateVersionOutput(selectedProvider, "codex 0.113.9")
 	if err == nil {
 		t.Fatal("expected compatibility error")
 	}
-	for _, want := range []string{"codex CLI version 0.9.9 is incompatible", ">=1.0.0, <2.0.0"} {
+	for _, want := range []string{"codex CLI version 0.113.9 is incompatible", ">=0.114.0, <2.0.0"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("expected error to contain %q, got %q", want, err.Error())
 		}

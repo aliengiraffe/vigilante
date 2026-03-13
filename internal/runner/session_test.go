@@ -22,7 +22,7 @@ func TestRunIssueSessionSuccess(t *testing.T) {
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
-			"codex --version": "codex 1.2.3",
+			"codex --version": "codex 0.114.0",
 			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
 				Stage:      "Vigilante Session Start",
 				Emoji:      "🧢",
@@ -63,7 +63,7 @@ func TestRunIssueSessionFailureCommentsOnIssue(t *testing.T) {
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
-			"codex --version": "codex 1.2.3",
+			"codex --version": "codex 0.114.0",
 			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
 				Stage:      "Vigilante Session Start",
 				Emoji:      "🧢",
@@ -125,7 +125,7 @@ func TestRunConflictResolutionSessionFailureCommentsOnIssue(t *testing.T) {
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
-			"codex --version": "codex 1.2.3",
+			"codex --version": "codex 0.114.0",
 			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
 				Stage:      "Blocked",
 				Emoji:      "🧯",
@@ -264,7 +264,7 @@ func TestRunIssueSessionUsesMonorepoSkillWhenClassified(t *testing.T) {
 	}
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
-			"codex --version": "codex 1.2.3",
+			"codex --version": "codex 0.114.0",
 			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
 				Stage:      "Vigilante Session Start",
 				Emoji:      "🧢",

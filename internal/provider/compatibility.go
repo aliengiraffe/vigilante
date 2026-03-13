@@ -24,7 +24,7 @@ type compatibilityContract struct {
 }
 
 var compatibilityContracts = map[string]compatibilityContract{
-	DefaultID: {minInclusive: "1.0.0", maxExclusive: "2.0.0"},
+	DefaultID: {minInclusive: "0.114.0", maxExclusive: "2.0.0"},
 	ClaudeID:  {minInclusive: "1.0.0", maxExclusive: "2.0.0"},
 	GeminiID:  {minInclusive: "1.0.0", maxExclusive: "2.0.0"},
 }

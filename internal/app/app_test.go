@@ -75,7 +75,7 @@ func TestSetupCreatesStateLayoutAndSkill(t *testing.T) {
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
 		Outputs: map[string]string{
-			"codex --version": "codex 1.2.3",
+			"codex --version": "codex 0.114.0",
 			"gh auth status":  "ok",
 		},
 	}
@@ -197,13 +197,13 @@ func TestWatchUpdatesExistingTarget(t *testing.T) {
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
 		Outputs: map[string]string{
-			"codex --version":                   "codex 1.2.3",
+			"codex --version":                   "codex 0.114.0",
 			"gh auth status":                    "ok",
 			`/bin/zsh -lic printf "%s" "$PATH"`: "/usr/bin:/bin:/Users/test/.local/bin",
 			`/bin/sh -lc PATH="/usr/bin:/bin:/Users/test/.local/bin" command -v 'git'`:   "/usr/bin/git\n",
 			`/bin/sh -lc PATH="/usr/bin:/bin:/Users/test/.local/bin" command -v 'gh'`:    "/usr/bin/gh\n",
 			`/bin/sh -lc PATH="/usr/bin:/bin:/Users/test/.local/bin" command -v 'codex'`: "/Users/test/.local/bin/codex\n",
-			`/bin/sh -lc PATH="/usr/bin:/bin:/Users/test/.local/bin" 'codex' --version`:  "codex 1.2.3\n",
+			`/bin/sh -lc PATH="/usr/bin:/bin:/Users/test/.local/bin" 'codex' --version`:  "codex 0.114.0\n",
 			testutil.Key("launchctl", "unload", launchAgentPath):                         "",
 			testutil.Key("launchctl", "load", launchAgentPath):                           "",
 			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                    "true\n",
