@@ -157,6 +157,19 @@ Expected behavior:
 
 Clean up all running sessions across all watched repositories.
 
+### `vigilante redispatch --repo <owner/name> --issue <n>`
+
+Force a fresh local restart for one watched issue.
+
+Expected behavior:
+
+- requires the repository to already be watched
+- stops any active session for the target issue before redispatching
+- removes the target issue's local worktree plus slugged and legacy local issue branches when safe to delete
+- clears stale local session state for that issue only
+- fails clearly when the issue is not currently eligible for dispatch or an existing remote PR would make a fresh local restart unsafe
+- starts a brand-new implementation session immediately instead of waiting for the next daemon scan
+
 ### `vigilante unwatch <path>`
 
 Remove a repository from the watchlist without deleting the repository itself.
