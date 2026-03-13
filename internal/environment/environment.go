@@ -17,8 +17,9 @@ type Runner interface {
 type ExecRunner struct{}
 
 type LoggingRunner struct {
-	Base Runner
-	Logf func(format string, args ...any)
+	Base             Runner
+	Logf             func(format string, args ...any)
+	LogSuccessOutput bool
 }
 
 func (ExecRunner) Run(ctx context.Context, dir string, name string, args ...string) (string, error) {
@@ -54,7 +55,11 @@ func (r LoggingRunner) Run(ctx context.Context, dir string, name string, args ..
 		if err != nil {
 			r.Logf("command failed cmd=%s err=%v output=%s", commandString(name, args...), err, trimForLog(output))
 		} else {
-			r.Logf("command ok cmd=%s output=%s", commandString(name, args...), trimForLog(output))
+			if r.LogSuccessOutput {
+				r.Logf("command ok cmd=%s output=%s", commandString(name, args...), trimForLog(output))
+			} else {
+				r.Logf("command ok cmd=%s", commandString(name, args...))
+			}
 		}
 	}
 	return output, err

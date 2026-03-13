@@ -70,8 +70,9 @@ func New() *App {
 		env: &environment.Environment{
 			OS: runtime.GOOS,
 			Runner: environment.LoggingRunner{
-				Base: environment.ExecRunner{},
-				Logf: store.AppendDaemonLog,
+				Base:             environment.ExecRunner{},
+				Logf:             store.AppendDaemonLog,
+				LogSuccessOutput: os.Getenv("VIGILANTE_DEBUG_COMMAND_OUTPUT") == "1",
 			},
 		},
 	}
