@@ -79,11 +79,16 @@ func TestRunIssueSessionFailureCommentsOnIssue(t *testing.T) {
 				Emoji:      "🧱",
 				Percent:    25,
 				ETAMinutes: 15,
-				Items: []string{
-					"Repository baseline validation failed before issue implementation began.",
-					"Cause class: `validation_failed`.",
-					"Next step: restore the repository baseline, then run `vigilante resume --repo owner/repo --issue 7` or request resume from GitHub.",
-				},
+				Items: blockedPreflightItems(
+					state.BlockedReason{
+						Kind:    "validation_failed",
+						Summary: "baseline validation failed: go test ./... exit status 1",
+						Detail:  "baseline validation failed: go test ./... exit status 1",
+					},
+					"codex",
+					"",
+					"vigilante resume --repo owner/repo --issue 7",
+				),
 				Tagline: "Strong foundations make calm debugging sessions.",
 			}): "ok",
 		},
@@ -312,6 +317,82 @@ func TestClassifyBlockedFailureDetectsProviderQuota(t *testing.T) {
 	}
 }
 
+func TestBlockedPreflightItemsIncludeSummarizedOutputForValidationFailures(t *testing.T) {
+	items := blockedPreflightItems(
+		state.BlockedReason{
+			Kind:    "validation_failed",
+			Summary: "baseline validation failed: go test ./... exit status 1",
+			Detail:  "line one\nline two",
+		},
+		"codex",
+		"--- FAIL: TestCLIWatch\nwatch command failed\nFAIL\tgithub.com/nicobistolfi/vigilante/internal/app\t0.421s",
+		"vigilante resume --repo owner/repo --issue 7",
+	)
+
+	for _, want := range []string{
+		"Repository baseline validation failed before issue implementation began.",
+		"Cause class: `validation_failed`.",
+		"Failed validation: baseline validation failed: go test ./... exit status 1.",
+		"Relevant preflight output: --- FAIL: TestCLIWatch watch command failed FAIL github.com/nicobistolfi/vigilante/internal/app 0.421s.",
+	} {
+		if !containsLine(items, want) {
+			t.Fatalf("expected items to contain %q, got %#v", want, items)
+		}
+	}
+}
+
+func TestBlockedPreflightItemsBoundLongOutput(t *testing.T) {
+	output := strings.Repeat("noisy log line ", 40)
+
+	items := blockedPreflightItems(
+		state.BlockedReason{
+			Kind:    "validation_failed",
+			Summary: "baseline validation failed: npm test exit status 1",
+		},
+		"codex",
+		output,
+		"vigilante resume --repo owner/repo --issue 7",
+	)
+
+	var relevant string
+	for _, item := range items {
+		if strings.HasPrefix(item, "Relevant preflight output: ") {
+			relevant = item
+			break
+		}
+	}
+	if relevant == "" {
+		t.Fatalf("expected relevant preflight output item, got %#v", items)
+	}
+	if len(relevant) > 320 {
+		t.Fatalf("expected bounded output item, got length %d: %q", len(relevant), relevant)
+	}
+	if !strings.Contains(relevant, "...") {
+		t.Fatalf("expected truncated output marker, got %q", relevant)
+	}
+}
+
+func TestBlockedPreflightItemsSkipOutputWhenEmpty(t *testing.T) {
+	items := blockedPreflightItems(
+		state.BlockedReason{
+			Kind:    "validation_failed",
+			Summary: "baseline validation failed: go test ./... exit status 1",
+		},
+		"codex",
+		"",
+		"vigilante resume --repo owner/repo --issue 7",
+	)
+
+	if !containsLine(items, "Failed validation: baseline validation failed: go test ./... exit status 1.") {
+		t.Fatalf("expected failed validation item, got %#v", items)
+	}
+	for _, item := range items {
+		if strings.HasPrefix(item, "Relevant preflight output: ") {
+			t.Fatalf("did not expect output item for empty preflight output, got %#v", items)
+		}
+	}
+}
+
 func TestAppendSessionLogUsesLocalTimezone(t *testing.T) {
 	originalLocal := time.Local
 	time.Local = time.FixedZone("TEST", -8*60*60)
@@ -358,4 +439,13 @@ func issuePromptCommand(worktreePath string, repo string, repoPath string, issue
 		ghcli.Issue{Number: issueNumber, Title: title, URL: issueURL},
 		state.Session{WorktreePath: worktreePath, Branch: branch, Provider: "codex"},
 	))
+}
+
+func containsLine(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
 }

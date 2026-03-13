@@ -89,12 +89,8 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 			Emoji:      "🧱",
 			Percent:    25,
 			ETAMinutes: 15,
-			Items: []string{
-				blockedPreflightMessage(blocked, selectedProvider.ID()),
-				blocking.CauseLine(blocked),
-				fmt.Sprintf("Next step: restore the repository baseline, then run `%s` or request resume from GitHub.", session.ResumeHint),
-			},
-			Tagline: "Strong foundations make calm debugging sessions.",
+			Items:      blockedPreflightItems(blocked, selectedProvider.ID(), preflightOutput, session.ResumeHint),
+			Tagline:    "Strong foundations make calm debugging sessions.",
 		})
 		_ = ghcli.CommentOnIssue(ctx, env.Runner, target.Repo, issue.Number, body)
 		return session
@@ -221,6 +217,23 @@ func blockedPreflightMessage(blocked state.BlockedReason, providerID string) str
 	return "Repository baseline validation failed before issue implementation began."
 }
 
+func blockedPreflightItems(blocked state.BlockedReason, providerID string, preflightOutput string, resumeHint string) []string {
+	items := []string{
+		blockedPreflightMessage(blocked, providerID),
+		blocking.CauseLine(blocked),
+	}
+	if blocked.Kind == "validation_failed" {
+		if detail := blockedValidationDetail(blocked); detail != "" {
+			items = append(items, fmt.Sprintf("Failed validation: %s.", detail))
+		}
+		if output := summarizePreflightOutput(preflightOutput); output != "" {
+			items = append(items, fmt.Sprintf("Relevant preflight output: %s.", output))
+		}
+	}
+	items = append(items, fmt.Sprintf("Next step: restore the repository baseline, then run `%s` or request resume from GitHub.", resumeHint))
+	return items
+}
+
 func blockedExecutionMessage(blocked state.BlockedReason, providerID string) string {
 	if blocked.Kind == "provider_quota" {
 		return fmt.Sprintf("The `%s` provider hit a usage or subscription limit before the issue implementation completed.", providerID)
@@ -233,6 +246,39 @@ func blockedConflictMessage(blocked state.BlockedReason, prNumber int, branch st
 		return fmt.Sprintf("Conflict resolution for PR #%d on `%s` stopped because provider `%s` hit a usage or subscription limit.", prNumber, branch, providerID)
 	}
 	return fmt.Sprintf("Conflict resolution for PR #%d on `%s` through provider `%s` did not complete.", prNumber, branch, providerID)
+}
+
+func blockedValidationDetail(blocked state.BlockedReason) string {
+	for _, candidate := range []string{blocked.Summary, blocked.Detail} {
+		if text := sanitizeDiagnosticText(candidate, 220); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
+func summarizePreflightOutput(output string) string {
+	return sanitizeDiagnosticText(output, 280)
+}
+
+func sanitizeDiagnosticText(text string, limit int) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	fields := strings.Fields(text)
+	if len(fields) == 0 {
+		return ""
+	}
+	text = strings.Join(fields, " ")
+	text = strings.TrimSpace(strings.TrimRight(text, ".!?"))
+	if len(text) > limit {
+		if limit <= 3 {
+			return text[:limit]
+		}
+		return strings.TrimSpace(text[:limit-3]) + "..."
+	}
+	return text
 }
 
 func appendSessionLog(path string, event string, session state.Session, details string) {
