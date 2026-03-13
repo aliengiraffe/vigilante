@@ -75,7 +75,8 @@ func TestSetupCreatesStateLayoutAndSkill(t *testing.T) {
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
 		Outputs: map[string]string{
-			"gh auth status": "ok",
+			"codex --version": "codex 1.2.3",
+			"gh auth status":  "ok",
 		},
 	}
 
@@ -109,7 +110,8 @@ func TestSetupWithGeminiCreatesGeminiSkillAssets(t *testing.T) {
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "gemini": "/usr/bin/gemini"},
 		Outputs: map[string]string{
-			"gh auth status": "ok",
+			"gemini --version": "gemini 1.7.0",
+			"gh auth status":   "ok",
 		},
 	}
 
@@ -195,11 +197,13 @@ func TestWatchUpdatesExistingTarget(t *testing.T) {
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
 		Outputs: map[string]string{
+			"codex --version":                   "codex 1.2.3",
 			"gh auth status":                    "ok",
 			`/bin/zsh -lic printf "%s" "$PATH"`: "/usr/bin:/bin:/Users/test/.local/bin",
 			`/bin/sh -lc PATH="/usr/bin:/bin:/Users/test/.local/bin" command -v 'git'`:   "/usr/bin/git\n",
 			`/bin/sh -lc PATH="/usr/bin:/bin:/Users/test/.local/bin" command -v 'gh'`:    "/usr/bin/gh\n",
 			`/bin/sh -lc PATH="/usr/bin:/bin:/Users/test/.local/bin" command -v 'codex'`: "/Users/test/.local/bin/codex\n",
+			`/bin/sh -lc PATH="/usr/bin:/bin:/Users/test/.local/bin" 'codex' --version`:  "codex 1.2.3\n",
 			testutil.Key("launchctl", "unload", launchAgentPath):                         "",
 			testutil.Key("launchctl", "load", launchAgentPath):                           "",
 			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                    "true\n",
@@ -254,10 +258,12 @@ func TestWatchWithProviderPersistsClaudeSelection(t *testing.T) {
 	app.stdout = testutil.IODiscard{}
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "claude": "/usr/bin/claude"},
 		Outputs: map[string]string{
 			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                  "true\n",
 			testutil.Key("git", "remote", "get-url", "origin"):                         "git@github.com:nicobistolfi/vigilante.git\n",
 			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): "origin/main\n",
+			"claude --version": "Claude Code 1.4.0",
 		},
 	}
 
@@ -290,10 +296,12 @@ func TestWatchPersistsRepoClassification(t *testing.T) {
 	app.stdout = testutil.IODiscard{}
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "gemini": "/usr/bin/gemini"},
 		Outputs: map[string]string{
 			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                  "true\n",
 			testutil.Key("git", "remote", "get-url", "origin"):                         "git@github.com:nicobistolfi/vigilante.git\n",
 			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): "origin/main\n",
+			"gemini --version": "gemini 1.7.0",
 		},
 	}
 
@@ -343,6 +351,28 @@ func TestWatchWithGeminiProviderPersistsSelection(t *testing.T) {
 	}
 	if len(targets) != 1 || targets[0].Provider != "gemini" {
 		t.Fatalf("expected gemini provider to persist: %#v", targets)
+	}
+}
+
+func TestSetupFailsWhenProviderVersionIsIncompatible(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"codex --version": "codex 2.0.0",
+		},
+	}
+
+	err := app.Setup(context.Background(), false)
+	if err == nil || !strings.Contains(err.Error(), "codex CLI version 2.0.0 is incompatible") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

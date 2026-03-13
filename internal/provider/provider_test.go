@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"strings"
 	"testing"
 
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
@@ -152,6 +153,79 @@ func TestResolveIssueLabelRejectsConflictingProviderLabels(t *testing.T) {
 	}
 	if got := err.Error(); got != "multiple provider labels: codex, cursor" {
 		t.Fatalf("unexpected conflict error: %s", got)
+	}
+}
+
+func TestValidateVersionOutputAcceptsSupportedVersions(t *testing.T) {
+	cases := []struct {
+		name     string
+		provider string
+		output   string
+	}{
+		{name: "codex", provider: DefaultID, output: "codex 1.2.3"},
+		{name: "claude", provider: ClaudeID, output: "Claude Code v1.4.0"},
+		{name: "gemini", provider: GeminiID, output: "gemini-cli 1.9.9"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			selectedProvider, err := Resolve(tc.provider)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := ValidateVersionOutput(selectedProvider, tc.output); err != nil {
+				t.Fatalf("expected version to be accepted, got %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateVersionOutputRejectsTooOldVersion(t *testing.T) {
+	selectedProvider, err := Resolve(DefaultID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = ValidateVersionOutput(selectedProvider, "codex 0.9.9")
+	if err == nil {
+		t.Fatal("expected compatibility error")
+	}
+	for _, want := range []string{"codex CLI version 0.9.9 is incompatible", ">=1.0.0, <2.0.0"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected error to contain %q, got %q", want, err.Error())
+		}
+	}
+}
+
+func TestValidateVersionOutputRejectsTooNewVersion(t *testing.T) {
+	selectedProvider, err := Resolve(ClaudeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = ValidateVersionOutput(selectedProvider, "Claude Code 2.0.0")
+	if err == nil {
+		t.Fatal("expected compatibility error")
+	}
+	if !strings.Contains(err.Error(), "supported: >=1.0.0, <2.0.0") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateVersionOutputRejectsMalformedVersionOutput(t *testing.T) {
+	selectedProvider, err := Resolve(GeminiID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = ValidateVersionOutput(selectedProvider, "gemini version unknown")
+	if err == nil {
+		t.Fatal("expected parse error")
+	}
+	for _, want := range []string{"could not parse gemini CLI version", "supported: >=1.0.0, <2.0.0"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected error to contain %q, got %q", want, err.Error())
+		}
 	}
 }
 

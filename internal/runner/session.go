@@ -34,6 +34,14 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 	session.ProcessID = os.Getpid()
 	session.LastHeartbeatAt = time.Now().UTC().Format(time.RFC3339)
 	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := provider.ValidateRuntimeCompatibility(ctx, env.Runner, selectedProvider); err != nil {
+		session.Status = state.SessionStatusFailed
+		session.LastError = err.Error()
+		session.EndedAt = time.Now().UTC().Format(time.RFC3339)
+		session.UpdatedAt = session.EndedAt
+		appendSessionLog(logPath, "session provider compatibility failed", session, err.Error())
+		return session
+	}
 	startBody := ghcli.FormatProgressComment(ghcli.ProgressComment{
 		Stage:      "Vigilante Session Start",
 		Emoji:      "🧢",
@@ -152,6 +160,10 @@ func RunConflictResolutionSession(ctx context.Context, env *environment.Environm
 	}
 	session.Provider = selectedProvider.ID()
 	appendSessionLog(logPath, "conflict resolution started", session, fmt.Sprintf("pr=%d url=%s", pr.Number, pr.URL))
+	if err := provider.ValidateRuntimeCompatibility(ctx, env.Runner, selectedProvider); err != nil {
+		appendSessionLog(logPath, "conflict resolution provider compatibility failed", session, err.Error())
+		return err
+	}
 
 	invocation, err := selectedProvider.BuildConflictResolutionInvocation(provider.ConflictTask{Target: target, Session: session, PR: pr})
 	if err != nil {

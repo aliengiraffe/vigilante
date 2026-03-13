@@ -22,6 +22,9 @@ func (f FakeRunner) Run(_ context.Context, _ string, name string, args ...string
 	if output, ok := f.Outputs[cmd]; ok {
 		return output, nil
 	}
+	if len(args) == 1 && args[0] == "--version" {
+		return name + " 1.0.0", nil
+	}
 	return "", fmt.Errorf("unexpected command: %s", cmd)
 }
 

@@ -59,6 +59,7 @@ func TestBuildConfigUsesShellPath(t *testing.T) {
 				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" command -v 'git'`:   "/opt/homebrew/bin/git\n",
 				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" command -v 'gh'`:    "/opt/homebrew/bin/gh\n",
 				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" command -v 'codex'`: "/Users/test/.local/bin/codex\n",
+				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" 'codex' --version`:  "codex 1.2.3\n",
 			},
 		},
 	}
@@ -122,6 +123,7 @@ func TestBuildConfigSupportsClaudeProvider(t *testing.T) {
 				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" command -v 'git'`:    "/opt/homebrew/bin/git\n",
 				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" command -v 'gh'`:     "/opt/homebrew/bin/gh\n",
 				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" command -v 'claude'`: "/Users/test/.local/bin/claude\n",
+				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" 'claude' --version`:  "Claude Code 1.4.0\n",
 			},
 		},
 	}
@@ -152,6 +154,7 @@ func TestBuildConfigSupportsGeminiProvider(t *testing.T) {
 				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" command -v 'git'`:    "/opt/homebrew/bin/git\n",
 				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" command -v 'gh'`:     "/opt/homebrew/bin/gh\n",
 				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" command -v 'gemini'`: "/Users/test/.local/bin/gemini\n",
+				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" 'gemini' --version`:  "gemini 1.7.0\n",
 			},
 		},
 	}
@@ -166,5 +169,32 @@ func TestBuildConfigSupportsGeminiProvider(t *testing.T) {
 	}
 	if cfg.PathEnv != "/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" {
 		t.Fatalf("unexpected PATH: %#v", cfg)
+	}
+}
+
+func TestBuildConfigFailsWhenProviderVersionIsIncompatible(t *testing.T) {
+	t.Setenv("HOME", "/Users/test")
+	t.Setenv("SHELL", "/bin/zsh")
+
+	env := &environment.Environment{
+		OS: "darwin",
+		Runner: testutil.FakeRunner{
+			Outputs: map[string]string{
+				`/bin/zsh -lic printf "%s" "$PATH"`: "/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin",
+				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" command -v 'git'`:   "/opt/homebrew/bin/git\n",
+				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" command -v 'gh'`:    "/opt/homebrew/bin/gh\n",
+				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" command -v 'codex'`: "/Users/test/.local/bin/codex\n",
+				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" 'codex' --version`:  "codex 2.0.0\n",
+			},
+		},
+	}
+
+	selectedProvider, err := provider.Resolve(provider.DefaultID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = BuildConfig(context.Background(), env, selectedProvider)
+	if err == nil || !strings.Contains(err.Error(), "codex CLI version 2.0.0 is incompatible") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

@@ -191,6 +191,9 @@ func validateDaemonTooling(ctx context.Context, runner environment.Runner, pathE
 		sort.Strings(missing)
 		return fmt.Errorf("daemon PATH does not resolve required tools: %s", strings.Join(missing, ", "))
 	}
+	if err := validateProviderVersionInPath(ctx, runner, pathEnv, selectedProvider); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -199,6 +202,24 @@ func validateToolInPath(ctx context.Context, runner environment.Runner, pathEnv 
 	command := fmt.Sprintf("PATH=%q command -v %s", pathEnv, shellQuote(tool))
 	_, err := runner.Run(ctx, "", shellPath, "-lc", command)
 	return err
+}
+
+func validateProviderVersionInPath(ctx context.Context, runner environment.Runner, pathEnv string, selectedProvider provider.Provider) error {
+	tool := shellQuote(runtimeTool(selectedProvider))
+	command := fmt.Sprintf("PATH=%q %s --version", pathEnv, tool)
+	output, err := runner.Run(ctx, "", "/bin/sh", "-lc", command)
+	if err != nil {
+		return fmt.Errorf("detect %s CLI version from daemon PATH: %w", runtimeTool(selectedProvider), err)
+	}
+	return provider.ValidateVersionOutput(selectedProvider, output)
+}
+
+func runtimeTool(selectedProvider provider.Provider) string {
+	tools := selectedProvider.RequiredTools()
+	if len(tools) == 0 {
+		return selectedProvider.ID()
+	}
+	return tools[0]
 }
 
 func shellQuote(value string) string {

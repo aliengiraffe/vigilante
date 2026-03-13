@@ -1828,6 +1828,9 @@ func (a *App) ensureTooling(ctx context.Context, selectedProvider provider.Provi
 			return fmt.Errorf("%s is required: %w", tool, err)
 		}
 	}
+	if err := provider.ValidateRuntimeCompatibility(ctx, a.env.Runner, selectedProvider); err != nil {
+		return err
+	}
 	if _, err := a.env.Runner.Run(ctx, "", "gh", "auth", "status"); err != nil {
 		return fmt.Errorf("gh authentication check failed: %w", err)
 	}
