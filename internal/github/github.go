@@ -195,6 +195,29 @@ func ListIssueComments(ctx context.Context, runner environment.Runner, repo stri
 	return comments, nil
 }
 
+func ListIssueCommentsForPolling(ctx context.Context, runner environment.Runner, repo string, number int, purpose string, logf func(format string, args ...any)) ([]IssueComment, error) {
+	output, err := runIssueCommentsCommand(ctx, runner, repo, number)
+	if err != nil {
+		if logf != nil {
+			logf("issue comment poll failed repo=%s issue=%d purpose=%s err=%v output=%s", repo, number, purpose, err, summarizeForLog(output))
+		}
+		return nil, err
+	}
+
+	comments, err := parseIssueComments(output)
+	if err != nil {
+		if logf != nil {
+			logf("issue comment poll parse failed repo=%s issue=%d purpose=%s err=%v output=%s", repo, number, purpose, err, summarizeForLog(output))
+		}
+		return nil, err
+	}
+
+	if logf != nil {
+		logf("issue comment poll repo=%s issue=%d purpose=%s comments=%d", repo, number, purpose, len(comments))
+	}
+	return comments, nil
+}
+
 func AddIssueCommentReaction(ctx context.Context, runner environment.Runner, repo string, commentID int64, content string) error {
 	_, err := runner.Run(
 		ctx,
@@ -265,4 +288,39 @@ func FindPullRequestForBranch(ctx context.Context, runner environment.Runner, re
 
 func issueAPIPath(repo string, number int) string {
 	return "repos/" + repo + "/issues/" + fmt.Sprintf("%d", number)
+}
+
+func runIssueCommentsCommand(ctx context.Context, runner environment.Runner, repo string, number int) (string, error) {
+	path := issueAPIPath(repo, number) + "/comments"
+	switch typed := runner.(type) {
+	case environment.LoggingRunner:
+		return typed.Base.Run(ctx, "", "gh", "api", path)
+	case *environment.LoggingRunner:
+		return typed.Base.Run(ctx, "", "gh", "api", path)
+	default:
+		return runner.Run(ctx, "", "gh", "api", path)
+	}
+}
+
+func parseIssueComments(output string) ([]IssueComment, error) {
+	var comments []IssueComment
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &comments); err != nil {
+		return nil, fmt.Errorf("parse gh issue comments output: %w", err)
+	}
+	sort.Slice(comments, func(i, j int) bool {
+		return comments[i].CreatedAt.Before(comments[j].CreatedAt)
+	})
+	return comments, nil
+}
+
+func summarizeForLog(text string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "<empty>"
+	}
+	const limit = 300
+	if len(text) <= limit {
+		return text
+	}
+	return text[:limit] + "...(truncated)"
 }
