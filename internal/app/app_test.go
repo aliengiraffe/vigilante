@@ -310,7 +310,7 @@ func TestWatchWithProviderPersistsClaudeSelection(t *testing.T) {
 			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                  "true\n",
 			testutil.Key("git", "remote", "get-url", "origin"):                         "git@github.com:nicobistolfi/vigilante.git\n",
 			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): "origin/main\n",
-			"claude --version": "Claude Code 1.4.0",
+			"claude --version": "Claude Code 2.1.3",
 		},
 	}
 
