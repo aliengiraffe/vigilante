@@ -597,6 +597,10 @@ func TestCleanupSessionByIssue(t *testing.T) {
 			"git worktree list --porcelain":                               "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/main\n",
 			"git show-ref --verify --quiet refs/heads/vigilante/issue-44": "ok",
 			"git branch -D vigilante/issue-44":                            "Deleted branch vigilante/issue-44\n",
+			localCleanupCommentCommand("owner/repo", 44, state.Session{
+				Branch:       "vigilante/issue-44",
+				WorktreePath: worktreePath,
+			}): "ok",
 		},
 	}
 	if err := app.state.EnsureLayout(); err != nil {
@@ -632,6 +636,88 @@ func TestCleanupSessionByIssue(t *testing.T) {
 	}
 	if got := stdout.String(); !strings.Contains(got, "cleaned up running session for owner/repo issue #44") {
 		t.Fatalf("unexpected output: %s", got)
+	}
+}
+
+func TestCleanupSessionCommentsNoopForLocalCLIRequest(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			localCleanupNoopCommentCommand("owner/repo", 44): "ok",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions(nil); err != nil {
+		t.Fatal(err)
+	}
+
+	err := app.CleanupSession(context.Background(), "owner/repo", 44, "cli")
+	if err == nil || !strings.Contains(err.Error(), "running session not found") {
+		t.Fatalf("expected not found error, got: %v", err)
+	}
+}
+
+func TestCleanupSessionIgnoresLocalCommentFailure(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-44")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"git worktree prune":                                          "ok",
+			"git worktree remove --force " + worktreePath:                 "ok",
+			"git worktree list --porcelain":                               "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/main\n",
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-44": "ok",
+			"git branch -D vigilante/issue-44":                            "Deleted branch vigilante/issue-44\n",
+		},
+		Errors: map[string]error{
+			localCleanupCommentCommand("owner/repo", 44, state.Session{
+				Branch:       "vigilante/issue-44",
+				WorktreePath: worktreePath,
+			}): errors.New("comment failed"),
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:     repoPath,
+		Repo:         "owner/repo",
+		IssueNumber:  44,
+		Status:       state.SessionStatusRunning,
+		Branch:       "vigilante/issue-44",
+		WorktreePath: worktreePath,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.CleanupSession(context.Background(), "owner/repo", 44, "cli"); err != nil {
+		t.Fatal(err)
+	}
+
+	logData, err := os.ReadFile(app.state.DaemonLogPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logData), "local cleanup result comment failed repo=owner/repo issue=44 err=comment failed") {
+		t.Fatalf("expected cleanup comment failure log, got: %s", logData)
 	}
 }
 
@@ -833,6 +919,201 @@ func TestScanOnceProcessesGitHubCommentResumeRequest(t *testing.T) {
 	}
 	if sessions[0].RecoveredAt == "" {
 		t.Fatalf("expected recovery timestamp to be recorded: %#v", sessions[0])
+	}
+}
+
+func TestResumeSessionCommentsSuccessForLocalCLIRequest(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"codex --version": "codex 1.0.0",
+			issuePromptCommand(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", "vigilante/issue-1"): "done",
+			localResumeSuccessCommentCommand("owner/repo", 1, state.Session{Branch: "vigilante/issue-1"}, "issue_execution", "provider_auth"):   "ok",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:        repoPath,
+		Repo:            "owner/repo",
+		IssueNumber:     1,
+		IssueTitle:      "first",
+		IssueURL:        "https://github.com/owner/repo/issues/1",
+		Branch:          "vigilante/issue-1",
+		WorktreePath:    worktreePath,
+		Status:          state.SessionStatusBlocked,
+		BlockedAt:       "2026-03-11T13:19:12Z",
+		BlockedStage:    "issue_execution",
+		BlockedReason:   state.BlockedReason{Kind: "provider_auth", Operation: "codex exec", Summary: "session expired", Detail: "session expired"},
+		RetryPolicy:     "paused",
+		ResumeRequired:  true,
+		ResumeHint:      "vigilante resume --repo owner/repo --issue 1",
+		UpdatedAt:       "2026-03-11T13:19:12Z",
+		LastHeartbeatAt: "2026-03-11T13:19:12Z",
+		Provider:        "codex",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ResumeSession(context.Background(), "owner/repo", 1, "cli"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResumeSessionCommentsNoopForLocalCLIRequest(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			localResumeNoopCommentCommand("owner/repo", 44): "ok",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions(nil); err != nil {
+		t.Fatal(err)
+	}
+
+	err := app.ResumeSession(context.Background(), "owner/repo", 44, "cli")
+	if err == nil || !strings.Contains(err.Error(), "blocked session not found") {
+		t.Fatalf("expected not found error, got: %v", err)
+	}
+}
+
+func TestResumeSessionCommentsFailureForLocalCLIRequest(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	session := state.Session{
+		RepoPath:        repoPath,
+		Repo:            "owner/repo",
+		IssueNumber:     1,
+		IssueTitle:      "first",
+		IssueURL:        "https://github.com/owner/repo/issues/1",
+		Branch:          "vigilante/issue-1",
+		WorktreePath:    worktreePath,
+		Status:          state.SessionStatusBlocked,
+		BlockedAt:       "2026-03-11T13:19:12Z",
+		BlockedStage:    "issue_execution",
+		BlockedReason:   state.BlockedReason{Kind: "provider_auth", Operation: "codex exec", Summary: "session expired", Detail: "session expired"},
+		RetryPolicy:     "paused",
+		ResumeRequired:  true,
+		ResumeHint:      "vigilante resume --repo owner/repo --issue 1",
+		UpdatedAt:       "2026-03-11T13:19:12Z",
+		LastHeartbeatAt: "2026-03-11T13:19:12Z",
+		Provider:        "codex",
+	}
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"codex --version": "codex 1.0.0",
+			localResumeFailureCommentCommand("owner/repo", 1, failedResumeSession(session), "issue_execution"): "ok",
+		},
+		Errors: map[string]error{
+			issuePromptCommand(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", "vigilante/issue-1"): errors.New("resume run failed"),
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{session}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := app.ResumeSession(context.Background(), "owner/repo", 1, "cli")
+	if err == nil || !strings.Contains(err.Error(), "resume run failed") {
+		t.Fatalf("expected resume failure, got: %v", err)
+	}
+}
+
+func TestResumeSessionIgnoresLocalCommentFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"codex --version": "codex 1.0.0",
+			issuePromptCommand(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", "vigilante/issue-1"): "done",
+		},
+		Errors: map[string]error{
+			localResumeSuccessCommentCommand("owner/repo", 1, state.Session{Branch: "vigilante/issue-1"}, "issue_execution", "provider_auth"): errors.New("comment failed"),
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:        repoPath,
+		Repo:            "owner/repo",
+		IssueNumber:     1,
+		IssueTitle:      "first",
+		IssueURL:        "https://github.com/owner/repo/issues/1",
+		Branch:          "vigilante/issue-1",
+		WorktreePath:    worktreePath,
+		Status:          state.SessionStatusBlocked,
+		BlockedAt:       "2026-03-11T13:19:12Z",
+		BlockedStage:    "issue_execution",
+		BlockedReason:   state.BlockedReason{Kind: "provider_auth", Operation: "codex exec", Summary: "session expired", Detail: "session expired"},
+		RetryPolicy:     "paused",
+		ResumeRequired:  true,
+		ResumeHint:      "vigilante resume --repo owner/repo --issue 1",
+		UpdatedAt:       "2026-03-11T13:19:12Z",
+		LastHeartbeatAt: "2026-03-11T13:19:12Z",
+		Provider:        "codex",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ResumeSession(context.Background(), "owner/repo", 1, "cli"); err != nil {
+		t.Fatal(err)
+	}
+
+	logData, err := os.ReadFile(app.state.DaemonLogPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logData), "local resume result comment failed repo=owner/repo issue=1 err=comment failed") {
+		t.Fatalf("expected resume comment failure log, got: %s", logData)
 	}
 }
 
@@ -3005,6 +3286,33 @@ func sessionStartCommentCommand(repo string, issueNumber int, worktreePath strin
 		},
 		Tagline: "Make it simple, but significant.",
 	})
+}
+
+func localCleanupCommentCommand(repo string, issueNumber int, session state.Session) string {
+	return "gh issue comment --repo " + repo + " " + fmt.Sprintf("%d", issueNumber) + " --body " + localCleanupResultComment(session)
+}
+
+func localCleanupNoopCommentCommand(repo string, issueNumber int) string {
+	return "gh issue comment --repo " + repo + " " + fmt.Sprintf("%d", issueNumber) + " --body " + localCleanupNoopComment()
+}
+
+func localResumeSuccessCommentCommand(repo string, issueNumber int, session state.Session, previousStage string, previousKind string) string {
+	return "gh issue comment --repo " + repo + " " + fmt.Sprintf("%d", issueNumber) + " --body " + localResumeSuccessComment(session, previousStage, previousKind)
+}
+
+func localResumeFailureCommentCommand(repo string, issueNumber int, session state.Session, previousStage string) string {
+	return "gh issue comment --repo " + repo + " " + fmt.Sprintf("%d", issueNumber) + " --body " + localResumeFailureComment(session, previousStage)
+}
+
+func localResumeNoopCommentCommand(repo string, issueNumber int) string {
+	return "gh issue comment --repo " + repo + " " + fmt.Sprintf("%d", issueNumber) + " --body " + localResumeNoopComment()
+}
+
+func failedResumeSession(session state.Session) state.Session {
+	session.Status = state.SessionStatusBlocked
+	session.LastResumeSource = "cli"
+	session.LastError = "resume run failed"
+	return session
 }
 
 func issuePromptCommand(worktreePath string, repo string, repoPath string, issueNumber int, title string, issueURL string, branch string) string {
