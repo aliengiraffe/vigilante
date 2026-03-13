@@ -167,7 +167,7 @@ func TestRunIssueSessionSuccessWithClaudeProvider(t *testing.T) {
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
-			"claude --version": "Claude Code 1.4.0",
+			"claude --version": "Claude Code 2.1.3",
 			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
 				Stage:      "Vigilante Session Start",
 				Emoji:      "🧢",

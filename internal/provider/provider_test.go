@@ -164,7 +164,7 @@ func TestValidateVersionOutputAcceptsSupportedVersions(t *testing.T) {
 	}{
 		{name: "codex current supported 0.x", provider: DefaultID, output: "codex 0.114.0"},
 		{name: "codex", provider: DefaultID, output: "codex 1.2.3"},
-		{name: "claude", provider: ClaudeID, output: "Claude Code v1.4.0"},
+		{name: "claude 2.x", provider: ClaudeID, output: "Claude Code v2.1.3"},
 		{name: "gemini", provider: GeminiID, output: "gemini-cli 1.9.9"},
 	}
 
@@ -204,11 +204,26 @@ func TestValidateVersionOutputRejectsTooNewVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = ValidateVersionOutput(selectedProvider, "Claude Code 2.0.0")
+	err = ValidateVersionOutput(selectedProvider, "Claude Code 3.0.0")
 	if err == nil {
 		t.Fatal("expected compatibility error")
 	}
-	if !strings.Contains(err.Error(), "supported: >=1.0.0, <2.0.0") {
+	if !strings.Contains(err.Error(), "supported: >=2.0.0, <3.0.0") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateVersionOutputRejectsTooOldClaude2Contract(t *testing.T) {
+	selectedProvider, err := Resolve(ClaudeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = ValidateVersionOutput(selectedProvider, "Claude Code 1.9.9")
+	if err == nil {
+		t.Fatal("expected compatibility error")
+	}
+	if !strings.Contains(err.Error(), "supported: >=2.0.0, <3.0.0") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

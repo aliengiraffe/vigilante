@@ -123,7 +123,7 @@ func TestBuildConfigSupportsClaudeProvider(t *testing.T) {
 				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" command -v 'git'`:    "/opt/homebrew/bin/git\n",
 				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" command -v 'gh'`:     "/opt/homebrew/bin/gh\n",
 				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" command -v 'claude'`: "/Users/test/.local/bin/claude\n",
-				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" 'claude' --version`:  "Claude Code 1.4.0\n",
+				`/bin/sh -lc PATH="/opt/homebrew/bin:/Users/test/.local/bin:/usr/bin:/bin" 'claude' --version`:  "Claude Code 2.1.3\n",
 			},
 		},
 	}
