@@ -2797,13 +2797,27 @@ func TestScanOnceBlocksFailedIssueDispatchAndContinuesToNextIssue(t *testing.T) 
 	app := New()
 	app.stdout = &stdout
 	app.stderr = testutil.IODiscard{}
+	blockedSession := blockedIssueSessionForDispatchFailure(
+		state.WatchTarget{Path: repoPath, Repo: "owner/repo"},
+		ghcli.Issue{Number: 1, Title: "first", URL: "https://github.com/owner/repo/issues/1"},
+		"codex",
+		errors.New("exit status 1: worktree add failed"),
+		time.Date(2026, 3, 13, 20, 0, 0, 0, time.UTC),
+	)
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
 		Outputs: map[string]string{
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[]}]`,
 			"git worktree prune": "ok",
-			"git worktree add -b " + branch2 + " " + worktreePath2 + " main":                                                              "ok",
+			"git worktree add -b " + branch2 + " " + worktreePath2 + " main": "ok",
+			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatDispatchFailureComment(ghcli.DispatchFailureComment{
+				Stage:        "dispatch",
+				Summary:      dispatchFailureSummary(blockedSession),
+				Branch:       blockedSession.Branch,
+				WorktreePath: blockedSession.WorktreePath,
+				NextStep:     dispatchFailureNextStep(blockedSession, "dispatch"),
+			}): "ok",
 			sessionStartCommentCommand("owner/repo", 2, worktreePath2, state.Session{Branch: branch2}):                                    "ok",
 			preflightPromptCommand(worktreePath2, "owner/repo", repoPath, 2, "second", "https://github.com/owner/repo/issues/2", branch2): "baseline ok",
 			issuePromptCommand(worktreePath2, "owner/repo", repoPath, 2, "second", "https://github.com/owner/repo/issues/2", branch2):     "done",
@@ -2842,8 +2856,143 @@ func TestScanOnceBlocksFailedIssueDispatchAndContinuesToNextIssue(t *testing.T) 
 	if sessions[0].IssueNumber != 1 || sessions[0].Status != state.SessionStatusBlocked {
 		t.Fatalf("expected first issue to be blocked, got: %#v", sessions[0])
 	}
+	if sessions[0].LastDispatchFailureFingerprint == "" || sessions[0].LastDispatchFailureCommentedAt == "" {
+		t.Fatalf("expected dispatch failure comment tracking: %#v", sessions[0])
+	}
 	if sessions[1].IssueNumber != 2 || sessions[1].Status != state.SessionStatusSuccess {
 		t.Fatalf("expected second issue to succeed, got: %#v", sessions[1])
+	}
+}
+
+func TestScanOnceCommentsOnProviderStartupFailure(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	branch := "vigilante/issue-1-first"
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	var stdout bytes.Buffer
+	app := New()
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+
+	expectedSession := state.Session{
+		RepoPath:     repoPath,
+		Repo:         "owner/repo",
+		Provider:     "codex",
+		IssueNumber:  1,
+		IssueTitle:   "first",
+		IssueURL:     "https://github.com/owner/repo/issues/1",
+		Branch:       branch,
+		WorktreePath: worktreePath,
+		Status:       state.SessionStatusFailed,
+		LastError:    "codex CLI version 2.0.0 is incompatible with this Vigilante build (supported: >=0.114.0, <2.0.0); install a compatible codex CLI version or use a matching Vigilante build",
+	}
+	expectedSession.BlockedReason = classifyBlockedReason("issue_execution", "issue startup", errors.New(expectedSession.LastError))
+
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
+			"git worktree prune": "ok",
+			"git worktree add -b " + branch + " " + worktreePath + " main": "ok",
+			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatDispatchFailureComment(ghcli.DispatchFailureComment{
+				Stage:        "issue_startup",
+				Summary:      dispatchFailureSummary(expectedSession),
+				Branch:       expectedSession.Branch,
+				WorktreePath: expectedSession.WorktreePath,
+				NextStep:     dispatchFailureNextStep(expectedSession, "issue_startup"),
+			}): "ok",
+			"codex --version": "codex 2.0.0",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.waitForSessions()
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+	if sessions[0].Status != state.SessionStatusFailed {
+		t.Fatalf("expected failed session, got: %#v", sessions[0])
+	}
+	if sessions[0].LastDispatchFailureFingerprint == "" || sessions[0].LastDispatchFailureCommentedAt == "" {
+		t.Fatalf("expected startup failure comment tracking: %#v", sessions[0])
+	}
+}
+
+func TestScanOnceSuppressesDuplicateDispatchFailureComment(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	now := time.Date(2026, 3, 13, 20, 0, 0, 0, time.UTC)
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.clock = func() time.Time { return now }
+
+	session := blockedIssueSessionForDispatchFailure(
+		state.WatchTarget{Path: repoPath, Repo: "owner/repo"},
+		ghcli.Issue{Number: 1, Title: "first", URL: "https://github.com/owner/repo/issues/1"},
+		"codex",
+		errors.New("worktree already exists for issue #1"),
+		now,
+	)
+	session.Status = state.SessionStatusFailed
+	session.LastDispatchFailureFingerprint = dispatchFailureFingerprint(session, "dispatch")
+	session.LastDispatchFailureCommentedAt = now.Format(time.RFC3339)
+
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh"},
+		Outputs: map[string]string{
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
+			"git worktree prune": "ok",
+		},
+		Errors: map[string]error{
+			"git worktree add -b vigilante/issue-1-first " + filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1") + " main": errors.New("worktree already exists for issue #1"),
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{session}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+	if sessions[0].LastDispatchFailureCommentedAt != now.Format(time.RFC3339) {
+		t.Fatalf("expected duplicate dispatch comment to be suppressed: %#v", sessions[0])
 	}
 }
 

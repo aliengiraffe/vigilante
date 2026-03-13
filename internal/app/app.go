@@ -540,6 +540,8 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, *target, next.Number, next.Title)
 				if err != nil {
 					session := blockedIssueSessionForDispatchFailure(*target, next, selectedProvider, err, a.clock())
+					previous, _ := findSession(sessions, target.Repo, next.Number)
+					a.commentDispatchFailure(ctx, previous, &session, "dispatch")
 					a.state.AppendDaemonLog("scan repo dispatch blocked repo=%s issue=%d err=%v", target.Repo, next.Number, err)
 					sessions = upsertSession(sessions, session)
 					if err := a.state.SaveSessions(sessions); err != nil {
@@ -836,6 +838,9 @@ func (a *App) launchIssueSession(ctx context.Context, target state.WatchTarget, 
 		if existing, ok := findSession(sessions, target.Repo, issue.Number); ok && existing.LastCleanupSource != "" {
 			a.state.AppendDaemonLog("session result ignored after cleanup repo=%s issue=%d source=%s", target.Repo, issue.Number, existing.LastCleanupSource)
 			return
+		}
+		if previous, _ := findSession(sessions, target.Repo, issue.Number); shouldCommentStartupFailure(result) {
+			a.commentDispatchFailure(ctx, previous, &result, "issue_startup")
 		}
 		sessions = upsertSession(sessions, result)
 		if err := a.state.SaveSessions(sessions); err != nil {
@@ -1733,10 +1738,64 @@ func clearBlockedState(session *state.Session, now time.Time, source string) {
 	session.LastResumeSource = source
 	session.LastResumeFailureFingerprint = ""
 	session.LastResumeFailureCommentedAt = ""
+	session.LastDispatchFailureFingerprint = ""
+	session.LastDispatchFailureCommentedAt = ""
 }
 
 func blockedStateLabel(session state.Session) string {
 	return blocking.StateLabel(session.BlockedReason.Kind)
+}
+
+func dispatchFailureOperation(stage string) string {
+	if strings.TrimSpace(stage) == "dispatch" {
+		return "git worktree add"
+	}
+	return "issue startup"
+}
+
+func dispatchFailureSummary(session state.Session) string {
+	for _, text := range []string{session.BlockedReason.Summary, session.LastError, session.BlockedReason.Detail} {
+		if summary := summarizeText(text); summary != "" {
+			return summary
+		}
+	}
+	return "Vigilante hit a local failure before implementation could proceed."
+}
+
+func dispatchFailureNextStep(session state.Session, stage string) string {
+	resumeHint := fallbackText(session.ResumeHint, fmt.Sprintf("vigilante resume --repo %s --issue %d", session.Repo, session.IssueNumber))
+	lower := strings.ToLower(strings.Join([]string{
+		session.BlockedReason.Operation,
+		session.BlockedReason.Summary,
+		session.BlockedReason.Detail,
+		session.LastError,
+	}, "\n"))
+
+	switch {
+	case strings.Contains(lower, "worktree already exists"):
+		return fmt.Sprintf("clean up the stale worktree with `vigilante cleanup --repo %s --issue %d`, then run `%s` or request resume from GitHub.", session.Repo, session.IssueNumber, resumeHint)
+	case session.BlockedReason.Kind == "provider_auth":
+		return fmt.Sprintf("re-authenticate the local `%s` runtime, then run `%s` or request resume from GitHub.", fallbackText(session.Provider, "coding-agent"), resumeHint)
+	case session.BlockedReason.Kind == "provider_quota":
+		return fmt.Sprintf("restore provider capacity for `%s`, then run `%s` or request resume from GitHub.", fallbackText(session.Provider, "coding-agent"), resumeHint)
+	case session.BlockedReason.Kind == "provider_missing" || session.BlockedReason.Kind == "provider_runtime_error":
+		return fmt.Sprintf("fix the local `%s` runtime, then run `%s` or request resume from GitHub.", fallbackText(session.Provider, "coding-agent"), resumeHint)
+	case strings.TrimSpace(stage) == "dispatch":
+		return fmt.Sprintf("fix the local worktree setup problem, then run `%s` or request resume from GitHub.", resumeHint)
+	default:
+		return fmt.Sprintf("fix the local startup problem, then run `%s` or request resume from GitHub.", resumeHint)
+	}
+}
+
+func dispatchFailureFingerprint(session state.Session, stage string) string {
+	return strings.Join([]string{
+		stage,
+		fallbackText(session.BlockedReason.Kind, "unknown_operator_action_required"),
+		fallbackText(session.BlockedReason.Operation, dispatchFailureOperation(stage)),
+		dispatchFailureSummary(session),
+		strings.TrimSpace(session.Branch),
+		strings.TrimSpace(session.WorktreePath),
+	}, "|")
 }
 
 func maintenanceBlockedMessage(blocked state.BlockedReason, prNumber int, branch string) string {
@@ -1924,6 +1983,42 @@ func summarizeIssueBranchDiff(ctx context.Context, runner environment.Runner, re
 		return fmt.Sprintf("No diff detected between `%s` and `%s`.", baseBranch, issueBranch), nil
 	}
 	return summarizeText(summary), nil
+}
+
+func shouldCommentStartupFailure(session state.Session) bool {
+	return session.Status == state.SessionStatusFailed && strings.TrimSpace(session.LastError) != ""
+}
+
+func (a *App) commentDispatchFailure(ctx context.Context, previous state.Session, session *state.Session, stage string) {
+	if session == nil || strings.TrimSpace(session.Repo) == "" || session.IssueNumber <= 0 {
+		return
+	}
+	if session.BlockedReason == (state.BlockedReason{}) {
+		session.BlockedReason = classifyBlockedReason("issue_execution", dispatchFailureOperation(stage), errors.New(fallbackText(session.LastError, "dispatch failed")))
+	}
+
+	fingerprint := dispatchFailureFingerprint(*session, stage)
+	if fingerprint == previous.LastDispatchFailureFingerprint {
+		session.LastDispatchFailureFingerprint = previous.LastDispatchFailureFingerprint
+		session.LastDispatchFailureCommentedAt = previous.LastDispatchFailureCommentedAt
+		a.state.AppendDaemonLog("dispatch/startup failure comment suppressed repo=%s issue=%d fingerprint=%s", session.Repo, session.IssueNumber, fingerprint)
+		return
+	}
+
+	body := ghcli.FormatDispatchFailureComment(ghcli.DispatchFailureComment{
+		Stage:        stage,
+		Summary:      dispatchFailureSummary(*session),
+		Branch:       session.Branch,
+		WorktreePath: session.WorktreePath,
+		NextStep:     dispatchFailureNextStep(*session, stage),
+	})
+	if err := ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body); err != nil {
+		a.state.AppendDaemonLog("dispatch/startup failure comment failed repo=%s issue=%d stage=%s err=%v", session.Repo, session.IssueNumber, stage, err)
+		return
+	}
+
+	session.LastDispatchFailureFingerprint = fingerprint
+	session.LastDispatchFailureCommentedAt = a.clock().Format(time.RFC3339)
 }
 
 func fallbackText(value string, fallback string) string {
