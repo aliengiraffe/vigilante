@@ -1122,6 +1122,7 @@ func (a *App) CleanupSession(ctx context.Context, repo string, issue int, source
 	}
 
 	found := false
+	var cleanedSession *state.Session
 	for i := range sessions {
 		if sessions[i].Status != state.SessionStatusRunning || sessions[i].Repo != repo || sessions[i].IssueNumber != issue {
 			continue
@@ -1130,13 +1131,20 @@ func (a *App) CleanupSession(ctx context.Context, repo string, issue int, source
 			return err
 		}
 		found = true
+		cleanedSession = &sessions[i]
 		break
 	}
 	if !found {
+		if source == "cli" {
+			a.commentOnIssueBestEffort(ctx, repo, issue, localCleanupNoopComment(), "local cleanup no-op")
+		}
 		return fmt.Errorf("running session not found for %s issue #%d", repo, issue)
 	}
 	if err := a.state.SaveSessions(sessions); err != nil {
 		return err
+	}
+	if source == "cli" && cleanedSession != nil {
+		a.commentOnIssueBestEffort(ctx, repo, issue, localCleanupResultComment(*cleanedSession), "local cleanup result")
 	}
 	fmt.Fprintf(a.stdout, "cleaned up running session for %s issue #%d\n", repo, issue)
 	return nil
@@ -1157,6 +1165,9 @@ func (a *App) ResumeSession(ctx context.Context, repo string, issue int, source 
 		}
 		found = true
 		if sessions[i].Status != state.SessionStatusBlocked {
+			if source == "cli" {
+				a.commentOnIssueBestEffort(ctx, repo, issue, localResumeNoopComment(), "local resume no-op")
+			}
 			return fmt.Errorf("issue #%d in %s is not blocked", issue, repo)
 		}
 		if err := a.resumeBlockedSession(ctx, &sessions[i], source); err != nil {
@@ -1165,6 +1176,9 @@ func (a *App) ResumeSession(ctx context.Context, repo string, issue int, source 
 		break
 	}
 	if !found {
+		if source == "cli" {
+			a.commentOnIssueBestEffort(ctx, repo, issue, localResumeNoopComment(), "local resume no-op")
+		}
 		return fmt.Errorf("blocked session not found for %s issue #%d", repo, issue)
 	}
 	if err := a.state.SaveSessions(sessions); err != nil {
@@ -1254,6 +1268,10 @@ func (a *App) resumeBlockedSession(ctx context.Context, session *state.Session, 
 		blocked := classifyBlockedReason(session.BlockedStage, session.BlockedReason.Operation, err)
 		markSessionBlocked(session, fallbackText(session.BlockedStage, "pr_maintenance"), blocked, a.clock())
 		session.LastError = err.Error()
+		if source == "cli" {
+			a.commentOnIssueBestEffort(ctx, session.Repo, session.IssueNumber, localResumeFailureComment(*session, previousStage), "local resume failure")
+			return err
+		}
 		return a.commentResumeFailure(ctx, session, previousStage)
 	}
 
@@ -1270,11 +1288,19 @@ func (a *App) resumeBlockedSession(ctx context.Context, session *state.Session, 
 		blocked := classifyBlockedReason(session.BlockedStage, session.BlockedReason.Operation, err)
 		markSessionBlocked(session, fallbackText(session.BlockedStage, "pr_maintenance"), blocked, a.clock())
 		session.LastError = err.Error()
+		if source == "cli" {
+			a.commentOnIssueBestEffort(ctx, session.Repo, session.IssueNumber, localResumeFailureComment(*session, previousStage), "local resume failure")
+			return err
+		}
 		return a.commentResumeFailure(ctx, session, previousStage)
 	}
 
 	previousKind := session.BlockedReason.Kind
 	clearBlockedState(session, a.clock(), source)
+	if source == "cli" {
+		a.commentOnIssueBestEffort(ctx, session.Repo, session.IssueNumber, localResumeSuccessComment(*session, previousStage, previousKind), "local resume result")
+		return nil
+	}
 	body := ghcli.FormatProgressComment(ghcli.ProgressComment{
 		Stage:      "Recovered",
 		Emoji:      "🫡",
@@ -1768,6 +1794,101 @@ func inactiveBlockedCleanupComment(session state.Session, timeout time.Duration,
 	})
 }
 
+func localCleanupResultComment(session state.Session) string {
+	if session.CleanupError == "" {
+		return ghcli.FormatProgressComment(ghcli.ProgressComment{
+			Stage:      "Local Cleanup Completed",
+			Emoji:      "🧹",
+			Percent:    100,
+			ETAMinutes: 1,
+			Items: []string{
+				"A local operator ran `vigilante cleanup` for this issue.",
+				fmt.Sprintf("Result: succeeded. Removed the running Vigilante session for `%s`.", session.Branch),
+				fmt.Sprintf("Local worktree artifacts were cleaned up at `%s` when present.", session.WorktreePath),
+			},
+			Tagline: "Operator action recorded.",
+		})
+	}
+	return ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Local Cleanup Attempted",
+		Emoji:      "🛠️",
+		Percent:    100,
+		ETAMinutes: 1,
+		Items: []string{
+			"A local operator ran `vigilante cleanup` for this issue.",
+			fmt.Sprintf("Result: attempted. Removed the running-session blockage for `%s`.", session.Branch),
+			fmt.Sprintf("Local artifact cleanup still needs attention: `%s`.", summarizeMaintenanceError(errors.New(fallbackText(session.CleanupError, "unknown cleanup error")))),
+		},
+		Tagline: "Operator action recorded.",
+	})
+}
+
+func localCleanupNoopComment() string {
+	return ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Local Cleanup Checked",
+		Emoji:      "🧭",
+		Percent:    100,
+		ETAMinutes: 1,
+		Items: []string{
+			"A local operator ran `vigilante cleanup` for this issue.",
+			"Result: no-op. No running Vigilante session matched the request.",
+			"Next step: run `vigilante list --running` locally if dispatch still looks blocked.",
+		},
+		Tagline: "Operator action recorded.",
+	})
+}
+
+func localResumeSuccessComment(session state.Session, previousStage string, previousKind string) string {
+	return ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Local Resume Completed",
+		Emoji:      "🫡",
+		Percent:    92,
+		ETAMinutes: 5,
+		Items: []string{
+			"A local operator ran `vigilante resume` for this issue.",
+			fmt.Sprintf("Result: succeeded. The previous `%s` block was cleared for `%s`.", fallbackText(previousKind, "unknown_operator_action_required"), session.Branch),
+			fmt.Sprintf("Next step: Vigilante resumed `%s` successfully.", fallbackText(previousStage, "issue_execution")),
+		},
+		Tagline: "Operator action recorded.",
+	})
+}
+
+func localResumeFailureComment(session state.Session, previousStage string) string {
+	diagnostic := deterministicResumeFailureDiagnostic(session, previousStage)
+	return ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Local Resume Failed",
+		Emoji:      "🧱",
+		Percent:    100,
+		ETAMinutes: 1,
+		Items: []string{
+			"A local operator ran `vigilante resume` for this issue.",
+			fmt.Sprintf("Result: failed. %s", diagnostic.Step),
+			fmt.Sprintf("Failure type: `%s` (`%s`). %s", diagnostic.Classification, fallbackText(session.BlockedReason.Kind, "unknown_operator_action_required"), diagnostic.NextStep),
+		},
+		Tagline: "Operator action recorded.",
+	})
+}
+
+func localResumeNoopComment() string {
+	return ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Local Resume Checked",
+		Emoji:      "🧭",
+		Percent:    100,
+		ETAMinutes: 1,
+		Items: []string{
+			"A local operator ran `vigilante resume` for this issue.",
+			"Result: no-op. No blocked Vigilante session matched the request.",
+			"Next step: run `vigilante list` locally to inspect the latest session state.",
+		},
+		Tagline: "Operator action recorded.",
+	})
+}
+
+func (a *App) commentOnIssueBestEffort(ctx context.Context, repo string, issue int, body string, purpose string) {
+	if err := ghcli.CommentOnIssue(ctx, a.env.Runner, repo, issue, body); err != nil {
+		a.state.AppendDaemonLog("%s comment failed repo=%s issue=%d err=%v", purpose, repo, issue, err)
+	}
+}
 func fallbackText(value string, fallback string) string {
 	if strings.TrimSpace(value) == "" {
 		return fallback
