@@ -133,7 +133,34 @@ func TestBuildIssuePrompt(t *testing.T) {
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 	prompt := BuildIssuePrompt(target, issue, session)
-	for _, text := range []string{"Use the `vigilante-issue-implementation` skill", "Issue: #12 - Fix bug", "Worktree path: /tmp/worktree", "gh issue comment", "implementation plan", "open a pull request", "Coding Agent Launched: Codex", "10-cell progress bar", "ETA: ~N minutes"} {
+	for _, text := range []string{"Use the `vigilante-issue-implementation` skill", "Repository shape: traditional (defaulted)", "Selected issue implementation skill: vigilante-issue-implementation", "Detected process hints: none detected; default to traditional repo skill", "Issue: #12 - Fix bug", "Worktree path: /tmp/worktree", "gh issue comment", "implementation plan", "open a pull request", "Coding Agent Launched: Codex", "10-cell progress bar", "ETA: ~N minutes"} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q: %s", text, prompt)
+		}
+	}
+}
+
+func TestBuildIssuePromptSelectsMonorepoSkill(t *testing.T) {
+	target := state.WatchTarget{
+		Path:           "/tmp/repo",
+		Repo:           "owner/repo",
+		RepoShape:      "monorepo",
+		WorkspaceFiles: []string{"pnpm-workspace.yaml"},
+		WorkspaceGlobs: []string{"apps/*", "packages/*"},
+		ProjectRoots:   []string{"apps/web", "packages/ui"},
+	}
+	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
+
+	prompt := BuildIssuePrompt(target, issue, session)
+	for _, text := range []string{
+		"Use the `vigilante-issue-implementation-on-monorepo` skill",
+		"Repository shape: monorepo",
+		"Selected issue implementation skill: vigilante-issue-implementation-on-monorepo",
+		"workspace_files=pnpm-workspace.yaml",
+		"workspace_globs=apps/*,packages/*",
+		"project_roots=apps/web,packages/ui",
+	} {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q: %s", text, prompt)
 		}
@@ -212,6 +239,18 @@ func TestBuildIssuePromptForClaudeInlinesSkillInstructions(t *testing.T) {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q: %s", text, prompt)
 		}
+	}
+}
+
+func TestIssueImplementationSkillDefaultsToTraditional(t *testing.T) {
+	if got := IssueImplementationSkill(state.WatchTarget{}); got != VigilanteIssueImplementation {
+		t.Fatalf("unexpected skill: %s", got)
+	}
+}
+
+func TestIssueImplementationSkillUsesMonorepoVariant(t *testing.T) {
+	if got := IssueImplementationSkill(state.WatchTarget{RepoShape: "monorepo"}); got != VigilanteIssueImplementationOnMonorepo {
+		t.Fatalf("unexpected skill: %s", got)
 	}
 }
 

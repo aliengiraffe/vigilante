@@ -86,6 +86,7 @@ func TestSetupCreatesStateLayoutAndSkill(t *testing.T) {
 		filepath.Join(app.state.Root(), "sessions.json"),
 		filepath.Join(app.state.Root(), "logs"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementation, "SKILL.md"),
+		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementationOnMonorepo, "SKILL.md"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteConflictResolution, "SKILL.md"),
 	} {
 		if _, err := os.Stat(path); err != nil {
@@ -134,6 +135,9 @@ func TestWatchListAndUnwatch(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "\"max_parallel_sessions\": 3") {
 		t.Fatalf("expected default max_parallel_sessions in list output: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "\"repo_shape\": \"traditional\"") {
+		t.Fatalf("expected repo classification in list output: %s", stdout.String())
 	}
 
 	if err := app.Unwatch(repoPath); err != nil {

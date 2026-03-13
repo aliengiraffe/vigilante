@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vigilante Monorepo Issue Implementation"
+  short_description: "Implement a Vigilante-dispatched GitHub issue in a monorepo with scoped validation, pushed changes, and a PR"
+  default_prompt: "Use $vigilante-issue-implementation-on-monorepo to implement the assigned issue in the provided worktree, keep changes scoped to the relevant app or package, push the branch, open a PR, comment on the issue as progress is made, and report failures clearly."

@@ -1,9 +1,11 @@
 package provider
 
 import (
+	"strings"
 	"testing"
 
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
+	"github.com/nicobistolfi/vigilante/internal/skill"
 	"github.com/nicobistolfi/vigilante/internal/state"
 )
 
@@ -89,6 +91,25 @@ func TestResolveIssueLabelRejectsConflictingProviderLabels(t *testing.T) {
 	}
 	if got := err.Error(); got != "multiple provider labels: codex, cursor" {
 		t.Fatalf("unexpected conflict error: %s", got)
+	}
+}
+
+func TestCodexBuildIssueInvocationUsesMonorepoSkill(t *testing.T) {
+	invocation, err := codexProvider{}.BuildIssueInvocation(IssueTask{
+		Target: state.WatchTarget{
+			Path:      "/tmp/repo",
+			Repo:      "owner/repo",
+			RepoShape: "monorepo",
+		},
+		Issue:   ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"},
+		Session: state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := invocation.Args[len(invocation.Args)-1]
+	if !strings.Contains(prompt, "Use the `"+skill.VigilanteIssueImplementationOnMonorepo+"` skill for this task.") {
+		t.Fatalf("unexpected prompt: %s", prompt)
 	}
 }
 

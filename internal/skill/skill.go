@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	skillassets "github.com/nicobistolfi/vigilante"
@@ -14,6 +15,7 @@ import (
 )
 
 const VigilanteIssueImplementation = "vigilante-issue-implementation"
+const VigilanteIssueImplementationOnMonorepo = "vigilante-issue-implementation-on-monorepo"
 const VigilanteConflictResolution = "vigilante-conflict-resolution"
 const VigilanteCreateIssue = "vigilante-create-issue"
 
@@ -23,6 +25,7 @@ const RuntimeClaude = "claude"
 func VigilanteSkillNames() []string {
 	return []string{
 		VigilanteIssueImplementation,
+		VigilanteIssueImplementationOnMonorepo,
 		VigilanteConflictResolution,
 		VigilanteCreateIssue,
 	}
@@ -104,15 +107,19 @@ func BuildIssuePrompt(target state.WatchTarget, issue ghcli.Issue, session state
 }
 
 func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue ghcli.Issue, session state.Session) string {
+	selectedSkill := IssueImplementationSkill(target)
 	lines := []string{}
 	if strings.TrimSpace(runtime) == RuntimeClaude {
-		lines = append(lines, InlineSkillHeader(VigilanteIssueImplementation))
+		lines = append(lines, InlineSkillHeader(selectedSkill))
 	} else {
-		lines = append(lines, fmt.Sprintf("Use the `%s` skill for this task.", VigilanteIssueImplementation))
+		lines = append(lines, fmt.Sprintf("Use the `%s` skill for this task.", selectedSkill))
 	}
 	lines = append(lines,
 		fmt.Sprintf("Repository: %s", target.Repo),
 		fmt.Sprintf("Local repository path: %s", target.Path),
+		fmt.Sprintf("Repository shape: %s", issueRepoShape(target)),
+		fmt.Sprintf("Selected issue implementation skill: %s", selectedSkill),
+		fmt.Sprintf("Detected process hints: %s", formatProcessHints(target)),
 		fmt.Sprintf("Issue: #%d - %s", issue.Number, issue.Title),
 		fmt.Sprintf("Issue URL: %s", issue.URL),
 		fmt.Sprintf("Worktree path: %s", session.WorktreePath),
@@ -123,6 +130,13 @@ func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue 
 		"Use the issue as the source of truth for the requested behavior and keep the implementation minimal.",
 	)
 	return strings.Join(lines, "\n")
+}
+
+func IssueImplementationSkill(target state.WatchTarget) string {
+	if strings.TrimSpace(target.RepoShape) == "monorepo" {
+		return VigilanteIssueImplementationOnMonorepo
+	}
+	return VigilanteIssueImplementation
 }
 
 func BuildIssuePreflightPrompt(target state.WatchTarget, issue ghcli.Issue, session state.Session) string {
@@ -164,6 +178,37 @@ func displayProviderName(name string) string {
 		parts[i] = strings.ToUpper(part[:1]) + strings.ToLower(part[1:])
 	}
 	return strings.Join(parts, " ")
+}
+
+func issueRepoShape(target state.WatchTarget) string {
+	shape := strings.TrimSpace(target.RepoShape)
+	if shape == "" {
+		return "traditional (defaulted)"
+	}
+	return shape
+}
+
+func formatProcessHints(target state.WatchTarget) string {
+	parts := []string{}
+	if len(target.WorkspaceFiles) > 0 {
+		parts = append(parts, "workspace_files="+strings.Join(sortedCopy(target.WorkspaceFiles), ","))
+	}
+	if len(target.WorkspaceGlobs) > 0 {
+		parts = append(parts, "workspace_globs="+strings.Join(sortedCopy(target.WorkspaceGlobs), ","))
+	}
+	if len(target.ProjectRoots) > 0 {
+		parts = append(parts, "project_roots="+strings.Join(sortedCopy(target.ProjectRoots), ","))
+	}
+	if len(parts) == 0 {
+		return "none detected; default to traditional repo skill"
+	}
+	return strings.Join(parts, "; ")
+}
+
+func sortedCopy(values []string) []string {
+	out := append([]string(nil), values...)
+	sort.Strings(out)
+	return out
 }
 
 func BuildConflictResolutionPrompt(target state.WatchTarget, session state.Session, pr ghcli.PullRequest) string {

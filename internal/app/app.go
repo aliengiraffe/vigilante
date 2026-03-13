@@ -23,6 +23,7 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/repo"
 	issuerunner "github.com/nicobistolfi/vigilante/internal/runner"
 	"github.com/nicobistolfi/vigilante/internal/service"
+	"github.com/nicobistolfi/vigilante/internal/skill"
 	"github.com/nicobistolfi/vigilante/internal/state"
 	"github.com/nicobistolfi/vigilante/internal/worktree"
 )
@@ -282,6 +283,7 @@ func (a *App) WatchWithProvider(ctx context.Context, rawPath string, daemon bool
 		if target.Path == info.Path {
 			targets[i].Repo = info.Repo
 			targets[i].Branch = info.Branch
+			applyRepoInfo(&targets[i], info)
 			if strings.TrimSpace(targets[i].Provider) == "" {
 				targets[i].Provider = provider.DefaultID
 			}
@@ -315,6 +317,7 @@ func (a *App) WatchWithProvider(ctx context.Context, rawPath string, daemon bool
 			DaemonEnabled: daemon,
 			AddedAt:       a.clock().Format(time.RFC3339),
 		}
+		applyRepoInfo(&target, info)
 		if providerID != "" {
 			target.Provider = providerID
 		}
@@ -338,10 +341,10 @@ func (a *App) WatchWithProvider(ctx context.Context, rawPath string, daemon bool
 	}
 
 	if updated {
-		a.state.AppendDaemonLog("watch updated path=%s repo=%s branch=%s assignee=%s max_parallel=%d daemon=%t", info.Path, info.Repo, info.Branch, assigneeOrDefault(findWatchTargetAssignee(targets, info.Path)), findWatchTargetMaxParallel(targets, info.Path), daemon)
+		a.state.AppendDaemonLog("watch updated path=%s repo=%s branch=%s repo_shape=%s assignee=%s max_parallel=%d daemon=%t", info.Path, info.Repo, info.Branch, info.Classification.Shape, assigneeOrDefault(findWatchTargetAssignee(targets, info.Path)), findWatchTargetMaxParallel(targets, info.Path), daemon)
 		fmt.Fprintln(a.stdout, "updated", info.Path)
 	} else {
-		a.state.AppendDaemonLog("watch added path=%s repo=%s branch=%s assignee=%s max_parallel=%d daemon=%t", info.Path, info.Repo, info.Branch, assigneeOrDefault(assignee), configuredMaxParallel(maxParallel), daemon)
+		a.state.AppendDaemonLog("watch added path=%s repo=%s branch=%s repo_shape=%s assignee=%s max_parallel=%d daemon=%t", info.Path, info.Repo, info.Branch, info.Classification.Shape, assigneeOrDefault(assignee), configuredMaxParallel(maxParallel), daemon)
 		fmt.Fprintln(a.stdout, "watching", info.Path)
 	}
 	return nil
@@ -515,6 +518,13 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				if selectedProvider != target.Provider {
 					a.state.AppendDaemonLog("scan repo issue provider override repo=%s issue=%d provider=%s source=label", target.Repo, next.Number, selectedProvider)
 				}
+				a.state.AppendDaemonLog(
+					"scan repo issue skill selected repo=%s issue=%d repo_shape=%s skill=%s",
+					target.Repo,
+					next.Number,
+					fallbackText(target.RepoShape, "traditional"),
+					skill.IssueImplementationSkill(*target),
+				)
 
 				wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, *target, next.Number, next.Title)
 				if err != nil {
@@ -1875,6 +1885,13 @@ func normalizeLabels(labels []string) []string {
 	}
 	sort.Strings(normalized)
 	return normalized
+}
+
+func applyRepoInfo(target *state.WatchTarget, info repo.Info) {
+	target.RepoShape = info.Classification.Shape
+	target.WorkspaceFiles = append([]string(nil), info.Classification.ProcessHints.WorkspaceFiles...)
+	target.WorkspaceGlobs = append([]string(nil), info.Classification.ProcessHints.WorkspaceGlobs...)
+	target.ProjectRoots = append([]string(nil), info.Classification.ProcessHints.ProjectRoots...)
 }
 
 func findWatchTargetAssignee(targets []state.WatchTarget, path string) string {
