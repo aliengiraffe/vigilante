@@ -30,7 +30,7 @@ Once a folder is registered, `vigilante` should:
 2. Poll or subscribe for open GitHub issues through `gh`.
 3. Select issues that are ready to work and not already being handled.
 4. Launch a headless coding agent session in YOLO mode against a dedicated git worktree.
-5. Use the issue implementation skill from the repo `skills/` folder as part of the execution prompt.
+5. Classify the watched repository and use the matching issue implementation skill from the repo `skills/` folder as part of the execution prompt.
 6. Post progress comments back to the GitHub issue, including session start and failures.
 7. Track watched repositories locally and optionally run as a daemon.
 
@@ -44,12 +44,13 @@ For each watched repository:
    - `git`
    - `gh`
    - the configured coding-agent provider CLI (`codex`, `claude`, or `gemini`)
-4. Ensure the coding-agent issue implementation skill from `skills/vigilante-issue-implementation/` is installed during setup, including its companion agent metadata.
+4. Ensure the bundled issue implementation skills from the repo `skills/` folder are installed during setup, including companion agent metadata.
 5. Query GitHub for open issues.
 6. Determine which issues are eligible for execution.
 7. Create a git worktree for the selected issue.
 8. Launch a supported coding agent headlessly in the worktree with a prompt that:
-   - uses the issue implementation skill
+   - uses the repo-aware issue implementation skill selected from repository classification
+   - passes the detected repo/process context into the prompt
    - instructs the agent to comment on the issue when work starts
    - instructs the agent to keep commenting as progress is made
    - instructs the agent to report errors back to the issue
@@ -172,6 +173,7 @@ Expected behavior:
 - verifies `git`, `gh`, and the selected coding-agent provider CLI
 - installs the bundled coding-agent skills for regular runtime use, including any companion files under each skill directory
   - `vigilante-issue-implementation`
+  - `vigilante-issue-implementation-on-monorepo`
   - `vigilante-conflict-resolution`
   - `vigilante-create-issue`
 - installs or updates the daemon definition when requested

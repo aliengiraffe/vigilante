@@ -1,6 +1,7 @@
 package skill
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -10,10 +11,12 @@ import (
 
 	skillassets "github.com/nicobistolfi/vigilante"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
+	"github.com/nicobistolfi/vigilante/internal/repo"
 	"github.com/nicobistolfi/vigilante/internal/state"
 )
 
 const VigilanteIssueImplementation = "vigilante-issue-implementation"
+const VigilanteIssueImplementationOnMonorepo = "vigilante-issue-implementation-on-monorepo"
 const VigilanteConflictResolution = "vigilante-conflict-resolution"
 const VigilanteCreateIssue = "vigilante-create-issue"
 
@@ -24,6 +27,7 @@ const RuntimeGemini = "gemini"
 func VigilanteSkillNames() []string {
 	return []string{
 		VigilanteIssueImplementation,
+		VigilanteIssueImplementationOnMonorepo,
 		VigilanteConflictResolution,
 		VigilanteCreateIssue,
 	}
@@ -134,15 +138,19 @@ func BuildIssuePrompt(target state.WatchTarget, issue ghcli.Issue, session state
 }
 
 func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue ghcli.Issue, session state.Session) string {
+	selectedSkill := IssueImplementationSkill(target)
 	lines := []string{}
 	if runtimeUsesInlineSkillHeader(runtime) {
-		lines = append(lines, InlineSkillHeader(VigilanteIssueImplementation))
+		lines = append(lines, InlineSkillHeader(selectedSkill))
 	} else {
-		lines = append(lines, fmt.Sprintf("Use the `%s` skill for this task.", VigilanteIssueImplementation))
+		lines = append(lines, fmt.Sprintf("Use the `%s` skill for this task.", selectedSkill))
 	}
 	lines = append(lines,
 		fmt.Sprintf("Repository: %s", target.Repo),
 		fmt.Sprintf("Local repository path: %s", target.Path),
+		fmt.Sprintf("Detected repo shape: %s", normalizedRepoShape(target)),
+		fmt.Sprintf("Selected issue implementation skill: %s", selectedSkill),
+		fmt.Sprintf("Repo process context JSON: %s", repoClassificationJSON(target)),
 		fmt.Sprintf("Issue: #%d - %s", issue.Number, issue.Title),
 		fmt.Sprintf("Issue URL: %s", issue.URL),
 		fmt.Sprintf("Worktree path: %s", session.WorktreePath),
@@ -153,6 +161,44 @@ func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue 
 		"Use the issue as the source of truth for the requested behavior and keep the implementation minimal.",
 	)
 	return strings.Join(lines, "\n")
+}
+
+func IssueImplementationSkill(target state.WatchTarget) string {
+	if normalizedRepoShape(target) == string(repo.ShapeMonorepo) {
+		return VigilanteIssueImplementationOnMonorepo
+	}
+	return VigilanteIssueImplementation
+}
+
+func normalizedRepoShape(target state.WatchTarget) string {
+	shape := strings.TrimSpace(string(target.Classification.Shape))
+	if shape == "" {
+		return string(repo.ShapeTraditional)
+	}
+	return shape
+}
+
+func repoClassificationJSON(target state.WatchTarget) string {
+	classification := target.Classification
+	if strings.TrimSpace(string(classification.Shape)) == "" {
+		classification.Shape = repo.ShapeTraditional
+	}
+	payload := struct {
+		Shape        repo.Shape         `json:"shape"`
+		ProcessHints *repo.ProcessHints `json:"process_hints,omitempty"`
+	}{
+		Shape: classification.Shape,
+	}
+	if len(classification.ProcessHints.WorkspaceConfigFiles) > 0 ||
+		len(classification.ProcessHints.WorkspaceManifestFiles) > 0 ||
+		len(classification.ProcessHints.MultiPackageRoots) > 0 {
+		payload.ProcessHints = &classification.ProcessHints
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return `{"shape":"traditional"}`
+	}
+	return string(data)
 }
 
 func BuildIssuePreflightPrompt(target state.WatchTarget, issue ghcli.Issue, session state.Session) string {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
+	"github.com/nicobistolfi/vigilante/internal/repo"
 	"github.com/nicobistolfi/vigilante/internal/skill"
 	"github.com/nicobistolfi/vigilante/internal/state"
 	"github.com/nicobistolfi/vigilante/internal/testutil"
@@ -232,6 +233,56 @@ func TestRunIssueSessionSuccessWithGeminiProvider(t *testing.T) {
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: "gemini", Status: state.SessionStatusRunning}
 	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	if got.Status != state.SessionStatusSuccess {
+		t.Fatalf("unexpected status: %#v", got)
+	}
+}
+
+func TestRunIssueSessionUsesMonorepoSkillWhenClassified(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	target := state.WatchTarget{
+		Path: "/tmp/repo",
+		Repo: "owner/repo",
+		Classification: repo.Classification{
+			Shape: repo.ShapeMonorepo,
+			ProcessHints: repo.ProcessHints{
+				WorkspaceConfigFiles: []string{"pnpm-workspace.yaml"},
+				MultiPackageRoots:    []string{"apps", "packages"},
+			},
+		},
+	}
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Vigilante Session Start",
+				Emoji:      "🧢",
+				Percent:    20,
+				ETAMinutes: 25,
+				Items: []string{
+					"Vigilante launched this implementation session in `/tmp/worktree`.",
+					"Branch: `vigilante/issue-7`.",
+					"Current stage: handing the issue off to the configured coding agent (`Codex`) for investigation and implementation.",
+				},
+				Tagline: "Make it simple, but significant.",
+			}): "ok",
+			preflightPromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", "vigilante/issue-7"): "baseline ok",
+			testutil.Key("codex", "exec", "--cd", "/tmp/worktree", "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePrompt(
+				target,
+				ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
+				state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: "codex"},
+			)): "done",
+		},
+	}
+	env := &environment.Environment{OS: "darwin", Runner: runner}
+	store := state.NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
+
+	got := RunIssueSession(context.Background(), env, store, target, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
 	}

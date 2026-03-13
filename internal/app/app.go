@@ -23,6 +23,7 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/repo"
 	issuerunner "github.com/nicobistolfi/vigilante/internal/runner"
 	"github.com/nicobistolfi/vigilante/internal/service"
+	"github.com/nicobistolfi/vigilante/internal/skill"
 	"github.com/nicobistolfi/vigilante/internal/state"
 	"github.com/nicobistolfi/vigilante/internal/worktree"
 )
@@ -283,6 +284,7 @@ func (a *App) WatchWithProvider(ctx context.Context, rawPath string, daemon bool
 		if target.Path == info.Path {
 			targets[i].Repo = info.Repo
 			targets[i].Branch = info.Branch
+			targets[i].Classification = info.Classification
 			if strings.TrimSpace(targets[i].Provider) == "" {
 				targets[i].Provider = provider.DefaultID
 			}
@@ -306,15 +308,16 @@ func (a *App) WatchWithProvider(ctx context.Context, rawPath string, daemon bool
 
 	if !updated {
 		target := state.WatchTarget{
-			Path:          info.Path,
-			Repo:          info.Repo,
-			Branch:        info.Branch,
-			Provider:      provider.DefaultID,
-			Labels:        labels,
-			Assignee:      assigneeOrDefault(assignee),
-			MaxParallel:   configuredMaxParallel(maxParallel),
-			DaemonEnabled: daemon,
-			AddedAt:       a.clock().Format(time.RFC3339),
+			Path:           info.Path,
+			Repo:           info.Repo,
+			Branch:         info.Branch,
+			Classification: info.Classification,
+			Provider:       provider.DefaultID,
+			Labels:         labels,
+			Assignee:       assigneeOrDefault(assignee),
+			MaxParallel:    configuredMaxParallel(maxParallel),
+			DaemonEnabled:  daemon,
+			AddedAt:        a.clock().Format(time.RFC3339),
 		}
 		if providerID != "" {
 			target.Provider = providerID
@@ -483,6 +486,8 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				target.Provider = provider.DefaultID
 			}
 			target.MaxParallel = configuredMaxParallel(target.MaxParallel)
+			target.Classification = repo.Classify(target.Path)
+			a.state.AppendDaemonLog("scan repo classified repo=%s shape=%s hints=%d/%d/%d", target.Repo, target.Classification.Shape, len(target.Classification.ProcessHints.WorkspaceConfigFiles), len(target.Classification.ProcessHints.WorkspaceManifestFiles), len(target.Classification.ProcessHints.MultiPackageRoots))
 			a.state.AppendDaemonLog("scan repo start repo=%s path=%s max_parallel=%d", target.Repo, target.Path, target.MaxParallel)
 			issues, err := ghcli.ListOpenIssues(ctx, a.env.Runner, target.Repo, target.Assignee)
 			target.LastScanAt = a.clock().Format(time.RFC3339)
@@ -516,6 +521,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				if selectedProvider != target.Provider {
 					a.state.AppendDaemonLog("scan repo issue provider override repo=%s issue=%d provider=%s source=label", target.Repo, next.Number, selectedProvider)
 				}
+				a.state.AppendDaemonLog("scan repo issue skill repo=%s issue=%d skill=%s shape=%s", target.Repo, next.Number, skill.IssueImplementationSkill(*target), target.Classification.Shape)
 
 				wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, *target, next.Number, next.Title)
 				if err != nil {

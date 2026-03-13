@@ -9,6 +9,7 @@ import (
 
 	skillassets "github.com/nicobistolfi/vigilante"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
+	"github.com/nicobistolfi/vigilante/internal/repo"
 	"github.com/nicobistolfi/vigilante/internal/state"
 )
 
@@ -133,7 +134,37 @@ func TestBuildIssuePrompt(t *testing.T) {
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 	prompt := BuildIssuePrompt(target, issue, session)
-	for _, text := range []string{"Use the `vigilante-issue-implementation` skill", "Issue: #12 - Fix bug", "Worktree path: /tmp/worktree", "gh issue comment", "implementation plan", "open a pull request", "Coding Agent Launched: Codex", "10-cell progress bar", "ETA: ~N minutes"} {
+	for _, text := range []string{"Use the `vigilante-issue-implementation` skill", "Detected repo shape: traditional", `Repo process context JSON: {"shape":"traditional"}`, "Selected issue implementation skill: vigilante-issue-implementation", "Issue: #12 - Fix bug", "Worktree path: /tmp/worktree", "gh issue comment", "implementation plan", "open a pull request", "Coding Agent Launched: Codex", "10-cell progress bar", "ETA: ~N minutes"} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q: %s", text, prompt)
+		}
+	}
+}
+
+func TestBuildIssuePromptSelectsMonorepoSkill(t *testing.T) {
+	target := state.WatchTarget{
+		Path: "/tmp/repo",
+		Repo: "owner/repo",
+		Classification: repo.Classification{
+			Shape: repo.ShapeMonorepo,
+			ProcessHints: repo.ProcessHints{
+				WorkspaceConfigFiles: []string{"pnpm-workspace.yaml"},
+				MultiPackageRoots:    []string{"apps", "packages"},
+			},
+		},
+	}
+	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
+
+	prompt := BuildIssuePrompt(target, issue, session)
+
+	for _, text := range []string{
+		"Use the `vigilante-issue-implementation-on-monorepo` skill",
+		"Detected repo shape: monorepo",
+		"Selected issue implementation skill: vigilante-issue-implementation-on-monorepo",
+		`"workspace_config_files":["pnpm-workspace.yaml"]`,
+		`"multi_package_roots":["apps","packages"]`,
+	} {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q: %s", text, prompt)
 		}
@@ -263,6 +294,12 @@ func TestBuildIssuePromptForGeminiInlinesSkillInstructions(t *testing.T) {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q: %s", text, prompt)
 		}
+	}
+}
+
+func TestIssueImplementationSkillDefaultsToTraditional(t *testing.T) {
+	if got := IssueImplementationSkill(state.WatchTarget{}); got != VigilanteIssueImplementation {
+		t.Fatalf("unexpected default issue skill: %s", got)
 	}
 }
 

@@ -5,16 +5,37 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/nicobistolfi/vigilante/internal/environment"
 )
 
+type Shape string
+
+const (
+	ShapeTraditional Shape = "traditional"
+	ShapeMonorepo    Shape = "monorepo"
+)
+
+type ProcessHints struct {
+	WorkspaceConfigFiles   []string `json:"workspace_config_files,omitempty"`
+	WorkspaceManifestFiles []string `json:"workspace_manifest_files,omitempty"`
+	MultiPackageRoots      []string `json:"multi_package_roots,omitempty"`
+}
+
+type Classification struct {
+	Shape        Shape        `json:"shape"`
+	ProcessHints ProcessHints `json:"process_hints,omitempty"`
+}
+
 type Info struct {
-	Path   string
-	Repo   string
-	Branch string
+	Path           string
+	Repo           string
+	Branch         string
+	Classification Classification
 }
 
 func Discover(ctx context.Context, runner environment.Runner, path string) (Info, error) {
@@ -43,10 +64,45 @@ func Discover(ctx context.Context, runner environment.Runner, path string) (Info
 	}
 
 	return Info{
-		Path:   absPath,
-		Repo:   repo,
-		Branch: branch,
+		Path:           absPath,
+		Repo:           repo,
+		Branch:         branch,
+		Classification: Classify(absPath),
 	}, nil
+}
+
+func Classify(path string) Classification {
+	classification := Classification{Shape: ShapeTraditional}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		absPath = path
+	}
+
+	for _, name := range []string{"pnpm-workspace.yaml", "turbo.json", "nx.json", "lerna.json", "rush.json", "go.work"} {
+		if fileExists(filepath.Join(absPath, name)) {
+			classification.ProcessHints.WorkspaceConfigFiles = append(classification.ProcessHints.WorkspaceConfigFiles, name)
+		}
+	}
+	if packageJSONHasWorkspaces(filepath.Join(absPath, "package.json")) {
+		classification.ProcessHints.WorkspaceManifestFiles = append(classification.ProcessHints.WorkspaceManifestFiles, "package.json")
+	}
+	if cargoTomlHasWorkspace(filepath.Join(absPath, "Cargo.toml")) {
+		classification.ProcessHints.WorkspaceManifestFiles = append(classification.ProcessHints.WorkspaceManifestFiles, "Cargo.toml")
+	}
+	for _, root := range []string{"apps", "packages", "services", "libs", "modules"} {
+		if hasChildDirectories(filepath.Join(absPath, root)) {
+			classification.ProcessHints.MultiPackageRoots = append(classification.ProcessHints.MultiPackageRoots, root)
+		}
+	}
+	if len(classification.ProcessHints.WorkspaceConfigFiles) > 0 ||
+		len(classification.ProcessHints.WorkspaceManifestFiles) > 0 ||
+		len(classification.ProcessHints.MultiPackageRoots) >= 2 {
+		classification.Shape = ShapeMonorepo
+	}
+	slices.Sort(classification.ProcessHints.WorkspaceConfigFiles)
+	slices.Sort(classification.ProcessHints.WorkspaceManifestFiles)
+	slices.Sort(classification.ProcessHints.MultiPackageRoots)
+	return classification
 }
 
 func ParseGitHubRepo(remote string) (string, error) {
@@ -81,4 +137,38 @@ func normalizeGitHubPath(path string) (string, error) {
 		return "", fmt.Errorf("invalid GitHub repo path %q", path)
 	}
 	return parts[0] + "/" + parts[1], nil
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+func hasChildDirectories(path string) bool {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+func packageJSONHasWorkspaces(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), `"workspaces"`)
+}
+
+func cargoTomlHasWorkspace(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), "[workspace]")
 }
