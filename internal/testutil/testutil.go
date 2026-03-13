@@ -22,6 +22,9 @@ func (f FakeRunner) Run(_ context.Context, _ string, name string, args ...string
 	if output, ok := f.Outputs[cmd]; ok {
 		return output, nil
 	}
+	if name == "git" && len(args) == 5 && args[0] == "ls-remote" && args[1] == "--exit-code" && args[2] == "--heads" && args[3] == "origin" {
+		return "", errors.New("exit status 2")
+	}
 	if len(args) == 1 && args[0] == "--version" {
 		return name + " 1.0.0", nil
 	}

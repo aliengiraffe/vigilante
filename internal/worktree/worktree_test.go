@@ -81,6 +81,118 @@ func TestCreateIssueWorktreeReusesExistingLegacyBranch(t *testing.T) {
 	}
 }
 
+func TestCreateIssueWorktreeReusesExistingRemoteBranch(t *testing.T) {
+	home := t.TempDir()
+	repo := filepath.Join(home, "repo")
+	remote := filepath.Join(home, "remote.git")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(remote, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := environment.ExecRunner{}
+	ctx := context.Background()
+	mustRun(t, runner, ctx, remote, "git", "init", "--bare")
+	mustRun(t, runner, ctx, repo, "git", "init", "--initial-branch=main")
+	mustRun(t, runner, ctx, repo, "git", "config", "user.email", "test@example.com")
+	mustRun(t, runner, ctx, repo, "git", "config", "user.name", "Test User")
+	mustRun(t, runner, ctx, repo, "git", "remote", "add", "origin", remote)
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, runner, ctx, repo, "git", "add", "README.md")
+	mustRun(t, runner, ctx, repo, "git", "commit", "-m", "init")
+	mustRun(t, runner, ctx, repo, "git", "push", "-u", "origin", "main")
+	mustRun(t, runner, ctx, repo, "git", "checkout", "-b", "vigilante/issue-9-add-daemon-status-command")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("hello\nremote change\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, runner, ctx, repo, "git", "commit", "-am", "remote work")
+	mustRun(t, runner, ctx, repo, "git", "push", "-u", "origin", "vigilante/issue-9-add-daemon-status-command")
+	mustRun(t, runner, ctx, repo, "git", "checkout", "main")
+	mustRun(t, runner, ctx, repo, "git", "branch", "-D", "vigilante/issue-9-add-daemon-status-command")
+
+	worktree, err := CreateIssueWorktree(ctx, runner, state.WatchTarget{Path: repo, Repo: "owner/repo", Branch: "main"}, 9, "Add daemon status command")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "vigilante/issue-9-add-daemon-status-command"; worktree.Branch != want {
+		t.Fatalf("unexpected branch: got %s want %s", worktree.Branch, want)
+	}
+	if worktree.ReusedRemoteBranch != worktree.Branch {
+		t.Fatalf("expected reused remote branch to be recorded: %#v", worktree)
+	}
+	data, err := os.ReadFile(filepath.Join(worktree.Path, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "hello\nremote change\n" {
+		t.Fatalf("expected worktree to include remote branch content, got %q", string(data))
+	}
+}
+
+func TestCreateIssueWorktreePrefersPrimaryRemoteBranchOverLegacyFallback(t *testing.T) {
+	home := t.TempDir()
+	repo := filepath.Join(home, "repo")
+	remote := filepath.Join(home, "remote.git")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(remote, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := environment.ExecRunner{}
+	ctx := context.Background()
+	mustRun(t, runner, ctx, remote, "git", "init", "--bare")
+	mustRun(t, runner, ctx, repo, "git", "init", "--initial-branch=main")
+	mustRun(t, runner, ctx, repo, "git", "config", "user.email", "test@example.com")
+	mustRun(t, runner, ctx, repo, "git", "config", "user.name", "Test User")
+	mustRun(t, runner, ctx, repo, "git", "remote", "add", "origin", remote)
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, runner, ctx, repo, "git", "add", "README.md")
+	mustRun(t, runner, ctx, repo, "git", "commit", "-m", "init")
+	mustRun(t, runner, ctx, repo, "git", "push", "-u", "origin", "main")
+
+	mustRun(t, runner, ctx, repo, "git", "checkout", "-b", "vigilante/issue-9")
+	if err := os.WriteFile(filepath.Join(repo, "legacy.txt"), []byte("legacy\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, runner, ctx, repo, "git", "add", "legacy.txt")
+	mustRun(t, runner, ctx, repo, "git", "commit", "-m", "legacy work")
+	mustRun(t, runner, ctx, repo, "git", "push", "-u", "origin", "vigilante/issue-9")
+
+	mustRun(t, runner, ctx, repo, "git", "checkout", "main")
+	mustRun(t, runner, ctx, repo, "git", "checkout", "-b", "vigilante/issue-9-add-daemon-status-command")
+	if err := os.WriteFile(filepath.Join(repo, "primary.txt"), []byte("primary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, runner, ctx, repo, "git", "add", "primary.txt")
+	mustRun(t, runner, ctx, repo, "git", "commit", "-m", "primary work")
+	mustRun(t, runner, ctx, repo, "git", "push", "-u", "origin", "vigilante/issue-9-add-daemon-status-command")
+	mustRun(t, runner, ctx, repo, "git", "checkout", "main")
+	mustRun(t, runner, ctx, repo, "git", "branch", "-D", "vigilante/issue-9")
+	mustRun(t, runner, ctx, repo, "git", "branch", "-D", "vigilante/issue-9-add-daemon-status-command")
+
+	worktree, err := CreateIssueWorktree(ctx, runner, state.WatchTarget{Path: repo, Repo: "owner/repo", Branch: "main"}, 9, "Add daemon status command")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "vigilante/issue-9-add-daemon-status-command"; worktree.Branch != want {
+		t.Fatalf("unexpected branch: got %s want %s", worktree.Branch, want)
+	}
+	if _, err := os.Stat(filepath.Join(worktree.Path, "primary.txt")); err != nil {
+		t.Fatalf("expected primary remote branch contents: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(worktree.Path, "legacy.txt")); err == nil {
+		t.Fatalf("did not expect legacy-only file in preferred primary branch worktree")
+	}
+}
+
 func TestIssueTitleSlug(t *testing.T) {
 	tests := []struct {
 		title string

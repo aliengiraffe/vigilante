@@ -162,6 +162,18 @@ func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue 
 		"Use the same GitHub comment structure for every non-terminal milestone comment: a short header with the current stage and optional emoji, a 10-cell progress bar with percentage, an `ETA: ~N minutes` line, 1-3 concise bullets covering what just happened and what is next, and an optional short playful quote or tagline.",
 		"Use the issue as the source of truth for the requested behavior and keep the implementation minimal.",
 	)
+	if strings.TrimSpace(session.ReusedRemoteBranch) != "" {
+		baseBranch := strings.TrimSpace(session.BaseBranch)
+		if baseBranch == "" {
+			baseBranch = "main"
+		}
+		lines = append(lines,
+			fmt.Sprintf("Existing remote issue branch detected: origin/%s", session.ReusedRemoteBranch),
+			fmt.Sprintf("Default branch for comparison: %s", baseBranch),
+			fmt.Sprintf("Diff summary against `%s`: %s", baseBranch, fallbackPromptText(session.BranchDiffSummary, "Diff analysis was requested but no summary was recorded.")),
+			"Continue from the reused branch state and build on top of the existing diff instead of restarting from scratch.",
+		)
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -204,6 +216,14 @@ func repoClassificationJSON(target state.WatchTarget) string {
 }
 
 func BuildIssuePreflightPrompt(target state.WatchTarget, issue ghcli.Issue, session state.Session) string {
+	baselineLine := fmt.Sprintf("Before implementing issue #%d, validate the repository baseline from the current `main`-derived worktree without making any file changes.", issue.Number)
+	if strings.TrimSpace(session.ReusedRemoteBranch) != "" {
+		baseBranch := strings.TrimSpace(session.BaseBranch)
+		if baseBranch == "" {
+			baseBranch = "main"
+		}
+		baselineLine = fmt.Sprintf("Before implementing issue #%d, validate the repository baseline from the current reused issue-branch worktree without making any file changes. This branch is being continued from `origin/%s` and compared against `%s`.", issue.Number, session.ReusedRemoteBranch, baseBranch)
+	}
 	lines := []string{
 		fmt.Sprintf("Repository: %s", target.Repo),
 		fmt.Sprintf("Local repository path: %s", target.Path),
@@ -211,7 +231,7 @@ func BuildIssuePreflightPrompt(target state.WatchTarget, issue ghcli.Issue, sess
 		fmt.Sprintf("Issue URL: %s", issue.URL),
 		fmt.Sprintf("Worktree path: %s", session.WorktreePath),
 		fmt.Sprintf("Branch: %s", session.Branch),
-		fmt.Sprintf("Before implementing issue #%d, validate the repository baseline from the current `main`-derived worktree without making any file changes.", issue.Number),
+		baselineLine,
 		"Detect and run the appropriate build or equivalent verification command for this repository.",
 		"Detect and run the existing test suite when tests are present; if no tests exist, state that clearly and continue.",
 		"If the baseline build or tests fail, exit with a non-zero status and summarize the failing validation in the final output.",
@@ -219,6 +239,13 @@ func BuildIssuePreflightPrompt(target state.WatchTarget, issue ghcli.Issue, sess
 		"Do not implement the issue, do not modify files, do not commit, and do not comment on GitHub during this preflight.",
 	}
 	return strings.Join(lines, "\n")
+}
+
+func fallbackPromptText(value string, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func displayProviderName(name string) string {

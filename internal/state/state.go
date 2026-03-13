@@ -59,8 +59,11 @@ type Session struct {
 	IssueNumber                  int           `json:"issue_number"`
 	IssueTitle                   string        `json:"issue_title,omitempty"`
 	IssueURL                     string        `json:"issue_url,omitempty"`
+	BaseBranch                   string        `json:"base_branch,omitempty"`
 	Branch                       string        `json:"branch"`
 	WorktreePath                 string        `json:"worktree_path"`
+	ReusedRemoteBranch           string        `json:"reused_remote_branch,omitempty"`
+	BranchDiffSummary            string        `json:"branch_diff_summary,omitempty"`
 	Status                       SessionStatus `json:"status"`
 	PullRequestNumber            int           `json:"pull_request_number,omitempty"`
 	PullRequestURL               string        `json:"pull_request_url,omitempty"`

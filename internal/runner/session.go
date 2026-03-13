@@ -42,17 +42,29 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		appendSessionLog(logPath, "session provider compatibility failed", session, err.Error())
 		return session
 	}
+	startItems := []string{
+		fmt.Sprintf("Vigilante launched this implementation session in `%s`.", session.WorktreePath),
+		fmt.Sprintf("Branch: `%s`.", session.Branch),
+		fmt.Sprintf("Current stage: handing the issue off to the configured coding agent (`%s`) for investigation and implementation.", selectedProvider.DisplayName()),
+	}
+	if strings.TrimSpace(session.ReusedRemoteBranch) != "" {
+		baseBranch := strings.TrimSpace(session.BaseBranch)
+		if baseBranch == "" {
+			baseBranch = "main"
+		}
+		startItems = []string{
+			fmt.Sprintf("Vigilante launched this implementation session in `%s` from existing remote branch `origin/%s`.", session.WorktreePath, session.ReusedRemoteBranch),
+			fmt.Sprintf("Diff summary against `%s`: %s", baseBranch, fallbackSessionText(session.BranchDiffSummary, "diff summary unavailable")),
+			fmt.Sprintf("Current stage: handing the issue off to the configured coding agent (`%s`) to continue the existing implementation.", selectedProvider.DisplayName()),
+		}
+	}
 	startBody := ghcli.FormatProgressComment(ghcli.ProgressComment{
 		Stage:      "Vigilante Session Start",
 		Emoji:      "🧢",
 		Percent:    20,
 		ETAMinutes: 25,
-		Items: []string{
-			fmt.Sprintf("Vigilante launched this implementation session in `%s`.", session.WorktreePath),
-			fmt.Sprintf("Branch: `%s`.", session.Branch),
-			fmt.Sprintf("Current stage: handing the issue off to the configured coding agent (`%s`) for investigation and implementation.", selectedProvider.DisplayName()),
-		},
-		Tagline: "Make it simple, but significant.",
+		Items:      startItems,
+		Tagline:    "Make it simple, but significant.",
 	})
 	appendSessionLog(logPath, "session started", session, "")
 	if err := ghcli.CommentOnIssue(ctx, env.Runner, target.Repo, issue.Number, startBody); err != nil {
@@ -149,6 +161,13 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 	session.Status = state.SessionStatusSuccess
 	appendSessionLog(logPath, "session succeeded", session, output)
 	return session
+}
+
+func fallbackSessionText(value string, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func RunConflictResolutionSession(ctx context.Context, env *environment.Environment, store *state.Store, target state.WatchTarget, session state.Session, pr ghcli.PullRequest) error {

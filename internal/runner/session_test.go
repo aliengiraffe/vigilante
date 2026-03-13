@@ -58,6 +58,49 @@ func TestRunIssueSessionSuccess(t *testing.T) {
 	}
 }
 
+func TestRunIssueSessionStartCommentIncludesReusedRemoteBranchContext(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"codex --version": "codex 0.114.0",
+			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Vigilante Session Start",
+				Emoji:      "🧢",
+				Percent:    20,
+				ETAMinutes: 25,
+				Items: []string{
+					"Vigilante launched this implementation session in `/tmp/worktree` from existing remote branch `origin/vigilante/issue-7-demo`.",
+					"Diff summary against `main`: README.md | 2 ++",
+					"Current stage: handing the issue off to the configured coding agent (`Codex`) to continue the existing implementation.",
+				},
+				Tagline: "Make it simple, but significant.",
+			}): "ok",
+			preflightPromptCommandForSession("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7-demo", BaseBranch: "main", ReusedRemoteBranch: "vigilante/issue-7-demo"}):                                                       "baseline ok",
+			issuePromptCommandForSession("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7-demo", BaseBranch: "main", ReusedRemoteBranch: "vigilante/issue-7-demo", BranchDiffSummary: "README.md | 2 ++", Provider: "codex"}): "done",
+		},
+	}
+	env := &environment.Environment{OS: "darwin", Runner: runner}
+	store := state.NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	session := state.Session{
+		RepoPath:           "/tmp/repo",
+		IssueNumber:        7,
+		WorktreePath:       "/tmp/worktree",
+		Branch:             "vigilante/issue-7-demo",
+		BaseBranch:         "main",
+		ReusedRemoteBranch: "vigilante/issue-7-demo",
+		BranchDiffSummary:  "README.md | 2 ++",
+		Status:             state.SessionStatusRunning,
+	}
+	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	if got.Status != state.SessionStatusSuccess {
+		t.Fatalf("unexpected status: %#v", got)
+	}
+}
+
 func TestRunIssueSessionFailureCommentsOnIssue(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
@@ -457,18 +500,26 @@ func TestAppendSessionLogUsesLocalTimezone(t *testing.T) {
 }
 
 func preflightPromptCommand(worktreePath string, repo string, repoPath string, issueNumber int, title string, issueURL string, branch string) string {
+	return preflightPromptCommandForSession(worktreePath, repo, repoPath, issueNumber, title, issueURL, state.Session{WorktreePath: worktreePath, Branch: branch})
+}
+
+func preflightPromptCommandForSession(worktreePath string, repo string, repoPath string, issueNumber int, title string, issueURL string, session state.Session) string {
 	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePreflightPrompt(
 		state.WatchTarget{Path: repoPath, Repo: repo},
 		ghcli.Issue{Number: issueNumber, Title: title, URL: issueURL},
-		state.Session{WorktreePath: worktreePath, Branch: branch},
+		session,
 	))
 }
 
 func issuePromptCommand(worktreePath string, repo string, repoPath string, issueNumber int, title string, issueURL string, branch string) string {
+	return issuePromptCommandForSession(worktreePath, repo, repoPath, issueNumber, title, issueURL, state.Session{WorktreePath: worktreePath, Branch: branch, Provider: "codex"})
+}
+
+func issuePromptCommandForSession(worktreePath string, repo string, repoPath string, issueNumber int, title string, issueURL string, session state.Session) string {
 	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePrompt(
 		state.WatchTarget{Path: repoPath, Repo: repo},
 		ghcli.Issue{Number: issueNumber, Title: title, URL: issueURL},
-		state.Session{WorktreePath: worktreePath, Branch: branch, Provider: "codex"},
+		session,
 	))
 }
 

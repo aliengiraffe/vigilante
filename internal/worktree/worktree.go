@@ -14,8 +14,9 @@ import (
 )
 
 type Worktree struct {
-	Path   string
-	Branch string
+	Path               string
+	Branch             string
+	ReusedRemoteBranch string
 }
 
 var nonAlnumPattern = regexp.MustCompile(`[^a-z0-9]+`)
@@ -34,16 +35,34 @@ func CreateIssueWorktree(ctx context.Context, runner environment.Runner, target 
 		return Worktree{}, err
 	}
 
-	args := []string{"worktree", "add", "-b", branch, path, target.Branch}
+	for _, candidate := range IssueBranchCandidates(issueNumber, issueTitle) {
+		exists, err := remoteBranchExistsWithError(ctx, runner, target.Path, candidate)
+		if err != nil {
+			return Worktree{}, err
+		}
+		if !exists {
+			continue
+		}
+		if _, err := runner.Run(ctx, target.Path, "git", "fetch", "origin", candidate+":"+candidate); err != nil {
+			return Worktree{}, fmt.Errorf("prepare remote issue branch %q: %w", candidate, err)
+		}
+		if _, err := runner.Run(ctx, target.Path, "git", "worktree", "add", path, candidate); err != nil {
+			return Worktree{}, fmt.Errorf("checkout remote issue branch %q into worktree: %w", candidate, err)
+		}
+		return Worktree{Path: path, Branch: candidate, ReusedRemoteBranch: candidate}, nil
+	}
+
 	for _, candidate := range IssueBranchCandidates(issueNumber, issueTitle) {
 		if branchExists(ctx, runner, target.Path, candidate) {
 			branch = candidate
-			args = []string{"worktree", "add", path, branch}
-			break
+			if _, err := runner.Run(ctx, target.Path, "git", "worktree", "add", path, branch); err != nil {
+				return Worktree{}, err
+			}
+			return Worktree{Path: path, Branch: branch}, nil
 		}
 	}
 
-	if _, err := runner.Run(ctx, target.Path, "git", args...); err != nil {
+	if _, err := runner.Run(ctx, target.Path, "git", "worktree", "add", "-b", branch, path, target.Branch); err != nil {
 		return Worktree{}, err
 	}
 	return Worktree{Path: path, Branch: branch}, nil
@@ -138,6 +157,17 @@ func branchExistsWithError(ctx context.Context, runner environment.Runner, repoP
 		return true, nil
 	}
 	if strings.Contains(err.Error(), "exit status 1") {
+		return false, nil
+	}
+	return false, err
+}
+
+func remoteBranchExistsWithError(ctx context.Context, runner environment.Runner, repoPath string, branch string) (bool, error) {
+	_, err := runner.Run(ctx, repoPath, "git", "ls-remote", "--exit-code", "--heads", "origin", branch)
+	if err == nil {
+		return true, nil
+	}
+	if strings.Contains(err.Error(), "exit status 1") || strings.Contains(err.Error(), "exit status 2") {
 		return false, nil
 	}
 	return false, err

@@ -141,6 +141,30 @@ func TestBuildIssuePrompt(t *testing.T) {
 	}
 }
 
+func TestBuildIssuePromptIncludesReusedRemoteBranchContext(t *testing.T) {
+	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}
+	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	session := state.Session{
+		WorktreePath:       "/tmp/worktree",
+		Branch:             "vigilante/issue-12-fix-bug",
+		BaseBranch:         "main",
+		ReusedRemoteBranch: "vigilante/issue-12-fix-bug",
+		BranchDiffSummary:  "README.md | 2 ++",
+		Provider:           "Codex",
+	}
+	prompt := BuildIssuePrompt(target, issue, session)
+	for _, text := range []string{
+		"Existing remote issue branch detected: origin/vigilante/issue-12-fix-bug",
+		"Default branch for comparison: main",
+		"Diff summary against `main`: README.md | 2 ++",
+		"Continue from the reused branch state",
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q: %s", text, prompt)
+		}
+	}
+}
+
 func TestVigilanteSkillNamesIncludesLocalServiceDependencies(t *testing.T) {
 	found := false
 	for _, name := range VigilanteSkillNames() {
@@ -190,6 +214,27 @@ func TestBuildIssuePreflightPrompt(t *testing.T) {
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 	prompt := BuildIssuePreflightPrompt(target, issue, session)
 	for _, text := range []string{"Repository: owner/repo", "Issue: #12 - Fix bug", "`main`-derived worktree", "build or equivalent verification command", "existing test suite", "Do not implement the issue", "do not comment on GitHub"} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q: %s", text, prompt)
+		}
+	}
+}
+
+func TestBuildIssuePreflightPromptForReusedRemoteBranch(t *testing.T) {
+	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
+	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	session := state.Session{
+		WorktreePath:       "/tmp/worktree",
+		Branch:             "vigilante/issue-12-fix-bug",
+		BaseBranch:         "main",
+		ReusedRemoteBranch: "vigilante/issue-12-fix-bug",
+	}
+	prompt := BuildIssuePreflightPrompt(target, issue, session)
+	for _, text := range []string{
+		"reused issue-branch worktree",
+		"origin/vigilante/issue-12-fix-bug",
+		"compared against `main`",
+	} {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q: %s", text, prompt)
 		}

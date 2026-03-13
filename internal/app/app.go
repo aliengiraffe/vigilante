@@ -548,22 +548,46 @@ func (a *App) ScanOnce(ctx context.Context) error {
 					fmt.Fprintf(a.stdout, "repo: %s blocked issue #%d: %s\n", target.Repo, next.Number, summarizeText(err.Error()))
 					continue
 				}
-				a.state.AppendDaemonLog("scan repo worktree ready repo=%s issue=%d path=%s branch=%s", target.Repo, next.Number, wt.Path, wt.Branch)
+				a.state.AppendDaemonLog("scan repo worktree ready repo=%s issue=%d path=%s branch=%s reused_remote=%t", target.Repo, next.Number, wt.Path, wt.Branch, wt.ReusedRemoteBranch != "")
+
+				diffSummary := ""
+				if strings.TrimSpace(wt.ReusedRemoteBranch) != "" {
+					diffSummary, err = summarizeIssueBranchDiff(ctx, a.env.Runner, target.Path, target.Branch, wt.Branch)
+					if err != nil {
+						_ = worktree.CleanupIssueArtifacts(ctx, a.env.Runner, target.Path, wt.Path, wt.Branch)
+						session := blockedIssueSessionForDispatchFailure(*target, next, selectedProvider, fmt.Errorf("analyze reused remote issue branch %q against %q: %w", wt.Branch, target.Branch, err), a.clock())
+						session.Branch = wt.Branch
+						session.BaseBranch = target.Branch
+						session.WorktreePath = wt.Path
+						session.ReusedRemoteBranch = wt.ReusedRemoteBranch
+						a.state.AppendDaemonLog("scan repo dispatch blocked repo=%s issue=%d branch=%s err=%v", target.Repo, next.Number, wt.Branch, err)
+						sessions = upsertSession(sessions, session)
+						if err := a.state.SaveSessions(sessions); err != nil {
+							return err
+						}
+						fmt.Fprintf(a.stdout, "repo: %s blocked issue #%d: %s\n", target.Repo, next.Number, summarizeText(session.LastError))
+						continue
+					}
+					a.state.AppendDaemonLog("scan repo reused remote issue branch repo=%s issue=%d branch=%s base=%s diff=%s", target.Repo, next.Number, wt.Branch, target.Branch, summarizeText(diffSummary))
+				}
 
 				session := state.Session{
-					RepoPath:        target.Path,
-					Repo:            target.Repo,
-					Provider:        selectedProvider,
-					IssueNumber:     next.Number,
-					IssueTitle:      next.Title,
-					IssueURL:        next.URL,
-					Branch:          wt.Branch,
-					WorktreePath:    wt.Path,
-					Status:          state.SessionStatusRunning,
-					ProcessID:       os.Getpid(),
-					StartedAt:       a.clock().Format(time.RFC3339),
-					LastHeartbeatAt: a.clock().Format(time.RFC3339),
-					UpdatedAt:       a.clock().Format(time.RFC3339),
+					RepoPath:           target.Path,
+					Repo:               target.Repo,
+					Provider:           selectedProvider,
+					IssueNumber:        next.Number,
+					IssueTitle:         next.Title,
+					IssueURL:           next.URL,
+					BaseBranch:         target.Branch,
+					Branch:             wt.Branch,
+					WorktreePath:       wt.Path,
+					ReusedRemoteBranch: wt.ReusedRemoteBranch,
+					BranchDiffSummary:  diffSummary,
+					Status:             state.SessionStatusRunning,
+					ProcessID:          os.Getpid(),
+					StartedAt:          a.clock().Format(time.RFC3339),
+					LastHeartbeatAt:    a.clock().Format(time.RFC3339),
+					UpdatedAt:          a.clock().Format(time.RFC3339),
 				}
 				sessions = upsertSession(sessions, session)
 				if err := a.state.SaveSessions(sessions); err != nil {
@@ -1889,6 +1913,19 @@ func (a *App) commentOnIssueBestEffort(ctx context.Context, repo string, issue i
 		a.state.AppendDaemonLog("%s comment failed repo=%s issue=%d err=%v", purpose, repo, issue, err)
 	}
 }
+
+func summarizeIssueBranchDiff(ctx context.Context, runner environment.Runner, repoPath string, baseBranch string, issueBranch string) (string, error) {
+	output, err := runner.Run(ctx, repoPath, "git", "diff", "--stat", baseBranch+"..."+issueBranch)
+	if err != nil {
+		return "", err
+	}
+	summary := strings.TrimSpace(output)
+	if summary == "" {
+		return fmt.Sprintf("No diff detected between `%s` and `%s`.", baseBranch, issueBranch), nil
+	}
+	return summarizeText(summary), nil
+}
+
 func fallbackText(value string, fallback string) string {
 	if strings.TrimSpace(value) == "" {
 		return fallback
