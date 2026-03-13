@@ -38,4 +38,4 @@ tasks:
     desc: Refresh the installed daemon or service definition
     deps: [install]
     cmds:
-      - '{{.INSTALL_PATH}} setup -d'
+      - ./scripts/setup-daemon.sh

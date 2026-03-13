@@ -195,7 +195,7 @@ Primary tasks:
 - `task install` copies the built binary to `~/.local/bin/vigilante`
 - `task setup` runs `./vigilante setup`
 - `task install-setup` runs `~/.local/bin/vigilante setup`
-- `task setup-daemon` runs `~/.local/bin/vigilante setup -d`
+- `task setup-daemon` runs a small wrapper around `~/.local/bin/vigilante setup -d` that retries once on macOS after cleaning up an existing `launchd` agent
 
 Recommended loop:
 
@@ -233,6 +233,8 @@ task install-setup
 ```sh
 task setup-daemon
 ```
+
+On macOS, `task setup-daemon` now performs one explicit recovery attempt when an existing `com.vigilante.agent` launch agent is already present. If the first refresh fails, the task cleans up the existing launch agent, retries once, and prints a short manual `launchctl bootout ...` hint if recovery still fails.
 
 Notes:
 
