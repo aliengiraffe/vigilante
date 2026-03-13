@@ -169,7 +169,7 @@ func TestWatchListAndUnwatch(t *testing.T) {
 	if !strings.Contains(stdout.String(), "\"assignee\": \"me\"") {
 		t.Fatalf("expected default assignee in list output: %s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "\"max_parallel_sessions\": 3") {
+	if !strings.Contains(stdout.String(), "\"max_parallel_sessions\": 0") {
 		t.Fatalf("expected default max_parallel_sessions in list output: %s", stdout.String())
 	}
 
@@ -240,8 +240,55 @@ func TestWatchUpdatesExistingTarget(t *testing.T) {
 	if targets[0].Assignee != "nicobistolfi" {
 		t.Fatalf("expected assignee to be preserved: %#v", targets[0])
 	}
-	if targets[0].MaxParallel != 3 {
-		t.Fatalf("expected max_parallel_sessions to be preserved: %#v", targets[0])
+	if targets[0].MaxParallel != 0 {
+		t.Fatalf("expected explicit zero max_parallel_sessions to update target to unlimited: %#v", targets[0])
+	}
+}
+
+func TestWatchCommandWithoutMaxParallelPreservesExistingTargetValue(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                  "true\n",
+			testutil.Key("git", "remote", "get-url", "origin"):                         "git@github.com:nicobistolfi/vigilante.git\n",
+			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): "origin/main\n",
+		},
+	}
+
+	if err := app.Watch(context.Background(), repoPath, false, nil, "", 3); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.runCommand(context.Background(), []string{"watch", repoPath}); err != nil {
+		t.Fatal(err)
+	}
+
+	targets, err := app.state.LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].MaxParallel != 3 {
+		t.Fatalf("expected omitted max_parallel flag to preserve existing value: %#v", targets)
+	}
+}
+
+func TestWatchRejectsNegativeMaxParallel(t *testing.T) {
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+
+	err := app.runCommand(context.Background(), []string{"watch", "--max-parallel", "-1", "/tmp/repo"})
+	if err == nil || err.Error() != "max parallel must be at least 0" {
+		t.Fatalf("expected negative max_parallel rejection, got %v", err)
 	}
 }
 
@@ -2150,6 +2197,70 @@ func TestScanOnceWithMaxParallelOnePreservesSerialBehavior(t *testing.T) {
 	}
 	if len(sessions) != 1 || sessions[0].IssueNumber != 1 || sessions[0].Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+}
+
+func TestScanOnceWithUnlimitedMaxParallelStartsAllEligibleIssues(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath1 := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	worktreePath2 := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-2")
+	worktreePath3 := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-3")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	var stdout bytes.Buffer
+	app := New()
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[]},{"number":3,"title":"third","createdAt":"2026-03-11T12:00:00Z","url":"https://github.com/owner/repo/issues/3","labels":[]}]`,
+			"git worktree prune": "ok",
+			"git worktree add -b vigilante/issue-1-first " + worktreePath1 + " main":                                                                         "ok",
+			"git worktree add -b vigilante/issue-2-second " + worktreePath2 + " main":                                                                        "ok",
+			"git worktree add -b vigilante/issue-3-third " + worktreePath3 + " main":                                                                         "ok",
+			sessionStartCommentCommand("owner/repo", 1, worktreePath1, "vigilante/issue-1-first"):                                                            "ok",
+			sessionStartCommentCommand("owner/repo", 2, worktreePath2, "vigilante/issue-2-second"):                                                           "ok",
+			sessionStartCommentCommand("owner/repo", 3, worktreePath3, "vigilante/issue-3-third"):                                                            "ok",
+			preflightPromptCommand(worktreePath1, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", "vigilante/issue-1-first"):   "baseline ok",
+			preflightPromptCommand(worktreePath2, "owner/repo", repoPath, 2, "second", "https://github.com/owner/repo/issues/2", "vigilante/issue-2-second"): "baseline ok",
+			preflightPromptCommand(worktreePath3, "owner/repo", repoPath, 3, "third", "https://github.com/owner/repo/issues/3", "vigilante/issue-3-third"):   "baseline ok",
+			issuePromptCommand(worktreePath1, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", "vigilante/issue-1-first"):       "done",
+			issuePromptCommand(worktreePath2, "owner/repo", repoPath, 2, "second", "https://github.com/owner/repo/issues/2", "vigilante/issue-2-second"):     "done",
+			issuePromptCommand(worktreePath3, "owner/repo", repoPath, 3, "third", "https://github.com/owner/repo/issues/3", "vigilante/issue-3-third"):       "done",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me", MaxParallel: 0}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.waitForSessions()
+
+	got := stdout.String()
+	if !strings.Contains(got, "repo: owner/repo started issue #1 in "+worktreePath1) || !strings.Contains(got, "repo: owner/repo started issue #2 in "+worktreePath2) || !strings.Contains(got, "repo: owner/repo started issue #3 in "+worktreePath3) {
+		t.Fatalf("unexpected output: %s", got)
+	}
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 3 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+	for _, session := range sessions {
+		if session.Status != state.SessionStatusSuccess {
+			t.Fatalf("expected successful sessions: %#v", sessions)
+		}
 	}
 }
 

@@ -28,7 +28,7 @@ type WatchTarget struct {
 	AddedAt        string              `json:"added_at,omitempty"`
 }
 
-const DefaultMaxParallelSessions = 3
+const DefaultMaxParallelSessions = 0
 const DefaultBlockedSessionInactivityTimeout = 20 * time.Minute
 
 type ServiceConfig struct {
@@ -237,7 +237,10 @@ func (s *Store) SaveServiceConfig(config ServiceConfig) error {
 }
 
 func normalizeMaxParallelSessions(value int) int {
-	if value < 1 {
+	if value < 0 {
+		return 1
+	}
+	if value == 0 {
 		return DefaultMaxParallelSessions
 	}
 	return value

@@ -31,6 +31,7 @@ import (
 const defaultScanInterval = 1 * time.Minute
 const defaultAssigneeFilter = "me"
 const defaultStalledSessionThreshold = 10 * time.Minute
+const unsetMaxParallel = -2147483648
 
 type App struct {
 	stdout io.Writer
@@ -111,7 +112,7 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		var labels stringListFlag
 		fs.Var(&labels, "label", "allow only issues with this label; repeatable")
 		assignee := fs.String("assignee", "", "issue assignee filter (defaults to me)")
-		maxParallel := fs.Int("max-parallel", 0, "maximum concurrent issue sessions for this repository")
+		maxParallel := fs.Int("max-parallel", 0, "maximum concurrent issue sessions for this repository (0 = unlimited)")
 		selectedProvider := fs.String("provider", "", "coding agent provider")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
@@ -119,7 +120,13 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		if fs.NArg() != 1 {
 			return errors.New("usage: vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] [--provider value] <path>")
 		}
-		return a.WatchWithProvider(ctx, fs.Arg(0), *daemon, labels, *assignee, *maxParallel, *selectedProvider)
+		parsedMaxParallel := unsetMaxParallel
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "max-parallel" {
+				parsedMaxParallel = *maxParallel
+			}
+		})
+		return a.WatchWithProvider(ctx, fs.Arg(0), *daemon, labels, *assignee, parsedMaxParallel, *selectedProvider)
 	case "unwatch":
 		if len(args) != 2 {
 			return errors.New("usage: vigilante unwatch <path>")
@@ -251,8 +258,8 @@ func (a *App) WatchWithProvider(ctx context.Context, rawPath string, daemon bool
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
 	}
-	if maxParallel < 0 {
-		return errors.New("max parallel must be at least 1")
+	if maxParallel < 0 && maxParallel != unsetMaxParallel {
+		return errors.New("max parallel must be at least 0")
 	}
 	if strings.TrimSpace(providerID) != "" {
 		resolvedProvider, err := provider.Resolve(providerID)
@@ -297,7 +304,7 @@ func (a *App) WatchWithProvider(ctx context.Context, rawPath string, daemon bool
 			} else if targets[i].Assignee == "" {
 				targets[i].Assignee = defaultAssigneeFilter
 			}
-			if maxParallel > 0 {
+			if maxParallel >= 0 {
 				targets[i].MaxParallel = maxParallel
 			}
 			targets[i].DaemonEnabled = daemon
@@ -503,9 +510,12 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			a.state.AppendDaemonLog("scan repo issues repo=%s open_issues=%d", target.Repo, len(issues))
 
 			activeCount := ghcli.ActiveSessionCount(sessions, *target)
-			availableSlots := target.MaxParallel - activeCount
-			if availableSlots < 0 {
-				availableSlots = 0
+			availableSlots := len(issues)
+			if target.MaxParallel > 0 {
+				availableSlots = target.MaxParallel - activeCount
+				if availableSlots < 0 {
+					availableSlots = 0
+				}
 			}
 			nextIssues := ghcli.SelectIssues(issues, sessions, *target, availableSlots)
 			if len(nextIssues) == 0 {
@@ -2052,7 +2062,13 @@ func assigneeOrDefault(value string) string {
 }
 
 func configuredMaxParallel(value int) int {
-	if value <= 0 {
+	if value == unsetMaxParallel {
+		return state.DefaultMaxParallelSessions
+	}
+	if value < 0 {
+		return 1
+	}
+	if value == 0 {
 		return state.DefaultMaxParallelSessions
 	}
 	return value

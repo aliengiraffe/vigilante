@@ -84,7 +84,7 @@ Expected behavior:
 - validates the folder is a git repository
 - discovers the GitHub remote from git config
 - defaults the assignee filter to `me` unless overridden
-- defaults `--max-parallel` to `3` when not configured
+- defaults `--max-parallel` to `0` when not configured, where `0` means unlimited
 - defaults `--provider` to `codex` unless overridden
 - resolves `me` to the authenticated GitHub login at runtime before issue queries
 - stores the target in `~/.vigilante/watchlist.json`
@@ -101,6 +101,10 @@ vigilante watch --assignee nicobistolfi ~/hello-world-app
 
 ```sh
 vigilante watch --max-parallel 3 ~/hello-world-app
+```
+
+```sh
+vigilante watch --max-parallel 0 ~/hello-world-app
 ```
 
 ```sh
@@ -339,7 +343,7 @@ Suggested `watchlist.json` shape:
     "repo": "owner/hello-world-app",
     "branch": "main",
     "assignee": "me",
-    "max_parallel_sessions": 3,
+    "max_parallel_sessions": 0,
     "daemon_enabled": true,
     "last_scan_at": "2026-03-10T12:00:00Z"
   }
@@ -354,7 +358,8 @@ Initial rules:
 
 - only consider open issues
 - ignore pull requests
-- enforce `max_parallel_sessions` independently for each watched repository
+- enforce positive `max_parallel_sessions` independently for each watched repository
+- treat `max_parallel_sessions: 0` as unlimited parallel issue dispatch for that repository
 - count both running implementation sessions and open-PR maintenance sessions against that repository limit
 - avoid duplicate work across multiple daemon scans
 - allow an issue label that exactly matches a registered provider id, such as `codex`, `claude`, or `gemini`, to override the watch target provider for that issue only
