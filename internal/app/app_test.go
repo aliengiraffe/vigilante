@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nicobistolfi/vigilante/internal/environment"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
 	"github.com/nicobistolfi/vigilante/internal/repo"
 	"github.com/nicobistolfi/vigilante/internal/skill"
@@ -758,6 +759,92 @@ func TestScanOnceProcessesGitHubCommentResumeRequest(t *testing.T) {
 	}
 }
 
+func TestScanOnceLogsResumeCommentPollingSummaryInsteadOfRawCommand(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = environment.LoggingRunner{
+		Base: testutil.FakeRunner{
+			LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+			Outputs: map[string]string{
+				"gh api repos/owner/repo/issues/1":          `{"labels":[]}`,
+				"gh api repos/owner/repo/issues/1/comments": `[{"id":101,"body":"@vigilanteai resume","created_at":"2026-03-10T12:30:00Z","user":{"login":"nicobistolfi"}}]`,
+				"gh api --method POST -H Accept: application/vnd.github+json repos/owner/repo/issues/comments/101/reactions -f content=eyes": "{}",
+				"codex --version": "codex 1.0.0",
+				issuePromptCommand(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", "vigilante/issue-1"): "done",
+				"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+					Stage:      "Recovered",
+					Emoji:      "🫡",
+					Percent:    92,
+					ETAMinutes: 5,
+					Items: []string{
+						"The previous `provider_auth` block was cleared for `vigilante/issue-1`.",
+						"Resume source: `comment`.",
+						"Next step: Vigilante resumed `issue_execution` successfully.",
+					},
+					Tagline: "Back on the wire.",
+				}): "ok",
+				"gh api user --jq .login": "nicobistolfi\n",
+				"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+			},
+		},
+		Logf: app.state.AppendDaemonLog,
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:        repoPath,
+		Repo:            "owner/repo",
+		IssueNumber:     1,
+		IssueTitle:      "first",
+		IssueURL:        "https://github.com/owner/repo/issues/1",
+		Branch:          "vigilante/issue-1",
+		WorktreePath:    worktreePath,
+		Status:          state.SessionStatusBlocked,
+		BlockedAt:       "2026-03-11T13:19:12Z",
+		BlockedStage:    "issue_execution",
+		BlockedReason:   state.BlockedReason{Kind: "provider_auth", Operation: "codex exec", Summary: "session expired", Detail: "session expired"},
+		RetryPolicy:     "paused",
+		ResumeRequired:  true,
+		ResumeHint:      "vigilante resume --repo owner/repo --issue 1",
+		UpdatedAt:       "2026-03-11T13:19:12Z",
+		LastHeartbeatAt: "2026-03-11T13:19:12Z",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	logData, err := os.ReadFile(app.state.DaemonLogPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	logText := string(logData)
+	if !strings.Contains(logText, "issue comment poll repo=owner/repo issue=1 purpose=resume comments=1") {
+		t.Fatalf("expected resume polling summary in daemon log: %s", logText)
+	}
+	if strings.Contains(logText, "command start dir=\"\" cmd=gh api repos/owner/repo/issues/1/comments") || strings.Contains(logText, "command ok cmd=gh api repos/owner/repo/issues/1/comments") {
+		t.Fatalf("expected raw resume comment polling command logs to be suppressed: %s", logText)
+	}
+}
+
 func TestScanOncePostsDiagnosticCommentWhenGitHubCommentResumeFails(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
@@ -1154,6 +1241,155 @@ func TestScanOnceProcessesGitHubCommentCleanupRequest(t *testing.T) {
 	}
 	if sessions[0].LastCleanupSource != "comment" || sessions[0].LastCleanupCommentID != 101 {
 		t.Fatalf("expected cleanup comment metadata to be recorded: %#v", sessions[0])
+	}
+}
+
+func TestScanOnceLogsCleanupCommentPollingSummaryInsteadOfRawCommand(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = environment.LoggingRunner{
+		Base: testutil.FakeRunner{
+			Outputs: map[string]string{
+				"gh api repos/owner/repo/issues/1/comments": `[{"id":101,"body":"@vigilanteai cleanup","created_at":"2026-03-10T12:30:00Z","user":{"login":"nicobistolfi"}}]`,
+				"gh api --method POST -H Accept: application/vnd.github+json repos/owner/repo/issues/comments/101/reactions -f content=+1": "{}",
+				"git worktree prune":                                         "ok",
+				"git worktree remove --force " + worktreePath:                "ok",
+				"git worktree list --porcelain":                              "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/main\n",
+				"git show-ref --verify --quiet refs/heads/vigilante/issue-1": "ok",
+				"git branch -D vigilante/issue-1":                            "Deleted branch vigilante/issue-1\n",
+				"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+					Stage:      "Cleanup Completed",
+					Emoji:      "🧹",
+					Percent:    100,
+					ETAMinutes: 1,
+					Items: []string{
+						"Removed the running Vigilante session for `vigilante/issue-1`.",
+						"Cleanup source: `comment`.",
+						"Local worktree artifacts were cleaned up at `" + worktreePath + "` when present.",
+					},
+					Tagline: "Leave no loose ends.",
+				}): "ok",
+				"gh api user --jq .login": "nicobistolfi\n",
+				"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+			},
+		},
+		Logf: app.state.AppendDaemonLog,
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:     repoPath,
+		Repo:         "owner/repo",
+		IssueNumber:  1,
+		Branch:       "vigilante/issue-1",
+		WorktreePath: worktreePath,
+		Status:       state.SessionStatusRunning,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	logData, err := os.ReadFile(app.state.DaemonLogPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	logText := string(logData)
+	if !strings.Contains(logText, "issue comment poll repo=owner/repo issue=1 purpose=cleanup comments=1") {
+		t.Fatalf("expected cleanup polling summary in daemon log: %s", logText)
+	}
+	if strings.Contains(logText, "command start dir=\"\" cmd=gh api repos/owner/repo/issues/1/comments") || strings.Contains(logText, "command ok cmd=gh api repos/owner/repo/issues/1/comments") {
+		t.Fatalf("expected raw cleanup comment polling command logs to be suppressed: %s", logText)
+	}
+}
+
+func TestScanOnceLogsCommentPollingFailuresWithPurpose(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = environment.LoggingRunner{
+		Base: testutil.FakeRunner{
+			LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+			Outputs: map[string]string{
+				"gh api repos/owner/repo/issues/1": "{}",
+				"gh api user --jq .login":          "nicobistolfi\n",
+				"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+			},
+			Errors: map[string]error{
+				"gh api repos/owner/repo/issues/1/comments": errors.New("boom"),
+			},
+		},
+		Logf: app.state.AppendDaemonLog,
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:        repoPath,
+		Repo:            "owner/repo",
+		IssueNumber:     1,
+		IssueTitle:      "first",
+		IssueURL:        "https://github.com/owner/repo/issues/1",
+		Branch:          "vigilante/issue-1",
+		WorktreePath:    worktreePath,
+		Status:          state.SessionStatusBlocked,
+		BlockedAt:       "2026-03-11T13:19:12Z",
+		BlockedStage:    "issue_execution",
+		BlockedReason:   state.BlockedReason{Kind: "provider_auth", Operation: "codex exec", Summary: "session expired", Detail: "session expired"},
+		RetryPolicy:     "paused",
+		ResumeRequired:  true,
+		ResumeHint:      "vigilante resume --repo owner/repo --issue 1",
+		UpdatedAt:       "2026-03-11T13:19:12Z",
+		LastHeartbeatAt: "2026-03-11T13:19:12Z",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	logData, err := os.ReadFile(app.state.DaemonLogPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	logText := string(logData)
+	if !strings.Contains(logText, "issue comment poll failed repo=owner/repo issue=1 purpose=resume err=boom output=<empty>") {
+		t.Fatalf("expected comment polling failure summary in daemon log: %s", logText)
+	}
+	if !strings.Contains(logText, "resume comment lookup failed repo=owner/repo issue=1 err=boom") {
+		t.Fatalf("expected higher-level resume failure log in daemon log: %s", logText)
 	}
 }
 

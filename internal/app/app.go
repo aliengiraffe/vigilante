@@ -942,7 +942,7 @@ func (a *App) processGitHubCleanupRequests(ctx context.Context, sessions []state
 	for i := range sessions {
 		session := &sessions[i]
 
-		comments, err := ghcli.ListIssueComments(ctx, a.env.Runner, session.Repo, session.IssueNumber)
+		comments, err := ghcli.ListIssueCommentsForPolling(ctx, a.env.Runner, session.Repo, session.IssueNumber, "cleanup", a.state.AppendDaemonLog)
 		if err != nil {
 			a.state.AppendDaemonLog("cleanup comment lookup failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
 			session.LastError = err.Error()
@@ -1031,7 +1031,7 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 			continue
 		}
 
-		comments, err := ghcli.ListIssueComments(ctx, a.env.Runner, session.Repo, session.IssueNumber)
+		comments, err := ghcli.ListIssueCommentsForPolling(ctx, a.env.Runner, session.Repo, session.IssueNumber, "resume", a.state.AppendDaemonLog)
 		if err != nil {
 			a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), "gh issue comments", err)
 			a.state.AppendDaemonLog("resume comment lookup failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
