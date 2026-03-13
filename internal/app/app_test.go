@@ -873,7 +873,7 @@ func TestRedispatchSessionResetsRunningIssueAndDispatchesImmediately(t *testing.
 				WorktreePath: worktreePath,
 			}): "ok",
 			"codex --version": "codex 1.0.0",
-			sessionStartCommentCommand("owner/repo", 44, worktreePath, branch):                                                               "ok",
+			sessionStartCommentCommand("owner/repo", 44, worktreePath, state.Session{Branch: branch}):                                         "ok",
 			preflightPromptCommand(worktreePath, "owner/repo", repoPath, 44, "first run", "https://github.com/owner/repo/issues/44", branch): "baseline ok",
 			issuePromptCommand(worktreePath, "owner/repo", repoPath, 44, "first run", "https://github.com/owner/repo/issues/44", branch):     "done",
 		},
