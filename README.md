@@ -184,6 +184,19 @@ Expected behavior:
   - `vigilante-local-service-dependencies`
 - installs or updates the daemon definition when requested
 
+On macOS, `vigilante setup -d` resolves Homebrew-style symlinks before it prepares the daemon binary. The launchd plist still uses the invoked path, but Vigilante removes `com.apple.provenance` and `com.apple.quarantine` from the resolved binary when present, ad-hoc signs that binary, and runs `spctl --assess --type execute -vv` against the resolved path before loading the service.
+
+If Gatekeeper still rejects the binary, the error now reports both the assessed path and the invoked path when they differ. A useful manual recovery sequence is:
+
+```sh
+realbin="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' /opt/homebrew/bin/vigilante)"
+xattr "$realbin"
+xattr -d com.apple.provenance "$realbin" 2>/dev/null || true
+xattr -d com.apple.quarantine "$realbin" 2>/dev/null || true
+codesign --force --sign - "$realbin"
+spctl --assess --type execute -vv "$realbin"
+```
+
 ## Development Mode
 
 For fast local iteration, prefer running `vigilante` in the foreground instead of going through the installed OS service on every change.
