@@ -37,6 +37,9 @@ func Install(ctx context.Context, env *environment.Environment, store *state.Sto
 }
 
 func installLaunchdService(ctx context.Context, env *environment.Environment, store *state.Store, cfg Config) error {
+	if err := prepareMacOSDaemonBinary(ctx, env.Runner, cfg.Executable); err != nil {
+		return err
+	}
 	dir := filepath.Join(cfg.HomeDir, "Library", "LaunchAgents")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -45,27 +48,10 @@ func installLaunchdService(ctx context.Context, env *environment.Environment, st
 	if err := os.WriteFile(path, []byte(RenderLaunchdPlist(store, cfg)), 0o644); err != nil {
 		return err
 	}
-	if err := prepareLaunchdBinary(ctx, env, cfg.Executable); err != nil {
-		return err
-	}
 	_, _ = env.Runner.Run(ctx, "", "launchctl", "unload", path)
 	if _, err := env.Runner.Run(ctx, "", "launchctl", "load", path); err != nil {
 		return err
 	}
-	return nil
-}
-
-func prepareLaunchdBinary(ctx context.Context, env *environment.Environment, executable string) error {
-	_, _ = env.Runner.Run(ctx, "", "xattr", "-d", "com.apple.provenance", executable)
-
-	if output, err := env.Runner.Run(ctx, "", "codesign", "--force", "--sign", "-", executable); err != nil {
-		return fmt.Errorf("prepare macOS daemon binary %q for launchd: %s", executable, commandFailure("codesign", output, err))
-	}
-
-	if output, err := env.Runner.Run(ctx, "", "spctl", "--assess", "--type", "execute", "-vv", executable); err != nil {
-		return fmt.Errorf("macOS rejected daemon binary %q: %s", executable, commandFailure("spctl", output, err))
-	}
-
 	return nil
 }
 
@@ -243,10 +229,63 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }
 
-func commandFailure(command string, output string, err error) string {
-	output = strings.TrimSpace(output)
-	if output == "" {
-		return fmt.Sprintf("%s failed: %v", command, err)
+func prepareMacOSDaemonBinary(ctx context.Context, runner environment.Runner, executable string) error {
+	resolvedPath, err := filepath.EvalSymlinks(executable)
+	if err != nil {
+		return fmt.Errorf("resolve macOS daemon binary %q: %w", executable, err)
 	}
-	return fmt.Sprintf("%s failed: %v (%s)", command, err, output)
+
+	attrs, err := listExtendedAttributes(ctx, runner, resolvedPath)
+	if err != nil {
+		return fmt.Errorf("inspect macOS extended attributes for daemon binary %q: %w", resolvedPath, err)
+	}
+
+	removedAttrs := []string{}
+	for _, attr := range []string{"com.apple.provenance", "com.apple.quarantine"} {
+		if _, ok := attrs[attr]; !ok {
+			continue
+		}
+		if _, err := runner.Run(ctx, "", "xattr", "-d", attr, resolvedPath); err != nil {
+			return fmt.Errorf("remove macOS extended attribute %q from daemon binary %q: %w", attr, resolvedPath, err)
+		}
+		removedAttrs = append(removedAttrs, attr)
+	}
+
+	if _, err := runner.Run(ctx, "", "codesign", "--force", "--sign", "-", resolvedPath); err != nil {
+		return fmt.Errorf("ad-hoc sign macOS daemon binary %s: %w", macOSBinaryContext(executable, resolvedPath, removedAttrs), err)
+	}
+	if _, err := runner.Run(ctx, "", "spctl", "--assess", "--type", "execute", "-vv", resolvedPath); err != nil {
+		return fmt.Errorf("macOS rejected daemon binary %s: %w", macOSBinaryContext(executable, resolvedPath, removedAttrs), err)
+	}
+
+	return nil
+}
+
+func listExtendedAttributes(ctx context.Context, runner environment.Runner, path string) (map[string]struct{}, error) {
+	output, err := runner.Run(ctx, "", "xattr", path)
+	if err != nil {
+		return nil, err
+	}
+
+	attrs := map[string]struct{}{}
+	for _, line := range strings.Split(output, "\n") {
+		attr := strings.TrimSpace(line)
+		if attr == "" {
+			continue
+		}
+		attrs[attr] = struct{}{}
+	}
+	return attrs, nil
+}
+
+func macOSBinaryContext(executable string, resolvedPath string, removedAttrs []string) string {
+	context := fmt.Sprintf("assessed_path=%q", resolvedPath)
+	if filepath.Clean(executable) != filepath.Clean(resolvedPath) {
+		context += fmt.Sprintf(" invoked_path=%q", executable)
+	}
+	if len(removedAttrs) == 0 {
+		context += " removed_xattrs=none"
+		return context
+	}
+	return context + fmt.Sprintf(" removed_xattrs=%s", strings.Join(removedAttrs, ","))
 }
