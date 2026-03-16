@@ -3,7 +3,9 @@ package service
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -12,6 +14,16 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/state"
 	"github.com/nicobistolfi/vigilante/internal/testutil"
 )
+
+type recordingRunner struct {
+	testutil.FakeRunner
+	calls []string
+}
+
+func (r *recordingRunner) Run(ctx context.Context, dir string, name string, args ...string) (string, error) {
+	r.calls = append(r.calls, testutil.Key(name, args...))
+	return r.FakeRunner.Run(ctx, dir, name, args...)
+}
 
 func TestRenderLaunchdPlist(t *testing.T) {
 	t.Setenv("VIGILANTE_HOME", t.TempDir())
@@ -200,63 +212,123 @@ func TestBuildConfigFailsWhenProviderVersionIsIncompatible(t *testing.T) {
 	}
 }
 
-func TestInstallLaunchdServicePreparesBinaryBeforeReload(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	store := state.NewStore()
-	cfg := Config{
-		Executable: filepath.Join(home, ".local", "bin", "vigilante"),
-		PathEnv:    "/opt/homebrew/bin:/usr/bin:/bin",
-		HomeDir:    home,
+func TestPrepareMacOSDaemonBinaryUsesResolvedPath(t *testing.T) {
+	dir := t.TempDir()
+	resolvedPath := filepath.Join(dir, "Caskroom", "vigilante", "1.2.3", "vigilante")
+	if err := os.MkdirAll(filepath.Dir(resolvedPath), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	launchAgentPath := filepath.Join(home, "Library", "LaunchAgents", "com.vigilante.agent.plist")
-	env := &environment.Environment{
-		OS: "darwin",
-		Runner: testutil.FakeRunner{
+	if err := os.WriteFile(resolvedPath, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	invokedPath := filepath.Join(dir, "bin", "vigilante")
+	if err := os.MkdirAll(filepath.Dir(invokedPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(resolvedPath, invokedPath); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &recordingRunner{
+		FakeRunner: testutil.FakeRunner{
 			Outputs: map[string]string{
-				testutil.Key("xattr", "-d", "com.apple.provenance", cfg.Executable):           "",
-				testutil.Key("codesign", "--force", "--sign", "-", cfg.Executable):            "",
-				testutil.Key("spctl", "--assess", "--type", "execute", "-vv", cfg.Executable): "accepted\n",
-				testutil.Key("launchctl", "unload", launchAgentPath):                          "",
-				testutil.Key("launchctl", "load", launchAgentPath):                            "",
+				testutil.Key("xattr", resolvedPath):                                         "com.apple.provenance\ncom.apple.quarantine\ncom.example.keep\n",
+				testutil.Key("xattr", "-d", "com.apple.provenance", resolvedPath):           "",
+				testutil.Key("xattr", "-d", "com.apple.quarantine", resolvedPath):           "",
+				testutil.Key("codesign", "--force", "--sign", "-", resolvedPath):            "",
+				testutil.Key("spctl", "--assess", "--type", "execute", "-vv", resolvedPath): "",
 			},
 		},
 	}
 
-	if err := installLaunchdService(context.Background(), env, store, cfg); err != nil {
+	if err := prepareMacOSDaemonBinary(context.Background(), runner, invokedPath); err != nil {
 		t.Fatal(err)
+	}
+
+	wantCalls := []string{
+		testutil.Key("xattr", resolvedPath),
+		testutil.Key("xattr", "-d", "com.apple.provenance", resolvedPath),
+		testutil.Key("xattr", "-d", "com.apple.quarantine", resolvedPath),
+		testutil.Key("codesign", "--force", "--sign", "-", resolvedPath),
+		testutil.Key("spctl", "--assess", "--type", "execute", "-vv", resolvedPath),
+	}
+	if !reflect.DeepEqual(runner.calls, wantCalls) {
+		t.Fatalf("unexpected command sequence:\n got: %#v\nwant: %#v", runner.calls, wantCalls)
 	}
 }
 
-func TestInstallLaunchdServiceFailsWhenBinaryStillRejected(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	store := state.NewStore()
-	cfg := Config{
-		Executable: filepath.Join(home, ".local", "bin", "vigilante"),
-		PathEnv:    "/opt/homebrew/bin:/usr/bin:/bin",
-		HomeDir:    home,
+func TestPrepareMacOSDaemonBinarySkipsMissingKnownAttrs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vigilante")
+	if err := os.WriteFile(path, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	env := &environment.Environment{
-		OS: "darwin",
-		Runner: testutil.FakeRunner{
+
+	runner := &recordingRunner{
+		FakeRunner: testutil.FakeRunner{
 			Outputs: map[string]string{
-				testutil.Key("xattr", "-d", "com.apple.provenance", cfg.Executable): "",
-				testutil.Key("codesign", "--force", "--sign", "-", cfg.Executable):  "",
-			},
-			Errors: map[string]error{
-				testutil.Key("spctl", "--assess", "--type", "execute", "-vv", cfg.Executable): errors.New("exit status 3"),
+				testutil.Key("xattr", path):                                         "com.example.keep\n",
+				testutil.Key("codesign", "--force", "--sign", "-", path):            "",
+				testutil.Key("spctl", "--assess", "--type", "execute", "-vv", path): "",
 			},
 		},
 	}
 
-	err := installLaunchdService(context.Background(), env, store, cfg)
+	if err := prepareMacOSDaemonBinary(context.Background(), runner, path); err != nil {
+		t.Fatal(err)
+	}
+
+	wantCalls := []string{
+		testutil.Key("xattr", path),
+		testutil.Key("codesign", "--force", "--sign", "-", path),
+		testutil.Key("spctl", "--assess", "--type", "execute", "-vv", path),
+	}
+	if !reflect.DeepEqual(runner.calls, wantCalls) {
+		t.Fatalf("unexpected command sequence:\n got: %#v\nwant: %#v", runner.calls, wantCalls)
+	}
+}
+
+func TestPrepareMacOSDaemonBinaryReportsSymlinkContextOnSpctlFailure(t *testing.T) {
+	dir := t.TempDir()
+	resolvedPath := filepath.Join(dir, "Caskroom", "vigilante", "1.2.3", "vigilante")
+	if err := os.MkdirAll(filepath.Dir(resolvedPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(resolvedPath, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	invokedPath := filepath.Join(dir, "bin", "vigilante")
+	if err := os.MkdirAll(filepath.Dir(invokedPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(resolvedPath, invokedPath); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &recordingRunner{
+		FakeRunner: testutil.FakeRunner{
+			Outputs: map[string]string{
+				testutil.Key("xattr", resolvedPath):                              "",
+				testutil.Key("codesign", "--force", "--sign", "-", resolvedPath): "",
+			},
+			Errors: map[string]error{
+				testutil.Key("spctl", "--assess", "--type", "execute", "-vv", resolvedPath): errors.New("exit status 3 (/opt/homebrew/bin/vigilante: rejected)"),
+			},
+		},
+	}
+
+	err := prepareMacOSDaemonBinary(context.Background(), runner, invokedPath)
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "macOS rejected daemon binary") || !strings.Contains(err.Error(), "spctl failed") {
-		t.Fatalf("unexpected error: %v", err)
+	if !strings.Contains(err.Error(), resolvedPath) {
+		t.Fatalf("error missing resolved path: %v", err)
+	}
+	if !strings.Contains(err.Error(), invokedPath) {
+		t.Fatalf("error missing invoked path: %v", err)
+	}
+	if !strings.Contains(err.Error(), "removed_xattrs=none") {
+		t.Fatalf("error missing xattr context: %v", err)
 	}
 }
