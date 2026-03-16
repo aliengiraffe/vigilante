@@ -10,6 +10,7 @@ Implement one GitHub issue from Vigilante dispatch through validated code change
 
 ## Monorepo Focus
 - Read the repo/process context supplied in the prompt before changing code.
+- Read the detected monorepo stack and shared local-service contract from the prompt before choosing commands.
 - Limit edits to the packages, apps, or shared modules required for the issue.
 - Prefer targeted validation for the touched workspace scope before broader monorepo validation.
 - Avoid unrelated cross-package refactors unless they are required to complete the issue safely.
@@ -37,6 +38,7 @@ Implement one GitHub issue from Vigilante dispatch through validated code change
 - Keep changes scoped to the issue.
 - Prefer native repository tooling and avoid unnecessary new dependencies.
 - If the affected workspace needs local services, call the bundled `vigilante-local-service-dependencies` skill and reuse its structured output before creating workspace-specific ad hoc service setup.
+- When containerized local services are still needed after that analysis, use the shared `docker-compose-launch` contract from the prompt so service startup remains scoped to the assigned worktree.
 
 5. Validate incrementally
 - Run the most relevant package/app/workspace checks first, then expand only if needed.

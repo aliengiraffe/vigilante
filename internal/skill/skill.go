@@ -17,9 +17,15 @@ import (
 
 const VigilanteIssueImplementation = "vigilante-issue-implementation"
 const VigilanteIssueImplementationOnMonorepo = "vigilante-issue-implementation-on-monorepo"
+const VigilanteIssueImplementationOnTurborepo = "vigilante-issue-implementation-on-turborepo"
+const VigilanteIssueImplementationOnNx = "vigilante-issue-implementation-on-nx"
+const VigilanteIssueImplementationOnRush = "vigilante-issue-implementation-on-rush"
+const VigilanteIssueImplementationOnBazel = "vigilante-issue-implementation-on-bazel"
+const VigilanteIssueImplementationOnGradle = "vigilante-issue-implementation-on-gradle"
 const VigilanteConflictResolution = "vigilante-conflict-resolution"
 const VigilanteCreateIssue = "vigilante-create-issue"
 const VigilanteLocalServiceDependencies = "vigilante-local-service-dependencies"
+const DockerComposeLaunch = "docker-compose-launch"
 
 const RuntimeCodex = "codex"
 const RuntimeClaude = "claude"
@@ -29,9 +35,15 @@ func VigilanteSkillNames() []string {
 	return []string{
 		VigilanteIssueImplementation,
 		VigilanteIssueImplementationOnMonorepo,
+		VigilanteIssueImplementationOnTurborepo,
+		VigilanteIssueImplementationOnNx,
+		VigilanteIssueImplementationOnRush,
+		VigilanteIssueImplementationOnBazel,
+		VigilanteIssueImplementationOnGradle,
 		VigilanteConflictResolution,
 		VigilanteCreateIssue,
 		VigilanteLocalServiceDependencies,
+		DockerComposeLaunch,
 	}
 }
 
@@ -174,14 +186,34 @@ func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue 
 			"Continue from the reused branch state and build on top of the existing diff instead of restarting from scratch.",
 		)
 	}
+	if normalizedRepoShape(target) == string(repo.ShapeMonorepo) {
+		lines = append(lines,
+			fmt.Sprintf("Detected monorepo stack: %s", normalizedMonorepoStack(target)),
+			fmt.Sprintf("Monorepo execution context JSON: %s", monorepoExecutionContextJSON(target, selectedSkill)),
+			fmt.Sprintf("When local services are required, use the `%s` skill instead of inventing ad hoc compose logic.", DockerComposeLaunch),
+		)
+	}
 	return strings.Join(lines, "\n")
 }
 
 func IssueImplementationSkill(target state.WatchTarget) string {
-	if normalizedRepoShape(target) == string(repo.ShapeMonorepo) {
+	if normalizedRepoShape(target) != string(repo.ShapeMonorepo) {
+		return VigilanteIssueImplementation
+	}
+	switch normalizedMonorepoStack(target) {
+	case string(repo.MonorepoStackTurborepo):
+		return VigilanteIssueImplementationOnTurborepo
+	case string(repo.MonorepoStackNx):
+		return VigilanteIssueImplementationOnNx
+	case string(repo.MonorepoStackRush):
+		return VigilanteIssueImplementationOnRush
+	case string(repo.MonorepoStackBazel):
+		return VigilanteIssueImplementationOnBazel
+	case string(repo.MonorepoStackGradle):
+		return VigilanteIssueImplementationOnGradle
+	default:
 		return VigilanteIssueImplementationOnMonorepo
 	}
-	return VigilanteIssueImplementation
 }
 
 func normalizedRepoShape(target state.WatchTarget) string {
@@ -192,16 +224,31 @@ func normalizedRepoShape(target state.WatchTarget) string {
 	return shape
 }
 
+func normalizedMonorepoStack(target state.WatchTarget) string {
+	stack := strings.TrimSpace(string(target.Classification.MonorepoStack))
+	if stack == "" && normalizedRepoShape(target) == string(repo.ShapeMonorepo) {
+		return string(repo.MonorepoStackUnknown)
+	}
+	return stack
+}
+
 func repoClassificationJSON(target state.WatchTarget) string {
 	classification := target.Classification
 	if strings.TrimSpace(string(classification.Shape)) == "" {
 		classification.Shape = repo.ShapeTraditional
 	}
 	payload := struct {
-		Shape        repo.Shape         `json:"shape"`
-		ProcessHints *repo.ProcessHints `json:"process_hints,omitempty"`
+		Shape         repo.Shape         `json:"shape"`
+		MonorepoStack repo.MonorepoStack `json:"monorepo_stack,omitempty"`
+		ProcessHints  *repo.ProcessHints `json:"process_hints,omitempty"`
 	}{
 		Shape: classification.Shape,
+	}
+	if classification.Shape == repo.ShapeMonorepo {
+		if strings.TrimSpace(string(classification.MonorepoStack)) == "" {
+			classification.MonorepoStack = repo.MonorepoStackUnknown
+		}
+		payload.MonorepoStack = classification.MonorepoStack
 	}
 	if len(classification.ProcessHints.WorkspaceConfigFiles) > 0 ||
 		len(classification.ProcessHints.WorkspaceManifestFiles) > 0 ||
@@ -211,6 +258,39 @@ func repoClassificationJSON(target state.WatchTarget) string {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return `{"shape":"traditional"}`
+	}
+	return string(data)
+}
+
+func monorepoExecutionContextJSON(target state.WatchTarget, selectedSkill string) string {
+	payload := struct {
+		Stack               string             `json:"stack"`
+		ImplementationSkill string             `json:"implementation_skill"`
+		ProcessHints        *repo.ProcessHints `json:"process_hints,omitempty"`
+		LocalServices       struct {
+			Required              bool     `json:"required"`
+			LaunchSkill           string   `json:"launch_skill"`
+			Scope                 string   `json:"scope"`
+			SupportedServiceTypes []string `json:"supported_service_types"`
+			OutputFields          []string `json:"output_fields"`
+		} `json:"local_services"`
+	}{
+		Stack:               normalizedMonorepoStack(target),
+		ImplementationSkill: selectedSkill,
+	}
+	if len(target.Classification.ProcessHints.WorkspaceConfigFiles) > 0 ||
+		len(target.Classification.ProcessHints.WorkspaceManifestFiles) > 0 ||
+		len(target.Classification.ProcessHints.MultiPackageRoots) > 0 {
+		payload.ProcessHints = &target.Classification.ProcessHints
+	}
+	payload.LocalServices.Required = false
+	payload.LocalServices.LaunchSkill = DockerComposeLaunch
+	payload.LocalServices.Scope = "assigned_worktree"
+	payload.LocalServices.SupportedServiceTypes = []string{"mysql", "mariadb", "postgres", "mongodb"}
+	payload.LocalServices.OutputFields = []string{"status", "services", "mechanism", "commands", "connection", "cleanup", "artifacts", "notes"}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Sprintf(`{"stack":"%s","implementation_skill":"%s"}`, normalizedMonorepoStack(target), selectedSkill)
 	}
 	return string(data)
 }

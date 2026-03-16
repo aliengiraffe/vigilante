@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vigilante Nx Issue Implementation"
+  short_description: "Implement a Vigilante-dispatched issue in an Nx monorepo"
+  default_prompt: "Use $vigilante-issue-implementation-on-nx to implement the assigned Nx issue in the provided worktree, respect project scope, comment on the issue, and open a PR."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vigilante Rush Issue Implementation"
+  short_description: "Implement a Vigilante-dispatched issue in a Rush monorepo"
+  default_prompt: "Use $vigilante-issue-implementation-on-rush to implement the assigned Rush issue in the provided worktree, respect project scope, comment on the issue, and open a PR."
