@@ -59,6 +59,38 @@ For each watched repository:
 
 ## Commands
 
+`vigilante --help` and `vigilante -h` print top-level usage. Each command also supports command-specific help, for example:
+
+```sh
+vigilante watch --help
+vigilante daemon run --help
+```
+
+### Shell completion
+
+Generate a completion script for a supported shell and source or install it in your shell startup files:
+
+```sh
+vigilante completion bash
+vigilante completion zsh
+vigilante completion fish
+```
+
+Examples:
+
+```sh
+vigilante completion zsh > "${fpath[1]}/_vigilante"
+autoload -Uz compinit && compinit
+```
+
+```sh
+vigilante completion bash > ~/.local/share/bash-completion/completions/vigilante
+```
+
+```sh
+vigilante completion fish > ~/.config/fish/completions/vigilante.fish
+```
+
 ## Installation
 
 Install `vigilante` from the existing Homebrew tap:

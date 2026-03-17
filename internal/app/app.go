@@ -33,6 +33,9 @@ const defaultAssigneeFilter = "me"
 const defaultStalledSessionThreshold = 10 * time.Minute
 const unsetMaxParallel = -2147483648
 
+var supportedCompletionShells = []string{"bash", "fish", "zsh"}
+var errHelpHandled = errors.New("help handled")
+
 type App struct {
 	stdout io.Writer
 	stderr io.Writer
@@ -82,7 +85,7 @@ func New() *App {
 
 func (a *App) Run(ctx context.Context, args []string) int {
 	if len(args) == 0 {
-		a.printUsage()
+		a.printUsage(a.stderr)
 		return 1
 	}
 
@@ -95,26 +98,51 @@ func (a *App) Run(ctx context.Context, args []string) int {
 }
 
 func (a *App) runCommand(ctx context.Context, args []string) error {
+	if len(args) == 1 && isHelpToken(args[0]) {
+		a.printUsage(a.stdout)
+		return nil
+	}
+
 	switch args[0] {
 	case "setup":
 		fs := flag.NewFlagSet("setup", flag.ContinueOnError)
-		fs.SetOutput(a.stderr)
+		configureFlagSet(fs, func(w io.Writer) {
+			fmt.Fprintln(w, "usage: vigilante setup [-d] [--provider value]")
+			fmt.Fprintln(w)
+			fmt.Fprintln(w, "Prepare the machine for autonomous execution.")
+			fmt.Fprintln(w)
+			fs.SetOutput(w)
+			fs.PrintDefaults()
+		})
 		installDaemon := fs.Bool("d", false, "install daemon service")
 		selectedProvider := fs.String("provider", provider.DefaultID, "coding agent provider")
-		if err := fs.Parse(args[1:]); err != nil {
+		if err := parseFlagSet(fs, args[1:], a.stdout); err != nil {
+			if errors.Is(err, errHelpHandled) {
+				return nil
+			}
 			return err
 		}
 		return a.SetupWithProvider(ctx, *installDaemon, *selectedProvider)
 	case "watch":
 		fs := flag.NewFlagSet("watch", flag.ContinueOnError)
-		fs.SetOutput(a.stderr)
+		configureFlagSet(fs, func(w io.Writer) {
+			fmt.Fprintln(w, "usage: vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] [--provider value] <path>")
+			fmt.Fprintln(w)
+			fmt.Fprintln(w, "Register a local repository for issue monitoring.")
+			fmt.Fprintln(w)
+			fs.SetOutput(w)
+			fs.PrintDefaults()
+		})
 		daemon := fs.Bool("d", false, "install and start daemon service")
 		var labels stringListFlag
 		fs.Var(&labels, "label", "allow only issues with this label; repeatable")
 		assignee := fs.String("assignee", "", "issue assignee filter (defaults to me)")
 		maxParallel := fs.Int("max-parallel", 0, "maximum concurrent issue sessions for this repository (0 = unlimited)")
 		selectedProvider := fs.String("provider", "", "coding agent provider")
-		if err := fs.Parse(args[1:]); err != nil {
+		if err := parseFlagSet(fs, args[1:], a.stdout); err != nil {
+			if errors.Is(err, errHelpHandled) {
+				return nil
+			}
 			return err
 		}
 		if fs.NArg() != 1 {
@@ -134,10 +162,20 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		return a.Unwatch(args[1])
 	case "list":
 		fs := flag.NewFlagSet("list", flag.ContinueOnError)
-		fs.SetOutput(a.stderr)
+		configureFlagSet(fs, func(w io.Writer) {
+			fmt.Fprintln(w, "usage: vigilante list [--blocked | --running]")
+			fmt.Fprintln(w)
+			fmt.Fprintln(w, "Show watched repositories or active session state.")
+			fmt.Fprintln(w)
+			fs.SetOutput(w)
+			fs.PrintDefaults()
+		})
 		blockedOnly := fs.Bool("blocked", false, "show blocked sessions instead of watch targets")
 		runningOnly := fs.Bool("running", false, "show running sessions instead of watch targets")
-		if err := fs.Parse(args[1:]); err != nil {
+		if err := parseFlagSet(fs, args[1:], a.stdout); err != nil {
+			if errors.Is(err, errHelpHandled) {
+				return nil
+			}
 			return err
 		}
 		if *blockedOnly && *runningOnly {
@@ -152,6 +190,8 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		return a.runResumeCommand(ctx, args[1:])
 	case "daemon":
 		return a.runDaemonCommand(ctx, args[1:])
+	case "completion":
+		return a.runCompletionCommand(args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -159,11 +199,22 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 
 func (a *App) runResumeCommand(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("resume", flag.ContinueOnError)
-	fs.SetOutput(a.stderr)
+	configureFlagSet(fs, func(w io.Writer) {
+		fmt.Fprintln(w, "usage: vigilante resume --repo <owner/name> --issue <n>")
+		fmt.Fprintln(w, "   or: vigilante resume --all-blocked")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Resume blocked sessions after the underlying problem is fixed.")
+		fmt.Fprintln(w)
+		fs.SetOutput(w)
+		fs.PrintDefaults()
+	})
 	repo := fs.String("repo", "", "repository slug")
 	issue := fs.Int("issue", 0, "issue number")
 	allBlocked := fs.Bool("all-blocked", false, "resume all blocked sessions")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagSet(fs, args, a.stdout); err != nil {
+		if errors.Is(err, errHelpHandled) {
+			return nil
+		}
 		return err
 	}
 	if *allBlocked {
@@ -180,10 +231,20 @@ func (a *App) runResumeCommand(ctx context.Context, args []string) error {
 
 func (a *App) runRedispatchCommand(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("redispatch", flag.ContinueOnError)
-	fs.SetOutput(a.stderr)
+	configureFlagSet(fs, func(w io.Writer) {
+		fmt.Fprintln(w, "usage: vigilante redispatch --repo <owner/name> --issue <n>")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Restart one watched issue in a fresh local worktree.")
+		fmt.Fprintln(w)
+		fs.SetOutput(w)
+		fs.PrintDefaults()
+	})
 	repo := fs.String("repo", "", "repository slug")
 	issue := fs.Int("issue", 0, "issue number")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagSet(fs, args, a.stdout); err != nil {
+		if errors.Is(err, errHelpHandled) {
+			return nil
+		}
 		return err
 	}
 	if *repo == "" || *issue <= 0 {
@@ -194,11 +255,22 @@ func (a *App) runRedispatchCommand(ctx context.Context, args []string) error {
 
 func (a *App) runCleanupCommand(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("cleanup", flag.ContinueOnError)
-	fs.SetOutput(a.stderr)
+	configureFlagSet(fs, func(w io.Writer) {
+		fmt.Fprintln(w, "usage: vigilante cleanup --repo <owner/name> [--issue <n>]")
+		fmt.Fprintln(w, "   or: vigilante cleanup --all")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Clean up running sessions and their worktrees.")
+		fmt.Fprintln(w)
+		fs.SetOutput(w)
+		fs.PrintDefaults()
+	})
 	repo := fs.String("repo", "", "repository slug")
 	issue := fs.Int("issue", 0, "issue number")
 	all := fs.Bool("all", false, "clean up all running sessions")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagSet(fs, args, a.stdout); err != nil {
+		if errors.Is(err, errHelpHandled) {
+			return nil
+		}
 		return err
 	}
 
@@ -221,19 +293,61 @@ func (a *App) runCleanupCommand(ctx context.Context, args []string) error {
 }
 
 func (a *App) runDaemonCommand(ctx context.Context, args []string) error {
-	if len(args) == 0 || args[0] != "run" {
+	if len(args) == 0 || isHelpToken(args[0]) {
+		a.printDaemonUsage(a.stdout)
+		return nil
+	}
+	if args[0] != "run" {
 		return errors.New("usage: vigilante daemon run [--once]")
 	}
 
 	fs := flag.NewFlagSet("daemon run", flag.ContinueOnError)
-	fs.SetOutput(a.stderr)
+	configureFlagSet(fs, func(w io.Writer) {
+		fmt.Fprintln(w, "usage: vigilante daemon run [--once] [--interval duration]")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Run the watcher loop in the foreground.")
+		fmt.Fprintln(w)
+		fs.SetOutput(w)
+		fs.PrintDefaults()
+	})
 	once := fs.Bool("once", false, "run a single scan")
 	interval := fs.Duration("interval", defaultScanInterval, "scan interval")
-	if err := fs.Parse(args[1:]); err != nil {
+	if err := parseFlagSet(fs, args[1:], a.stdout); err != nil {
+		if errors.Is(err, errHelpHandled) {
+			return nil
+		}
 		return err
 	}
 
 	return a.DaemonRun(ctx, *interval, *once)
+}
+
+func (a *App) runCompletionCommand(args []string) error {
+	fs := flag.NewFlagSet("completion", flag.ContinueOnError)
+	configureFlagSet(fs, func(w io.Writer) {
+		fmt.Fprintln(w, "usage: vigilante completion <bash|fish|zsh>")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Generate a shell completion script.")
+		fmt.Fprintln(w)
+		fs.SetOutput(w)
+		fs.PrintDefaults()
+	})
+	if err := parseFlagSet(fs, args, a.stdout); err != nil {
+		if errors.Is(err, errHelpHandled) {
+			return nil
+		}
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: vigilante completion <bash|fish|zsh>")
+	}
+
+	script, err := completionScript(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprint(a.stdout, script)
+	return err
 }
 
 func (a *App) Setup(ctx context.Context, installDaemon bool) error {
@@ -2547,18 +2661,214 @@ func providerRuntimeTool(selectedProvider provider.Provider) string {
 	return tools[0]
 }
 
-func (a *App) printUsage() {
-	fmt.Fprintln(a.stderr, "usage:")
-	fmt.Fprintln(a.stderr, "  vigilante setup [-d] [--provider value]")
-	fmt.Fprintln(a.stderr, "  vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] [--provider value] <path>")
-	fmt.Fprintln(a.stderr, "  vigilante unwatch <path>")
-	fmt.Fprintln(a.stderr, "  vigilante list [--blocked | --running]")
-	fmt.Fprintln(a.stderr, "  vigilante cleanup --repo <owner/name> [--issue <n>]")
-	fmt.Fprintln(a.stderr, "  vigilante cleanup --all")
-	fmt.Fprintln(a.stderr, "  vigilante redispatch --repo <owner/name> --issue <n>")
-	fmt.Fprintln(a.stderr, "  vigilante resume --repo <owner/name> --issue <n>")
-	fmt.Fprintln(a.stderr, "  vigilante resume --all-blocked")
-	fmt.Fprintln(a.stderr, "  vigilante daemon run [--once] [--interval duration]")
+func configureFlagSet(fs *flag.FlagSet, usage func(w io.Writer)) {
+	fs.SetOutput(io.Discard)
+	fs.Usage = func() {
+		usage(fs.Output())
+	}
+}
+
+func parseFlagSet(fs *flag.FlagSet, args []string, helpOut io.Writer) error {
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			fs.SetOutput(helpOut)
+			fs.Usage()
+			return errHelpHandled
+		}
+		return err
+	}
+	return nil
+}
+
+func isHelpToken(value string) bool {
+	return value == "-h" || value == "--help"
+}
+
+func (a *App) printUsage(w io.Writer) {
+	fmt.Fprintln(w, "usage:")
+	fmt.Fprintln(w, "  vigilante setup [-d] [--provider value]")
+	fmt.Fprintln(w, "  vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] [--provider value] <path>")
+	fmt.Fprintln(w, "  vigilante unwatch <path>")
+	fmt.Fprintln(w, "  vigilante list [--blocked | --running]")
+	fmt.Fprintln(w, "  vigilante cleanup --repo <owner/name> [--issue <n>]")
+	fmt.Fprintln(w, "  vigilante cleanup --all")
+	fmt.Fprintln(w, "  vigilante redispatch --repo <owner/name> --issue <n>")
+	fmt.Fprintln(w, "  vigilante resume --repo <owner/name> --issue <n>")
+	fmt.Fprintln(w, "  vigilante resume --all-blocked")
+	fmt.Fprintln(w, "  vigilante daemon run [--once] [--interval duration]")
+	fmt.Fprintln(w, "  vigilante completion <bash|fish|zsh>")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Use \"vigilante <command> --help\" for command-specific usage.")
+}
+
+func (a *App) printDaemonUsage(w io.Writer) {
+	fmt.Fprintln(w, "usage:")
+	fmt.Fprintln(w, "  vigilante daemon run [--once] [--interval duration]")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Use \"vigilante daemon run --help\" for flags.")
+}
+
+func completionScript(shell string) (string, error) {
+	switch shell {
+	case "bash":
+		return bashCompletionScript(), nil
+	case "fish":
+		return fishCompletionScript(), nil
+	case "zsh":
+		return zshCompletionScript(), nil
+	default:
+		return "", fmt.Errorf("unsupported shell %q (supported: %s)", shell, strings.Join(supportedCompletionShells, ", "))
+	}
+}
+
+func bashCompletionScript() string {
+	return `# bash completion for vigilante
+_vigilante()
+{
+    local cur prev words cword
+    _init_completion || return
+
+    local commands="setup watch unwatch list cleanup redispatch resume daemon completion"
+    local global_flags="-h --help"
+
+    case "${words[1]}" in
+        setup)
+            COMPREPLY=( $(compgen -W "-d --provider" -- "$cur") )
+            return
+            ;;
+        watch)
+            COMPREPLY=( $(compgen -W "-d --label --assignee --max-parallel --provider" -- "$cur") )
+            return
+            ;;
+        list)
+            COMPREPLY=( $(compgen -W "--blocked --running" -- "$cur") )
+            return
+            ;;
+        cleanup)
+            COMPREPLY=( $(compgen -W "--repo --issue --all" -- "$cur") )
+            return
+            ;;
+        redispatch)
+            COMPREPLY=( $(compgen -W "--repo --issue" -- "$cur") )
+            return
+            ;;
+        resume)
+            COMPREPLY=( $(compgen -W "--repo --issue --all-blocked" -- "$cur") )
+            return
+            ;;
+        daemon)
+            if [[ $cword -eq 2 ]]; then
+                COMPREPLY=( $(compgen -W "run" -- "$cur") )
+            else
+                COMPREPLY=( $(compgen -W "--once --interval" -- "$cur") )
+            fi
+            return
+            ;;
+        completion)
+            COMPREPLY=( $(compgen -W "bash fish zsh" -- "$cur") )
+            return
+            ;;
+    esac
+
+    COMPREPLY=( $(compgen -W "$commands $global_flags" -- "$cur") )
+}
+
+complete -F _vigilante vigilante
+`
+}
+
+func fishCompletionScript() string {
+	return `# fish completion for vigilante
+complete -c vigilante -f -n '__fish_use_subcommand' -a 'setup' -d 'Prepare the machine for autonomous execution'
+complete -c vigilante -f -n '__fish_use_subcommand' -a 'watch' -d 'Register a local repository for issue monitoring'
+complete -c vigilante -f -n '__fish_use_subcommand' -a 'unwatch' -d 'Remove a repository from the watchlist'
+complete -c vigilante -f -n '__fish_use_subcommand' -a 'list' -d 'Show watched repositories or sessions'
+complete -c vigilante -f -n '__fish_use_subcommand' -a 'cleanup' -d 'Clean up running sessions'
+complete -c vigilante -f -n '__fish_use_subcommand' -a 'redispatch' -d 'Restart one watched issue in a fresh local worktree'
+complete -c vigilante -f -n '__fish_use_subcommand' -a 'resume' -d 'Resume blocked sessions'
+complete -c vigilante -f -n '__fish_use_subcommand' -a 'daemon' -d 'Run daemon commands'
+complete -c vigilante -f -n '__fish_use_subcommand' -a 'completion' -d 'Generate shell completion scripts'
+
+complete -c vigilante -n '__fish_seen_subcommand_from setup' -l provider
+complete -c vigilante -n '__fish_seen_subcommand_from setup' -s d
+complete -c vigilante -n '__fish_seen_subcommand_from watch' -l label
+complete -c vigilante -n '__fish_seen_subcommand_from watch' -l assignee
+complete -c vigilante -n '__fish_seen_subcommand_from watch' -l max-parallel
+complete -c vigilante -n '__fish_seen_subcommand_from watch' -l provider
+complete -c vigilante -n '__fish_seen_subcommand_from watch' -s d
+complete -c vigilante -n '__fish_seen_subcommand_from list' -l blocked
+complete -c vigilante -n '__fish_seen_subcommand_from list' -l running
+complete -c vigilante -n '__fish_seen_subcommand_from cleanup' -l repo
+complete -c vigilante -n '__fish_seen_subcommand_from cleanup' -l issue
+complete -c vigilante -n '__fish_seen_subcommand_from cleanup' -l all
+complete -c vigilante -n '__fish_seen_subcommand_from redispatch' -l repo
+complete -c vigilante -n '__fish_seen_subcommand_from redispatch' -l issue
+complete -c vigilante -n '__fish_seen_subcommand_from resume' -l repo
+complete -c vigilante -n '__fish_seen_subcommand_from resume' -l issue
+complete -c vigilante -n '__fish_seen_subcommand_from resume' -l all-blocked
+complete -c vigilante -n '__fish_seen_subcommand_from daemon; and not __fish_seen_subcommand_from run' -a 'run'
+complete -c vigilante -n '__fish_seen_subcommand_from run' -l once
+complete -c vigilante -n '__fish_seen_subcommand_from run' -l interval
+complete -c vigilante -n '__fish_seen_subcommand_from completion' -a 'bash fish zsh'
+`
+}
+
+func zshCompletionScript() string {
+	return `#compdef vigilante
+
+_vigilante() {
+  local -a commands
+  commands=(
+    'setup:Prepare the machine for autonomous execution'
+    'watch:Register a local repository for issue monitoring'
+    'unwatch:Remove a repository from the watchlist'
+    'list:Show watched repositories or sessions'
+    'cleanup:Clean up running sessions'
+    'redispatch:Restart one watched issue in a fresh local worktree'
+    'resume:Resume blocked sessions'
+    'daemon:Run daemon commands'
+    'completion:Generate shell completion scripts'
+  )
+
+  if (( CURRENT == 2 )); then
+    _describe 'command' commands
+    return
+  fi
+
+  case "$words[2]" in
+    setup)
+      compadd -- -d --provider
+      ;;
+    watch)
+      compadd -- -d --label --assignee --max-parallel --provider
+      ;;
+    list)
+      compadd -- --blocked --running
+      ;;
+    cleanup)
+      compadd -- --repo --issue --all
+      ;;
+    redispatch)
+      compadd -- --repo --issue
+      ;;
+    resume)
+      compadd -- --repo --issue --all-blocked
+      ;;
+    daemon)
+      if (( CURRENT == 3 )); then
+        compadd run
+      else
+        compadd -- --once --interval
+      fi
+      ;;
+    completion)
+      compadd bash fish zsh
+      ;;
+  esac
+}
+
+_vigilante "$@"
+`
 }
 
 func upsertSession(sessions []state.Session, session state.Session) []state.Session {
