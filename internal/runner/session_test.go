@@ -445,7 +445,7 @@ func TestRunIssueSessionUsesRushMonorepoSkillWhenClassified(t *testing.T) {
 		Path: "/tmp/repo",
 		Repo: "owner/repo",
 		Classification: repo.Classification{
-			Shape: repo.ShapeMonorepo,
+			Shape:         repo.ShapeMonorepo,
 			MonorepoStack: repo.MonorepoStackRush,
 			ProcessHints: repo.ProcessHints{
 				WorkspaceConfigFiles: []string{"rush.json"},
