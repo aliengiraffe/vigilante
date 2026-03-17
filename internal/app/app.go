@@ -69,10 +69,12 @@ type App struct {
 	clock  func() time.Time
 	env    *environment.Environment
 
-	sessionMu sync.Mutex
-	sessionWG sync.WaitGroup
-	cancelMu  sync.Mutex
-	cancels   map[string]context.CancelFunc
+	sessionMu                 sync.Mutex
+	sessionWG                 sync.WaitGroup
+	cancelMu                  sync.Mutex
+	cancels                   map[string]context.CancelFunc
+	repoLabelProvisioningMu   sync.Mutex
+	repoLabelsProvisionedOnce map[string]bool
 }
 
 type stringListFlag []string
@@ -93,11 +95,12 @@ func (f *stringListFlag) Set(value string) error {
 func New() *App {
 	store := state.NewStore()
 	return &App{
-		stdout:  os.Stdout,
-		stderr:  os.Stderr,
-		state:   store,
-		clock:   time.Now().UTC,
-		cancels: make(map[string]context.CancelFunc),
+		stdout:                    os.Stdout,
+		stderr:                    os.Stderr,
+		state:                     store,
+		clock:                     time.Now().UTC,
+		cancels:                   make(map[string]context.CancelFunc),
+		repoLabelsProvisionedOnce: make(map[string]bool),
 		env: &environment.Environment{
 			OS: runtime.GOOS,
 			Runner: environment.LoggingRunner{
@@ -2413,11 +2416,41 @@ func (a *App) syncSessionIssueLabels(ctx context.Context, session state.Session,
 }
 
 func (a *App) syncIssueManagedLabels(ctx context.Context, repo string, issueNumber int, desired []string) error {
+	if err := a.ensureRepositoryLabelsProvisioned(ctx, repo); err != nil {
+		return err
+	}
 	details, err := ghcli.GetIssueDetails(ctx, a.env.Runner, repo, issueNumber)
 	if err != nil {
 		return err
 	}
 	return ghcli.SyncIssueLabels(ctx, a.env.Runner, repo, issueNumber, details.Labels, desired, managedIssueLabels)
+}
+
+func (a *App) ensureRepositoryLabelsProvisioned(ctx context.Context, repo string) error {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return nil
+	}
+
+	a.repoLabelProvisioningMu.Lock()
+	if a.repoLabelsProvisionedOnce[repo] {
+		a.repoLabelProvisioningMu.Unlock()
+		return nil
+	}
+	a.repoLabelProvisioningMu.Unlock()
+
+	labels, err := ghcli.LoadRepositoryLabelSpecs()
+	if err != nil {
+		return fmt.Errorf("load Vigilante label manifest: %w", err)
+	}
+	if err := ghcli.EnsureRepositoryLabels(ctx, a.env.Runner, repo, labels); err != nil {
+		return fmt.Errorf("provision Vigilante labels for repo %s: %w", repo, err)
+	}
+
+	a.repoLabelProvisioningMu.Lock()
+	a.repoLabelsProvisionedOnce[repo] = true
+	a.repoLabelProvisioningMu.Unlock()
+	return nil
 }
 
 func sessionManagedLabels(session state.Session, pr *ghcli.PullRequest) []string {

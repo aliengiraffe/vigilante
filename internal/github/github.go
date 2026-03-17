@@ -56,6 +56,10 @@ type IssueDetails struct {
 	Labels []Label `json:"labels"`
 }
 
+type RepositoryLabelDetails struct {
+	Name string `json:"name"`
+}
+
 func ListOpenIssues(ctx context.Context, runner environment.Runner, repo string, assignee string) ([]Issue, error) {
 	resolvedAssignee, err := resolveAssignee(ctx, runner, assignee)
 	if err != nil {
@@ -246,6 +250,65 @@ func AddIssueCommentReaction(ctx context.Context, runner environment.Runner, rep
 
 func RemoveIssueLabel(ctx context.Context, runner environment.Runner, repo string, number int, label string) error {
 	_, err := runner.Run(ctx, "", "gh", "issue", "edit", "--repo", repo, fmt.Sprintf("%d", number), "--remove-label", label)
+	return err
+}
+
+func EnsureRepositoryLabels(ctx context.Context, runner environment.Runner, repo string, desired []RepositoryLabelSpec) error {
+	current, err := ListRepositoryLabels(ctx, runner, repo)
+	if err != nil {
+		return fmt.Errorf("list repository labels: %w", err)
+	}
+
+	currentSet := make(map[string]struct{}, len(current))
+	for _, label := range current {
+		name := strings.TrimSpace(label.Name)
+		if name == "" {
+			continue
+		}
+		currentSet[name] = struct{}{}
+	}
+
+	for _, label := range desired {
+		name := strings.TrimSpace(label.Name)
+		if name == "" {
+			continue
+		}
+		if _, ok := currentSet[name]; ok {
+			continue
+		}
+		if err := CreateRepositoryLabel(ctx, runner, repo, label); err != nil {
+			return fmt.Errorf("create repository label %q: %w", name, err)
+		}
+	}
+
+	return nil
+}
+
+func ListRepositoryLabels(ctx context.Context, runner environment.Runner, repo string) ([]RepositoryLabelDetails, error) {
+	output, err := runner.Run(ctx, "", "gh", "api", fmt.Sprintf("repos/%s/labels?per_page=100", repo))
+	if err != nil {
+		return nil, err
+	}
+
+	var labels []RepositoryLabelDetails
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &labels); err != nil {
+		return nil, fmt.Errorf("parse gh repository labels output: %w", err)
+	}
+	return labels, nil
+}
+
+func CreateRepositoryLabel(ctx context.Context, runner environment.Runner, repo string, label RepositoryLabelSpec) error {
+	args := []string{
+		"api",
+		"--method", "POST",
+		fmt.Sprintf("repos/%s/labels", repo),
+		"-f", "name=" + label.Name,
+		"-f", "color=" + label.Color,
+	}
+	if label.Description != "" {
+		args = append(args, "-f", "description="+label.Description)
+	}
+	_, err := runner.Run(ctx, "", "gh", args...)
 	return err
 }
 
