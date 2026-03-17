@@ -33,6 +33,32 @@ const defaultAssigneeFilter = "me"
 const defaultStalledSessionThreshold = 10 * time.Minute
 const unsetMaxParallel = -2147483648
 
+const (
+	labelQueued                 = "vigilante:queued"
+	labelRunning                = "vigilante:running"
+	labelBlocked                = "vigilante:blocked"
+	labelReadyForReview         = "vigilante:ready-for-review"
+	labelAwaitingUserValidation = "vigilante:awaiting-user-validation"
+	labelDone                   = "vigilante:done"
+	labelNeedsReview            = "vigilante:needs-review"
+	labelNeedsHumanInput        = "vigilante:needs-human-input"
+	labelNeedsProviderFix       = "vigilante:needs-provider-fix"
+	labelNeedsGitFix            = "vigilante:needs-git-fix"
+)
+
+var managedIssueLabels = []string{
+	labelQueued,
+	labelRunning,
+	labelBlocked,
+	labelReadyForReview,
+	labelAwaitingUserValidation,
+	labelDone,
+	labelNeedsReview,
+	labelNeedsHumanInput,
+	labelNeedsProviderFix,
+	labelNeedsGitFix,
+}
+
 var supportedCompletionShells = []string{"bash", "fish", "zsh"}
 var errHelpHandled = errors.New("help handled")
 
@@ -640,6 +666,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			a.state.AppendDaemonLog("scan repo issues repo=%s open_issues=%d", target.Repo, len(issues))
 
 			activeCount := ghcli.ActiveSessionCount(sessions, *target)
+			eligibleIssues := ghcli.SelectIssues(issues, sessions, *target, len(issues))
 			availableSlots := len(issues)
 			if target.MaxParallel > 0 {
 				availableSlots = target.MaxParallel - activeCount
@@ -648,6 +675,9 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				}
 			}
 			nextIssues := ghcli.SelectIssues(issues, sessions, *target, availableSlots)
+			for _, queued := range eligibleIssues[len(nextIssues):] {
+				a.syncQueuedIssueLabelsBestEffort(ctx, target.Repo, queued.Number)
+			}
 			if len(nextIssues) == 0 {
 				a.state.AppendDaemonLog("scan repo no eligible issues repo=%s", target.Repo)
 				fmt.Fprintf(a.stdout, "repo: %s no eligible issues (%d open)\n", target.Repo, len(issues))
@@ -677,6 +707,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 					if err := a.state.SaveSessions(sessions); err != nil {
 						return err
 					}
+					a.syncSessionIssueLabelsBestEffort(ctx, session, nil)
 					fmt.Fprintf(a.stdout, "repo: %s blocked issue #%d: %s\n", target.Repo, next.Number, summarizeText(err.Error()))
 					continue
 				}
@@ -725,6 +756,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				if err := a.state.SaveSessions(sessions); err != nil {
 					return err
 				}
+				a.syncSessionIssueLabelsBestEffort(ctx, session, nil)
 				startedCount++
 				fmt.Fprintf(a.stdout, "repo: %s started issue #%d in %s\n", target.Repo, next.Number, wt.Path)
 
@@ -801,6 +833,7 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 				session.UpdatedAt = a.clock().Format(time.RFC3339)
 				a.state.AppendDaemonLog("stalled session recovery comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
 			}
+			a.syncSessionIssueLabelsBestEffort(ctx, *session, pr)
 			continue
 		}
 
@@ -826,6 +859,7 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 				session.UpdatedAt = a.clock().Format(time.RFC3339)
 				a.state.AppendDaemonLog("stalled session cleanup comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, commentErr)
 			}
+			a.syncSessionIssueLabelsBestEffort(ctx, *session, nil)
 			continue
 		}
 
@@ -855,6 +889,7 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 			a.state.AppendDaemonLog("stalled session redispatch comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
 		}
+		a.syncSessionIssueLabelsBestEffort(ctx, *session, nil)
 	}
 
 	return sessions, nil
@@ -887,6 +922,7 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 				session.LastMaintenanceError = ""
 				session.UpdatedAt = session.MonitoringStoppedAt
 				a.state.AppendDaemonLog("monitoring stopped repo=%s issue=%d pr=%d branch=%s state=%s", session.Repo, session.IssueNumber, pr.Number, session.Branch, pr.State)
+				a.syncSessionIssueLabelsBestEffort(ctx, *session, pr)
 				continue
 			}
 			if err := a.maintainOpenPullRequest(ctx, session, *pr); err != nil {
@@ -912,8 +948,10 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 					}
 					session.LastMaintenanceError = err.Error()
 				}
+				a.syncSessionIssueLabelsBestEffort(ctx, *session, pr)
 				continue
 			}
+			a.syncSessionIssueLabelsBestEffort(ctx, *session, pr)
 			continue
 		}
 
@@ -937,6 +975,7 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 			session.WorktreePath,
 			session.PullRequestMergedAt,
 		)
+		a.syncSessionIssueLabelsBestEffort(ctx, *session, pr)
 	}
 
 	return sessions, nil
@@ -982,6 +1021,7 @@ func (a *App) launchIssueSession(ctx context.Context, target state.WatchTarget, 
 			a.state.AppendDaemonLog("session result save failed repo=%s issue=%d err=%v", target.Repo, issue.Number, err)
 			return
 		}
+		a.syncSessionIssueLabelsBestEffort(ctx, result, nil)
 		a.state.AppendDaemonLog("scan repo session finished repo=%s issue=%d status=%s", target.Repo, issue.Number, result.Status)
 	}()
 }
@@ -1196,6 +1236,7 @@ func (a *App) processGitHubCleanupRequests(ctx context.Context, sessions []state
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 		}
+		a.syncSessionIssueLabelsBestEffort(ctx, *session, nil)
 	}
 	return sessions, nil
 }
@@ -1232,6 +1273,7 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 				a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), fallbackText(session.BlockedReason.Operation, "resume"), err)
 				a.state.AppendDaemonLog("resume by label failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
 			}
+			a.syncSessionIssueLabelsBestEffort(ctx, *session, nil)
 			continue
 		}
 
@@ -1257,6 +1299,7 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 			a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), fallbackText(session.BlockedReason.Operation, "resume"), err)
 			a.state.AppendDaemonLog("resume by comment failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
 		}
+		a.syncSessionIssueLabelsBestEffort(ctx, *session, nil)
 	}
 	return sessions, nil
 }
@@ -1281,6 +1324,11 @@ func (a *App) ResumeAllBlocked(ctx context.Context) error {
 	}
 	if err := a.state.SaveSessions(sessions); err != nil {
 		return err
+	}
+	for _, session := range sessions {
+		if session.Status == state.SessionStatusSuccess {
+			a.syncSessionIssueLabelsBestEffort(ctx, session, nil)
+		}
 	}
 	fmt.Fprintf(a.stdout, "resumed %d blocked session(s)\n", resumed)
 	return nil
@@ -1333,6 +1381,9 @@ func (a *App) CleanupSession(ctx context.Context, repo string, issue int, source
 	if err := a.state.SaveSessions(sessions); err != nil {
 		return err
 	}
+	if cleanedSession != nil {
+		a.syncSessionIssueLabelsBestEffort(ctx, *cleanedSession, nil)
+	}
 	if source == "cli" && cleanedSession != nil {
 		a.commentOnIssueBestEffort(ctx, repo, issue, localCleanupResultComment(*cleanedSession), "local cleanup result")
 	}
@@ -1373,6 +1424,12 @@ func (a *App) ResumeSession(ctx context.Context, repo string, issue int, source 
 	}
 	if err := a.state.SaveSessions(sessions); err != nil {
 		return err
+	}
+	for _, session := range sessions {
+		if session.Repo == repo && session.IssueNumber == issue {
+			a.syncSessionIssueLabelsBestEffort(ctx, session, nil)
+			break
+		}
 	}
 	fmt.Fprintf(a.stdout, "resume attempted for %s issue #%d\n", repo, issue)
 	return nil
@@ -1467,6 +1524,7 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 	if err := a.state.SaveSessions(sessions); err != nil {
 		return err
 	}
+	a.syncSessionIssueLabelsBestEffort(ctx, session, nil)
 
 	if source == "cli" {
 		a.commentOnIssueBestEffort(ctx, repoSlug, issue, localRedispatchStartedComment(session), "local redispatch result")
@@ -1512,6 +1570,11 @@ func (a *App) cleanupSessions(ctx context.Context, source string, successFormat 
 	}
 	if err := a.state.SaveSessions(sessions); err != nil {
 		return err
+	}
+	for _, session := range sessions {
+		if match(session) {
+			a.syncSessionIssueLabelsBestEffort(ctx, session, nil)
+		}
 	}
 	fmt.Fprintf(a.stdout, successFormat, append([]any{cleaned}, args...)...)
 	return nil
@@ -1802,6 +1865,7 @@ func (a *App) cleanupInactiveBlockedSessions(ctx context.Context, sessions []sta
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 			a.state.AppendDaemonLog("blocked session inactivity comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
 		}
+		a.syncSessionIssueLabelsBestEffort(ctx, *session, nil)
 	}
 
 	return sessions, nil
@@ -2121,6 +2185,114 @@ func clearBlockedState(session *state.Session, now time.Time, source string) {
 	session.LastResumeFailureCommentedAt = ""
 	session.LastDispatchFailureFingerprint = ""
 	session.LastDispatchFailureCommentedAt = ""
+}
+
+func (a *App) syncQueuedIssueLabelsBestEffort(ctx context.Context, repo string, issueNumber int) {
+	if err := a.syncIssueManagedLabels(ctx, repo, issueNumber, []string{labelQueued}); err != nil {
+		a.state.AppendDaemonLog("issue label sync failed repo=%s issue=%d err=%v", repo, issueNumber, err)
+	}
+}
+
+func (a *App) syncSessionIssueLabelsBestEffort(ctx context.Context, session state.Session, pr *ghcli.PullRequest) {
+	if err := a.syncSessionIssueLabels(ctx, session, pr); err != nil {
+		a.state.AppendDaemonLog("session label sync failed repo=%s issue=%d status=%s err=%v", session.Repo, session.IssueNumber, session.Status, err)
+	}
+}
+
+func (a *App) syncSessionIssueLabels(ctx context.Context, session state.Session, pr *ghcli.PullRequest) error {
+	if strings.TrimSpace(session.Repo) == "" || session.IssueNumber <= 0 {
+		return nil
+	}
+	if pr == nil && session.PullRequestNumber > 0 && strings.TrimSpace(session.PullRequestMergedAt) == "" {
+		details, err := ghcli.GetPullRequestDetails(ctx, a.env.Runner, session.Repo, session.PullRequestNumber)
+		if err == nil {
+			pr = details
+		}
+	}
+	if pr != nil && pr.MergedAt == nil && pr.Number > 0 && len(pr.Labels) == 0 && pr.ReviewDecision == "" && !pr.IsDraft && pr.MergeStateStatus == "" && len(pr.StatusCheckRollup) == 0 {
+		details, err := ghcli.GetPullRequestDetails(ctx, a.env.Runner, session.Repo, pr.Number)
+		if err == nil {
+			pr = details
+		}
+	}
+	labels := sessionManagedLabels(session, pr)
+	return a.syncIssueManagedLabels(ctx, session.Repo, session.IssueNumber, labels)
+}
+
+func (a *App) syncIssueManagedLabels(ctx context.Context, repo string, issueNumber int, desired []string) error {
+	details, err := ghcli.GetIssueDetails(ctx, a.env.Runner, repo, issueNumber)
+	if err != nil {
+		return err
+	}
+	return ghcli.SyncIssueLabels(ctx, a.env.Runner, repo, issueNumber, details.Labels, desired, managedIssueLabels)
+}
+
+func sessionManagedLabels(session state.Session, pr *ghcli.PullRequest) []string {
+	stateLabel, interventionLabel := desiredSessionLabels(session, pr)
+	labels := make([]string, 0, 2)
+	if stateLabel != "" {
+		labels = append(labels, stateLabel)
+	}
+	if interventionLabel != "" {
+		labels = append(labels, interventionLabel)
+	}
+	return labels
+}
+
+func desiredSessionLabels(session state.Session, pr *ghcli.PullRequest) (string, string) {
+	switch session.Status {
+	case state.SessionStatusRunning, state.SessionStatusResuming:
+		return labelRunning, ""
+	case state.SessionStatusBlocked:
+		return labelBlocked, blockedInterventionLabel(session.BlockedReason)
+	case state.SessionStatusSuccess:
+		if pr != nil && pr.MergedAt != nil {
+			return labelDone, ""
+		}
+		if strings.TrimSpace(session.PullRequestMergedAt) != "" {
+			return labelDone, ""
+		}
+		if pr != nil && shouldAwaitUserValidation(*pr) {
+			return labelAwaitingUserValidation, ""
+		}
+		return labelReadyForReview, labelNeedsReview
+	default:
+		return "", ""
+	}
+}
+
+func blockedInterventionLabel(reason state.BlockedReason) string {
+	switch strings.TrimSpace(reason.Kind) {
+	case "provider_auth", "provider_missing", "provider_quota", "provider_runtime_error":
+		return labelNeedsProviderFix
+	case "git_auth", "gh_auth", "dirty_worktree", "validation_failed":
+		return labelNeedsGitFix
+	case "unknown_operator_action_required":
+		return labelNeedsHumanInput
+	default:
+		return ""
+	}
+}
+
+func shouldAwaitUserValidation(pr ghcli.PullRequest) bool {
+	if ghcli.HasAnyLabel(pr.Labels, "automerge") {
+		return false
+	}
+	if pr.IsDraft {
+		return false
+	}
+	if strings.TrimSpace(pr.ReviewDecision) != "APPROVED" {
+		return false
+	}
+	if requiredChecksState(pr.StatusCheckRollup) != "passing" {
+		return false
+	}
+	switch strings.TrimSpace(pr.MergeStateStatus) {
+	case "", "CLEAN":
+		return true
+	default:
+		return false
+	}
 }
 
 func blockedStateLabel(session state.Session) string {

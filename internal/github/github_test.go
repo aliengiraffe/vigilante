@@ -180,6 +180,44 @@ func TestListOpenIssuesReturnsErrorWhenResolvingMeFails(t *testing.T) {
 	}
 }
 
+func TestSyncIssueLabelsAddsAndRemovesManagedLabels(t *testing.T) {
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh issue edit --repo owner/repo 7 --add-label vigilante:blocked --add-label vigilante:needs-provider-fix --remove-label vigilante:running": "ok",
+		},
+	}
+
+	err := SyncIssueLabels(
+		context.Background(),
+		runner,
+		"owner/repo",
+		7,
+		[]Label{{Name: "bug"}, {Name: "vigilante:running"}},
+		[]string{"vigilante:blocked", "vigilante:needs-provider-fix"},
+		[]string{"vigilante:queued", "vigilante:running", "vigilante:blocked", "vigilante:needs-provider-fix"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSyncIssueLabelsNoopsWhenManagedStateAlreadyMatches(t *testing.T) {
+	runner := testutil.FakeRunner{}
+
+	err := SyncIssueLabels(
+		context.Background(),
+		runner,
+		"owner/repo",
+		7,
+		[]Label{{Name: "bug"}, {Name: "vigilante:running"}},
+		[]string{"vigilante:running"},
+		[]string{"vigilante:queued", "vigilante:running", "vigilante:blocked"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFindPullRequestForBranch(t *testing.T) {
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
