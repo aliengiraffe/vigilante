@@ -488,6 +488,7 @@ func TestSetupCreatesStateLayoutAndSkill(t *testing.T) {
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementationOnTurborepo, "SKILL.md"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementationOnNx, "SKILL.md"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementationOnGradleMultiProject, "SKILL.md"),
+		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementationOnRushMonorepo, "SKILL.md"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteConflictResolution, "SKILL.md"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.DockerComposeLaunch, "SKILL.md"),
 	} {
@@ -521,6 +522,8 @@ func TestSetupWithGeminiCreatesGeminiSkillAssets(t *testing.T) {
 	for _, path := range []string{
 		filepath.Join(app.state.GeminiHome(), "skills", skill.VigilanteIssueImplementation, "SKILL.md"),
 		filepath.Join(app.state.GeminiHome(), "commands", skill.VigilanteIssueImplementation+".toml"),
+		filepath.Join(app.state.GeminiHome(), "skills", skill.VigilanteIssueImplementationOnRushMonorepo, "SKILL.md"),
+		filepath.Join(app.state.GeminiHome(), "commands", skill.VigilanteIssueImplementationOnRushMonorepo+".toml"),
 		filepath.Join(app.state.GeminiHome(), "skills", skill.VigilanteConflictResolution, "SKILL.md"),
 		filepath.Join(app.state.GeminiHome(), "commands", skill.VigilanteConflictResolution+".toml"),
 	} {

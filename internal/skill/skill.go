@@ -20,6 +20,7 @@ const VigilanteIssueImplementationOnMonorepo = "vigilante-issue-implementation-o
 const VigilanteIssueImplementationOnTurborepo = "vigilante-issue-implementation-on-turborepo"
 const VigilanteIssueImplementationOnNx = "vigilante-issue-implementation-on-nx"
 const VigilanteIssueImplementationOnRush = "vigilante-issue-implementation-on-rush"
+const VigilanteIssueImplementationOnRushMonorepo = "vigilante-issue-implementation-on-rush-monorepo"
 const VigilanteIssueImplementationOnBazel = "vigilante-issue-implementation-on-bazel"
 const VigilanteIssueImplementationOnGradle = "vigilante-issue-implementation-on-gradle"
 const VigilanteIssueImplementationOnGradleMultiProject = "vigilante-issue-implementation-on-gradle-multi-project"
@@ -40,6 +41,7 @@ func VigilanteSkillNames() []string {
 		VigilanteIssueImplementationOnTurborepo,
 		VigilanteIssueImplementationOnNx,
 		VigilanteIssueImplementationOnRush,
+		VigilanteIssueImplementationOnRushMonorepo,
 		VigilanteIssueImplementationOnBazel,
 		VigilanteIssueImplementationOnGradle,
 		VigilanteIssueImplementationOnGradleMultiProject,
@@ -204,6 +206,9 @@ func IssueImplementationSkill(target state.WatchTarget) string {
 	if normalizedRepoShape(target) == string(repo.ShapeGradleMultiProject) {
 		return VigilanteIssueImplementationOnGradleMultiProject
 	}
+	if normalizedRepoShape(target) == string(repo.ShapeMonorepo) && hasWorkspaceConfigFile(target.Classification, "rush.json") {
+		return VigilanteIssueImplementationOnRushMonorepo
+	}
 	if normalizedRepoShape(target) != string(repo.ShapeMonorepo) {
 		return VigilanteIssueImplementation
 	}
@@ -216,7 +221,7 @@ func IssueImplementationSkill(target state.WatchTarget) string {
 	case string(repo.MonorepoStackNx):
 		return VigilanteIssueImplementationOnNx
 	case string(repo.MonorepoStackRush):
-		return VigilanteIssueImplementationOnRush
+		return VigilanteIssueImplementationOnRushMonorepo
 	case string(repo.MonorepoStackBazel):
 		return VigilanteIssueImplementationOnBazel
 	case string(repo.MonorepoStackGradle):
@@ -254,6 +259,15 @@ func slicesContains(values []string, want string) bool {
 
 func isBazelMonorepo(classification repo.Classification) bool {
 	return len(classification.ProcessHints.BazelRepoMarkers) > 0 && len(classification.ProcessHints.BazelPackageRoots) > 0
+}
+
+func hasWorkspaceConfigFile(classification repo.Classification, name string) bool {
+	for _, file := range classification.ProcessHints.WorkspaceConfigFiles {
+		if strings.EqualFold(strings.TrimSpace(file), name) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizedRepoShape(target state.WatchTarget) string {

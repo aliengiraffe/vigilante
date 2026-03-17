@@ -305,6 +305,7 @@ Expected behavior:
   - `vigilante-issue-implementation-on-turborepo`
   - `vigilante-issue-implementation-on-nx`
   - `vigilante-issue-implementation-on-rush`
+  - `vigilante-issue-implementation-on-rush-monorepo`
   - `vigilante-issue-implementation-on-bazel`
   - `vigilante-issue-implementation-on-gradle`
   - `vigilante-issue-implementation-on-bazel-monorepo`
