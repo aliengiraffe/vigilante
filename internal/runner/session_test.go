@@ -205,6 +205,49 @@ func TestRunConflictResolutionSessionFailureCommentsOnIssue(t *testing.T) {
 	}
 }
 
+func TestRunCIRemediationSessionFailureCommentsOnIssue(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"codex --version": "codex 0.114.0",
+			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "CI Remediation Blocked",
+				Emoji:      "🧯",
+				Percent:    92,
+				ETAMinutes: 10,
+				Items: []string{
+					"CI remediation for PR #17 on `vigilante/issue-7` did not complete automatically.",
+					"Cause class: `provider_runtime_error`.",
+					"Next step: fix the blocker, then run `vigilante resume --repo owner/repo --issue 7` or request resume from GitHub.",
+				},
+				Tagline: "Stop the loop before it turns into noise.",
+			}): "ok",
+		},
+		Errors: map[string]error{
+			"codex exec --cd /tmp/worktree --dangerously-bypass-approvals-and-sandbox Use the `vigilante-issue-implementation` skill for this task.\nRepository: owner/repo\nLocal repository path: /tmp/repo\nIssue: #7 - Demo\nIssue URL: https://github.com/owner/repo/issues/7\nPull Request: #17\nPull Request URL: https://github.com/owner/repo/pull/17\nWorktree path: /tmp/worktree\nBranch: vigilante/issue-7\nCI remediation context: GitHub reported failing required checks for this existing PR.\nFailing check: test (state=COMPLETED conclusion=FAILURE)\nInvestigate the failing CI checks, reproduce the problem locally when practical, and make the minimal code or configuration fix needed to get the PR green again.\nUse `gh issue comment` for progress updates and blockers, push any successful fix to the existing PR branch, and do not open a new pull request.\nIf GitHub exposes a failing check summary or log URL during your investigation, use it. At minimum, work from the failing check identifiers listed above.\nIf you cannot fix the failure safely, leave a concise GitHub comment explaining the blocker and exit with a non-zero status so Vigilante can stop and hand off to a human.\nKeep the changes minimal and focused on restoring CI for the existing pull request.": errors.New("codex exec [--cd /tmp/worktree --dangerously-bypass-approvals-and-sandbox prompt]: exit status 1"),
+		},
+	}
+	env := &environment.Environment{OS: "darwin", Runner: runner}
+	store := state.NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+
+	err := RunCIRemediationSession(
+		context.Background(),
+		env,
+		store,
+		state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"},
+		state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, IssueTitle: "Demo", IssueURL: "https://github.com/owner/repo/issues/7", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7"},
+		ghcli.PullRequest{Number: 17, URL: "https://github.com/owner/repo/pull/17"},
+		[]ghcli.StatusCheckRoll{{Context: "test", State: "COMPLETED", Conclusion: "FAILURE"}},
+	)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
 func TestRunIssueSessionSuccessWithClaudeProvider(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))

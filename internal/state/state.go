@@ -72,6 +72,8 @@ type Session struct {
 	PullRequestMergedAt            string        `json:"pull_request_merged_at,omitempty"`
 	LastMaintainedAt               string        `json:"last_maintained_at,omitempty"`
 	LastMaintenanceError           string        `json:"last_maintenance_error,omitempty"`
+	LastCIRemediationFingerprint   string        `json:"last_ci_remediation_fingerprint,omitempty"`
+	LastCIRemediationAttemptedAt   string        `json:"last_ci_remediation_attempted_at,omitempty"`
 	BlockedAt                      string        `json:"blocked_at,omitempty"`
 	BlockedStage                   string        `json:"blocked_stage,omitempty"`
 	BlockedReason                  BlockedReason `json:"blocked_reason,omitempty"`

@@ -427,6 +427,48 @@ func BuildConflictResolutionPromptForRuntime(runtime string, target state.WatchT
 	return strings.Join(lines, "\n")
 }
 
+func BuildCIRemediationPrompt(target state.WatchTarget, session state.Session, pr ghcli.PullRequest, checks []ghcli.StatusCheckRoll) string {
+	return BuildCIRemediationPromptForRuntime(RuntimeCodex, target, session, pr, checks)
+}
+
+func BuildCIRemediationPromptForRuntime(runtime string, target state.WatchTarget, session state.Session, pr ghcli.PullRequest, checks []ghcli.StatusCheckRoll) string {
+	lines := []string{}
+	if runtimeUsesInlineSkillHeader(runtime) {
+		lines = append(lines, InlineSkillHeader(IssueImplementationSkill(target)))
+	} else {
+		lines = append(lines, fmt.Sprintf("Use the `%s` skill for this task.", IssueImplementationSkill(target)))
+	}
+	lines = append(lines,
+		fmt.Sprintf("Repository: %s", target.Repo),
+		fmt.Sprintf("Local repository path: %s", target.Path),
+		fmt.Sprintf("Issue: #%d - %s", session.IssueNumber, session.IssueTitle),
+		fmt.Sprintf("Issue URL: %s", session.IssueURL),
+		fmt.Sprintf("Pull Request: #%d", pr.Number),
+		fmt.Sprintf("Pull Request URL: %s", pr.URL),
+		fmt.Sprintf("Worktree path: %s", session.WorktreePath),
+		fmt.Sprintf("Branch: %s", session.Branch),
+		"CI remediation context: GitHub reported failing required checks for this existing PR.",
+	)
+	for _, check := range checks {
+		name := strings.TrimSpace(check.Name)
+		if name == "" {
+			name = strings.TrimSpace(check.Context)
+		}
+		if name == "" {
+			name = "unnamed-check"
+		}
+		lines = append(lines, fmt.Sprintf("Failing check: %s (state=%s conclusion=%s)", name, fallbackPromptText(strings.TrimSpace(check.State), "unknown"), fallbackPromptText(strings.TrimSpace(check.Conclusion), "unknown")))
+	}
+	lines = append(lines,
+		"Investigate the failing CI checks, reproduce the problem locally when practical, and make the minimal code or configuration fix needed to get the PR green again.",
+		"Use `gh issue comment` for progress updates and blockers, push any successful fix to the existing PR branch, and do not open a new pull request.",
+		"If GitHub exposes a failing check summary or log URL during your investigation, use it. At minimum, work from the failing check identifiers listed above.",
+		"If you cannot fix the failure safely, leave a concise GitHub comment explaining the blocker and exit with a non-zero status so Vigilante can stop and hand off to a human.",
+		"Keep the changes minimal and focused on restoring CI for the existing pull request.",
+	)
+	return strings.Join(lines, "\n")
+}
+
 func runtimeUsesInlineSkillHeader(runtime string) bool {
 	switch strings.TrimSpace(runtime) {
 	case RuntimeClaude, RuntimeGemini:
