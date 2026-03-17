@@ -217,7 +217,6 @@ func IssueImplementationSkill(target state.WatchTarget) string {
 		}
 		return VigilanteIssueImplementationOnMonorepo
 	}
-	return VigilanteIssueImplementation
 }
 
 func isTurborepoTarget(target state.WatchTarget) bool {
