@@ -3,8 +3,12 @@ package telemetry
 import (
 	"bytes"
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -31,6 +35,9 @@ func TestSetupCreatesAnonymousStateAndFirstRunNotice(t *testing.T) {
 		EnvLookup: func(string) string { return "" },
 		NewExporter: func(context.Context, BuildInfo) (sdklog.Exporter, error) {
 			return noopExporter{}, nil
+		},
+		NewAnalyticsExporter: func(BuildInfo, string) (analyticsExporter, error) {
+			return &captureAnalyticsExporter{}, nil
 		},
 	}
 
@@ -93,7 +100,7 @@ func TestSetupDisabledByConsentFlags(t *testing.T) {
 	}
 }
 
-func TestSetupDisabledWithoutTelemetryURLPath(t *testing.T) {
+func TestSetupEnablesAnalyticsWithoutTelemetryURLPath(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -106,15 +113,18 @@ func TestSetupDisabledWithoutTelemetryURLPath(t *testing.T) {
 		},
 		StateRoot: root,
 		EnvLookup: func(string) string { return "" },
+		NewAnalyticsExporter: func(BuildInfo, string) (analyticsExporter, error) {
+			return &captureAnalyticsExporter{}, nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("Setup() error = %v", err)
 	}
 	if manager == nil {
-		t.Fatal("expected disabled manager instance")
+		t.Fatal("expected manager instance")
 	}
-	if _, err := os.Stat(filepath.Join(root, "state.json")); !os.IsNotExist(err) {
-		t.Fatalf("expected no state file when telemetry config is incomplete, got err=%v", err)
+	if _, err := os.Stat(filepath.Join(root, "state.json")); err != nil {
+		t.Fatalf("expected state file when analytics is enabled, got err=%v", err)
 	}
 }
 
@@ -178,6 +188,26 @@ func TestTelemetryExporterSettingsUseEmbeddedURLPath(t *testing.T) {
 	}
 }
 
+func TestTelemetryBaseURL(t *testing.T) {
+	t.Parallel()
+
+	got, err := telemetryBaseURL(BuildInfo{TelemetryEndpoint: " us.i.posthog.com "})
+	if err != nil {
+		t.Fatalf("telemetryBaseURL() error = %v", err)
+	}
+	if want := "https://us.i.posthog.com"; got != want {
+		t.Fatalf("telemetryBaseURL() = %q, want %q", got, want)
+	}
+
+	got, err = telemetryBaseURL(BuildInfo{TelemetryEndpoint: "https://eu.i.posthog.com/ingest"})
+	if err != nil {
+		t.Fatalf("telemetryBaseURL() error = %v", err)
+	}
+	if want := "https://eu.i.posthog.com"; got != want {
+		t.Fatalf("telemetryBaseURL() = %q, want %q", got, want)
+	}
+}
+
 func TestShutdownTimeoutExceedsExportTimeout(t *testing.T) {
 	t.Parallel()
 
@@ -197,6 +227,7 @@ func TestStartCommandEmitsLogRecord(t *testing.T) {
 
 	root := t.TempDir()
 	exporter := &captureExporter{}
+	analytics := &captureAnalyticsExporter{}
 	manager, err := Setup(context.Background(), SetupConfig{
 		BuildInfo: BuildInfo{
 			Version:           "1.2.3",
@@ -209,6 +240,9 @@ func TestStartCommandEmitsLogRecord(t *testing.T) {
 		EnvLookup: func(string) string { return "" },
 		NewExporter: func(context.Context, BuildInfo) (sdklog.Exporter, error) {
 			return exporter, nil
+		},
+		NewAnalyticsExporter: func(BuildInfo, string) (analyticsExporter, error) {
+			return analytics, nil
 		},
 	})
 	if err != nil {
@@ -251,6 +285,119 @@ func TestStartCommandEmitsLogRecord(t *testing.T) {
 	if got := attrs["command.duration_ms"].AsInt64(); got < 0 {
 		t.Fatalf("command.duration_ms = %d, want non-negative", got)
 	}
+
+	events := analytics.Events()
+	if len(events) != 2 {
+		t.Fatalf("expected 2 analytics events, got %d", len(events))
+	}
+	if got, want := events[0].Event, "cli_command_started"; got != want {
+		t.Fatalf("events[0].Event = %q, want %q", got, want)
+	}
+	if got, want := events[1].Event, "cli_command_completed"; got != want {
+		t.Fatalf("events[1].Event = %q, want %q", got, want)
+	}
+	if got, want := events[0].Properties["command_name"], "watch"; got != want {
+		t.Fatalf("started command_name = %v, want %q", got, want)
+	}
+	if got, want := events[0].Properties["feature_area"], "watch_management"; got != want {
+		t.Fatalf("started feature_area = %v, want %q", got, want)
+	}
+	if _, ok := events[0].Properties["path"]; ok {
+		t.Fatal("expected analytics payload to omit raw command arguments")
+	}
+	if got, want := events[1].Properties["result"], "failure"; got != want {
+		t.Fatalf("completed result = %v, want %q", got, want)
+	}
+	if got, want := events[1].Properties["exit_code"], 7; got != want {
+		t.Fatalf("completed exit_code = %v, want %d", got, want)
+	}
+	if got, ok := events[1].Properties["duration_ms"].(int64); !ok || got < 0 {
+		t.Fatalf("completed duration_ms = %v, want non-negative int64", events[1].Properties["duration_ms"])
+	}
+}
+
+func TestStartCommandAnalyticsTaxonomyForGroupedCommands(t *testing.T) {
+	t.Parallel()
+
+	manager := &Manager{
+		analytics: &captureAnalyticsExporter{},
+		version:   "1.2.3",
+		distro:    "direct",
+		anonID:    "anon-123",
+	}
+
+	_, finish := manager.StartCommand(context.Background(), []string{"service", "restart"})
+	finish(0)
+	if err := manager.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+
+	events := manager.analytics.(*captureAnalyticsExporter).Events()
+	if len(events) != 2 {
+		t.Fatalf("expected 2 analytics events, got %d", len(events))
+	}
+	if got, want := events[0].Properties["command_name"], "service restart"; got != want {
+		t.Fatalf("command_name = %v, want %q", got, want)
+	}
+	if got, want := events[0].Properties["command_group"], "service"; got != want {
+		t.Fatalf("command_group = %v, want %q", got, want)
+	}
+	if got, want := events[0].Properties["feature_area"], "service_management"; got != want {
+		t.Fatalf("feature_area = %v, want %q", got, want)
+	}
+	if got, want := events[1].Properties["result"], "success"; got != want {
+		t.Fatalf("result = %v, want %q", got, want)
+	}
+}
+
+func TestHTTPAnalyticsExporterUsesBatchEndpoint(t *testing.T) {
+	t.Parallel()
+
+	var (
+		mu        sync.Mutex
+		gotPath   string
+		gotBody   string
+		gotMethod string
+	)
+	server := newTestServer(t, func(body string, method string, path string) {
+		mu.Lock()
+		defer mu.Unlock()
+		gotBody = body
+		gotMethod = method
+		gotPath = path
+	})
+
+	exporter, err := newHTTPAnalyticsExporter(BuildInfo{
+		TelemetryEndpoint: server.URL,
+		TelemetryToken:    "project-key",
+	}, "anon-123")
+	if err != nil {
+		t.Fatalf("newHTTPAnalyticsExporter() error = %v", err)
+	}
+	if err := exporter.Export(context.Background(), []analyticsEvent{{
+		Type:       "capture",
+		UUID:       "event-1",
+		Timestamp:  time.Unix(0, 0).UTC(),
+		DistinctID: "anon-123",
+		Event:      "cli_command_started",
+		Properties: map[string]any{"command_name": "watch"},
+	}}); err != nil {
+		t.Fatalf("Export() error = %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got, want := gotMethod, "POST"; got != want {
+		t.Fatalf("method = %q, want %q", got, want)
+	}
+	if got, want := gotPath, "/batch/"; got != want {
+		t.Fatalf("path = %q, want %q", got, want)
+	}
+	for _, want := range []string{`"api_key":"project-key"`, `"event":"cli_command_started"`, `"distinct_id":"anon-123"`, `"batch":[`} {
+		if !strings.Contains(gotBody, want) {
+			t.Fatalf("expected batch request body to contain %q, got %q", want, gotBody)
+		}
+	}
 }
 
 type noopExporter struct{}
@@ -287,4 +434,41 @@ func (e *captureExporter) Records() []sdklog.Record {
 	out := make([]sdklog.Record, len(e.records))
 	copy(out, e.records)
 	return out
+}
+
+type captureAnalyticsExporter struct {
+	mu     sync.Mutex
+	events []analyticsEvent
+}
+
+func (e *captureAnalyticsExporter) Events() []analyticsEvent {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	out := make([]analyticsEvent, len(e.events))
+	copy(out, e.events)
+	return out
+}
+
+func (e *captureAnalyticsExporter) Export(_ context.Context, events []analyticsEvent) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.events = append(e.events, events...)
+	return nil
+}
+
+func newTestServer(t *testing.T, capture func(body string, method string, path string)) *httptest.Server {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("ReadAll() error = %v", err)
+		}
+		capture(string(body), r.Method, r.URL.Path)
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+	return server
 }
