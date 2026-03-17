@@ -22,6 +22,7 @@ const VigilanteIssueImplementationOnNx = "vigilante-issue-implementation-on-nx"
 const VigilanteIssueImplementationOnRush = "vigilante-issue-implementation-on-rush"
 const VigilanteIssueImplementationOnBazel = "vigilante-issue-implementation-on-bazel"
 const VigilanteIssueImplementationOnGradle = "vigilante-issue-implementation-on-gradle"
+const VigilanteIssueImplementationOnGradleMultiProject = "vigilante-issue-implementation-on-gradle-multi-project"
 const VigilanteConflictResolution = "vigilante-conflict-resolution"
 const VigilanteCreateIssue = "vigilante-create-issue"
 const VigilanteLocalServiceDependencies = "vigilante-local-service-dependencies"
@@ -40,6 +41,7 @@ func VigilanteSkillNames() []string {
 		VigilanteIssueImplementationOnRush,
 		VigilanteIssueImplementationOnBazel,
 		VigilanteIssueImplementationOnGradle,
+		VigilanteIssueImplementationOnGradleMultiProject,
 		VigilanteConflictResolution,
 		VigilanteCreateIssue,
 		VigilanteLocalServiceDependencies,
@@ -197,6 +199,9 @@ func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue 
 }
 
 func IssueImplementationSkill(target state.WatchTarget) string {
+	if normalizedRepoShape(target) == string(repo.ShapeGradleMultiProject) {
+		return VigilanteIssueImplementationOnGradleMultiProject
+	}
 	if normalizedRepoShape(target) != string(repo.ShapeMonorepo) {
 		return VigilanteIssueImplementation
 	}
@@ -278,7 +283,9 @@ func repoClassificationJSON(target state.WatchTarget) string {
 	}
 	if len(classification.ProcessHints.WorkspaceConfigFiles) > 0 ||
 		len(classification.ProcessHints.WorkspaceManifestFiles) > 0 ||
-		len(classification.ProcessHints.MultiPackageRoots) > 0 {
+		len(classification.ProcessHints.MultiPackageRoots) > 0 ||
+		len(classification.ProcessHints.GradleSettingsFiles) > 0 ||
+		len(classification.ProcessHints.GradleRootBuildFiles) > 0 {
 		payload.ProcessHints = &classification.ProcessHints
 	}
 	data, err := json.Marshal(payload)

@@ -16,8 +16,9 @@ import (
 type Shape string
 
 const (
-	ShapeTraditional Shape = "traditional"
-	ShapeMonorepo    Shape = "monorepo"
+	ShapeTraditional        Shape = "traditional"
+	ShapeMonorepo           Shape = "monorepo"
+	ShapeGradleMultiProject Shape = "gradle_multi_project"
 )
 
 type MonorepoStack string
@@ -35,6 +36,8 @@ type ProcessHints struct {
 	WorkspaceConfigFiles   []string `json:"workspace_config_files,omitempty"`
 	WorkspaceManifestFiles []string `json:"workspace_manifest_files,omitempty"`
 	MultiPackageRoots      []string `json:"multi_package_roots,omitempty"`
+	GradleSettingsFiles    []string `json:"gradle_settings_files,omitempty"`
+	GradleRootBuildFiles   []string `json:"gradle_root_build_files,omitempty"`
 }
 
 type Classification struct {
@@ -90,6 +93,16 @@ func Classify(path string) Classification {
 		absPath = path
 	}
 
+	for _, name := range []string{"settings.gradle", "settings.gradle.kts"} {
+		if fileExists(filepath.Join(absPath, name)) {
+			classification.ProcessHints.GradleSettingsFiles = append(classification.ProcessHints.GradleSettingsFiles, name)
+		}
+	}
+	for _, name := range []string{"build.gradle", "build.gradle.kts"} {
+		if fileExists(filepath.Join(absPath, name)) {
+			classification.ProcessHints.GradleRootBuildFiles = append(classification.ProcessHints.GradleRootBuildFiles, name)
+		}
+	}
 	for _, name := range []string{"pnpm-workspace.yaml", "turbo.json", "nx.json", "lerna.json", "rush.json", "go.work"} {
 		if fileExists(filepath.Join(absPath, name)) {
 			classification.ProcessHints.WorkspaceConfigFiles = append(classification.ProcessHints.WorkspaceConfigFiles, name)
@@ -112,6 +125,11 @@ func Classify(path string) Classification {
 		classification.Shape = ShapeMonorepo
 		classification.MonorepoStack = detectMonorepoStack(absPath)
 	}
+	if isGradleMultiProject(absPath, classification.ProcessHints.GradleSettingsFiles) {
+		classification.Shape = ShapeGradleMultiProject
+	}
+	slices.Sort(classification.ProcessHints.GradleSettingsFiles)
+	slices.Sort(classification.ProcessHints.GradleRootBuildFiles)
 	slices.Sort(classification.ProcessHints.WorkspaceConfigFiles)
 	slices.Sort(classification.ProcessHints.WorkspaceManifestFiles)
 	slices.Sort(classification.ProcessHints.MultiPackageRoots)
@@ -204,4 +222,18 @@ func cargoTomlHasWorkspace(path string) bool {
 		return false
 	}
 	return strings.Contains(string(data), "[workspace]")
+}
+
+func isGradleMultiProject(path string, settingsFiles []string) bool {
+	for _, name := range settingsFiles {
+		data, err := os.ReadFile(filepath.Join(path, name))
+		if err != nil {
+			continue
+		}
+		text := string(data)
+		if strings.Contains(text, "include(") || strings.Contains(text, "include ") || strings.Contains(text, "includeFlat(") || strings.Contains(text, "includeFlat ") {
+			return true
+		}
+	}
+	return false
 }

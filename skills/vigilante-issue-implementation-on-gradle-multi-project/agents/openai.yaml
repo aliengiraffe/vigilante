@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vigilante Gradle Multi-Project Issue Implementation"
+  short_description: "Implement a Vigilante-dispatched GitHub issue in a Gradle multi-project repository with issue comments, pushed changes, and a PR"
+  default_prompt: "Use $vigilante-issue-implementation-on-gradle-multi-project to implement the assigned Gradle multi-project issue in the provided worktree, push the branch, open a PR, comment on the issue as progress is made, and report failures clearly."
