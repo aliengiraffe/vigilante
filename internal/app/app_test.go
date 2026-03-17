@@ -1086,7 +1086,7 @@ func TestRedispatchSessionRunningIssue(t *testing.T) {
 			"git show-ref --verify --quiet refs/heads/vigilante/issue-44-old-run":                                                                      "ok",
 			"git branch -D vigilante/issue-44-old-run":                                                                                                 "Deleted branch vigilante/issue-44-old-run\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels":                            `[{"number":44,"title":"force redispatch","createdAt":"2026-03-12T12:00:00Z","url":"https://github.com/owner/repo/issues/44","labels":[]}]`,
-			"git worktree add -b " + branch + " " + worktreePath + " main":                                                                             "ok",
+			"git worktree add -b " + branch + " " + worktreePath + " origin/main":                                                                      "ok",
 			sessionStartCommentCommand("owner/repo", 44, worktreePath, state.Session{Branch: branch}):                                                  "ok",
 			preflightPromptCommand(worktreePath, "owner/repo", repoPath, 44, "force redispatch", "https://github.com/owner/repo/issues/44", branch):    "baseline ok",
 			issuePromptCommand(worktreePath, "owner/repo", repoPath, 44, "force redispatch", "https://github.com/owner/repo/issues/44", branch):        "done",
@@ -2661,7 +2661,7 @@ func TestScanOnceSelectsEligibleIssueAndPersistsSession(t *testing.T) {
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[{"name":"to-do"}]}]`,
 			"git worktree prune": "ok",
-			"git worktree add -b " + branch + " " + worktreePath + " main": "ok",
+			"git worktree add -b " + branch + " " + worktreePath + " origin/main": "ok",
 			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
 				Stage:      "Vigilante Session Start",
 				Emoji:      "🧢",
@@ -2832,7 +2832,7 @@ func TestScanOnceUsesProviderLabelOverrideForSession(t *testing.T) {
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[{"name":"codex"}]}]`,
 			"git worktree prune": "ok",
-			"git worktree add -b " + branch + " " + worktreePath + " main":                                                         "ok",
+			"git worktree add -b " + branch + " " + worktreePath + " origin/main":                                                  "ok",
 			sessionStartCommentCommand("owner/repo", 1, worktreePath, state.Session{Branch: branch}):                               "ok",
 			issuePromptCommand(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", branch): "done",
 		}),
@@ -2948,7 +2948,7 @@ func TestScanOnceMaintainedIssueDoesNotConsumeOnlyDispatchSlot(t *testing.T) {
 			}): "ok",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[{"name":"to-do"}]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[{"name":"to-do"}]}]`,
 			"git worktree prune": "ok",
-			"git worktree add -b " + branch2 + " " + worktreePath2 + " main": "ok",
+			"git worktree add -b " + branch2 + " " + worktreePath2 + " origin/main": "ok",
 			"gh issue comment --repo owner/repo 2 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
 				Stage:      "Vigilante Session Start",
 				Emoji:      "🧢",
@@ -3030,7 +3030,7 @@ func TestScanOnceWithMaxParallelOnePreservesSerialBehavior(t *testing.T) {
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[]}]`,
 			"git worktree prune": "ok",
-			"git worktree add -b vigilante/issue-1-first " + worktreePath1 + " main":                                                                       "ok",
+			"git worktree add -b vigilante/issue-1-first " + worktreePath1 + " origin/main":                                                                "ok",
 			sessionStartCommentCommand("owner/repo", 1, worktreePath1, state.Session{Branch: "vigilante/issue-1-first"}):                                   "ok",
 			preflightPromptCommand(worktreePath1, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", "vigilante/issue-1-first"): "baseline ok",
 			issuePromptCommand(worktreePath1, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", "vigilante/issue-1-first"):     "done",
@@ -3080,9 +3080,9 @@ func TestScanOnceWithUnlimitedMaxParallelStartsAllEligibleIssues(t *testing.T) {
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[]},{"number":3,"title":"third","createdAt":"2026-03-11T12:00:00Z","url":"https://github.com/owner/repo/issues/3","labels":[]}]`,
 			"git worktree prune": "ok",
-			"git worktree add -b vigilante/issue-1-first " + worktreePath1 + " main":                                                                         "ok",
-			"git worktree add -b vigilante/issue-2-second " + worktreePath2 + " main":                                                                        "ok",
-			"git worktree add -b vigilante/issue-3-third " + worktreePath3 + " main":                                                                         "ok",
+			"git worktree add -b vigilante/issue-1-first " + worktreePath1 + " origin/main":                                                                  "ok",
+			"git worktree add -b vigilante/issue-2-second " + worktreePath2 + " origin/main":                                                                 "ok",
+			"git worktree add -b vigilante/issue-3-third " + worktreePath3 + " origin/main":                                                                  "ok",
 			sessionStartCommentCommand("owner/repo", 1, worktreePath1, state.Session{Branch: "vigilante/issue-1-first"}):                                     "ok",
 			sessionStartCommentCommand("owner/repo", 2, worktreePath2, state.Session{Branch: "vigilante/issue-2-second"}):                                    "ok",
 			sessionStartCommentCommand("owner/repo", 3, worktreePath3, state.Session{Branch: "vigilante/issue-3-third"}):                                     "ok",
@@ -3143,8 +3143,8 @@ func TestScanOnceStartsMultipleIssuesUpToConfiguredLimit(t *testing.T) {
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[]},{"number":3,"title":"third","createdAt":"2026-03-11T12:00:00Z","url":"https://github.com/owner/repo/issues/3","labels":[]}]`,
 			"git worktree prune": "ok",
-			"git worktree add -b vigilante/issue-1-first " + worktreePath1 + " main":                                                                         "ok",
-			"git worktree add -b vigilante/issue-2-second " + worktreePath2 + " main":                                                                        "ok",
+			"git worktree add -b vigilante/issue-1-first " + worktreePath1 + " origin/main":                                                                  "ok",
+			"git worktree add -b vigilante/issue-2-second " + worktreePath2 + " origin/main":                                                                 "ok",
 			sessionStartCommentCommand("owner/repo", 1, worktreePath1, state.Session{Branch: "vigilante/issue-1-first"}):                                     "ok",
 			sessionStartCommentCommand("owner/repo", 2, worktreePath2, state.Session{Branch: "vigilante/issue-2-second"}):                                    "ok",
 			preflightPromptCommand(worktreePath1, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", "vigilante/issue-1-first"):   "baseline ok",
@@ -3201,7 +3201,7 @@ func TestScanOnceDoesNotExceedConfiguredLimit(t *testing.T) {
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[]},{"number":3,"title":"third","createdAt":"2026-03-11T12:00:00Z","url":"https://github.com/owner/repo/issues/3","labels":[]}]`,
 			"git worktree prune": "ok",
-			"git worktree add -b vigilante/issue-2-second " + worktreePath2 + " main":                                                                    "ok",
+			"git worktree add -b vigilante/issue-2-second " + worktreePath2 + " origin/main":                                                             "ok",
 			sessionStartCommentCommand("owner/repo", 2, worktreePath2, state.Session{Branch: "vigilante/issue-2-second"}):                                "ok",
 			issuePromptCommand(worktreePath2, "owner/repo", repoPath, 2, "second", "https://github.com/owner/repo/issues/2", "vigilante/issue-2-second"): "done",
 		}),
@@ -3272,7 +3272,7 @@ func TestScanOnceBlocksFailedIssueDispatchAndContinuesToNextIssue(t *testing.T) 
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[]}]`,
 			"git worktree prune": "ok",
-			"git worktree add -b " + branch2 + " " + worktreePath2 + " main": "ok",
+			"git worktree add -b " + branch2 + " " + worktreePath2 + " origin/main": "ok",
 			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatDispatchFailureComment(ghcli.DispatchFailureComment{
 				Stage:        "dispatch",
 				Summary:      dispatchFailureSummary(blockedSession),
@@ -3285,7 +3285,7 @@ func TestScanOnceBlocksFailedIssueDispatchAndContinuesToNextIssue(t *testing.T) 
 			issuePromptCommand(worktreePath2, "owner/repo", repoPath, 2, "second", "https://github.com/owner/repo/issues/2", branch2):     "done",
 		}),
 		Errors: map[string]error{
-			"git worktree add -b vigilante/issue-1-first " + worktreePath1 + " main": errors.New("exit status 1: worktree add failed"),
+			"git worktree add -b vigilante/issue-1-first " + worktreePath1 + " origin/main": errors.New("exit status 1: worktree add failed"),
 		},
 	}
 	if err := app.state.EnsureLayout(); err != nil {
@@ -3406,7 +3406,7 @@ func TestScanOnceCommentsOnProviderStartupFailure(t *testing.T) {
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
 			"git worktree prune": "ok",
-			"git worktree add -b " + branch + " " + worktreePath + " main": "ok",
+			"git worktree add -b " + branch + " " + worktreePath + " origin/main": "ok",
 			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatDispatchFailureComment(ghcli.DispatchFailureComment{
 				Stage:        "issue_startup",
 				Summary:      dispatchFailureSummary(expectedSession),
@@ -3475,7 +3475,7 @@ func TestScanOnceSuppressesDuplicateDispatchFailureComment(t *testing.T) {
 			"git worktree prune": "ok",
 		}),
 		Errors: map[string]error{
-			"git worktree add -b vigilante/issue-1-first " + filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1") + " main": errors.New("worktree already exists for issue #1"),
+			"git worktree add -b vigilante/issue-1-first " + filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1") + " origin/main": errors.New("worktree already exists for issue #1"),
 		},
 	}
 	if err := app.state.EnsureLayout(); err != nil {
@@ -3526,9 +3526,9 @@ func TestScanOnceEnforcesLimitsIndependentlyAcrossRepositories(t *testing.T) {
 			"gh issue list --repo owner/repo-a --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first-a","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo-a/issues/1","labels":[]},{"number":2,"title":"second-a","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo-a/issues/2","labels":[]}]`,
 			"gh issue list --repo owner/repo-b --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":10,"title":"first-b","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo-b/issues/10","labels":[]},{"number":11,"title":"second-b","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo-b/issues/11","labels":[]}]`,
 			"git worktree prune": "ok",
-			"git worktree add -b vigilante/issue-1-first-a " + worktreeA1 + " main":                                                                                  "ok",
-			"git worktree add -b vigilante/issue-2-second-a " + worktreeA2 + " main":                                                                                 "ok",
-			"git worktree add -b vigilante/issue-10-first-b " + worktreeB10 + " main":                                                                                "ok",
+			"git worktree add -b vigilante/issue-1-first-a " + worktreeA1 + " origin/main":                                                                           "ok",
+			"git worktree add -b vigilante/issue-2-second-a " + worktreeA2 + " origin/main":                                                                          "ok",
+			"git worktree add -b vigilante/issue-10-first-b " + worktreeB10 + " origin/main":                                                                         "ok",
 			sessionStartCommentCommand("owner/repo-a", 1, worktreeA1, state.Session{Branch: "vigilante/issue-1-first-a"}):                                            "ok",
 			sessionStartCommentCommand("owner/repo-a", 2, worktreeA2, state.Session{Branch: "vigilante/issue-2-second-a"}):                                           "ok",
 			sessionStartCommentCommand("owner/repo-b", 10, worktreeB10, state.Session{Branch: "vigilante/issue-10-first-b"}):                                         "ok",
@@ -3588,7 +3588,7 @@ func TestScanOnceContinuesWhenOneRepositoryScanFails(t *testing.T) {
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo-b --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":10,"title":"first-b","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo-b/issues/10","labels":[]}]`,
 			"git worktree prune": "ok",
-			"git worktree add -b " + branchB10 + " " + worktreeB10 + " main":                                                                      "ok",
+			"git worktree add -b " + branchB10 + " " + worktreeB10 + " origin/main":                                                               "ok",
 			sessionStartCommentCommand("owner/repo-b", 10, worktreeB10, state.Session{Branch: branchB10}):                                         "ok",
 			preflightPromptCommand(worktreeB10, "owner/repo-b", repoPathB, 10, "first-b", "https://github.com/owner/repo-b/issues/10", branchB10): "baseline ok",
 			issuePromptCommand(worktreeB10, "owner/repo-b", repoPathB, 10, "first-b", "https://github.com/owner/repo-b/issues/10", branchB10):     "done",
@@ -4076,7 +4076,7 @@ func TestScanOnceRecoversStalledSessionAndRedispatchesIssue(t *testing.T) {
 			}): "ok",
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
-			"git worktree add -b " + branch + " " + worktreePath + " main":                                                  "ok",
+			"git worktree add -b " + branch + " " + worktreePath + " origin/main":                                           "ok",
 			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
 				Stage:      "Vigilante Session Start",
 				Emoji:      "🧢",
@@ -4278,10 +4278,10 @@ func failedResumeSession(session state.Session) state.Session {
 
 func freshBaseBranchOutputs(repoPath string, branch string) map[string]string {
 	return map[string]string{
-		"git fetch origin " + branch:           "ok",
-		"git worktree list --porcelain":        "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/" + branch + "\n",
-		"git status --porcelain":               "",
-		"git merge --ff-only origin/" + branch: "Already up to date.\n",
+		"git fetch origin " + branch:                  "ok",
+		"git worktree list --porcelain":               "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/" + branch + "\n",
+		"git status --porcelain --untracked-files=no": "",
+		"git merge --ff-only origin/" + branch:        "Already up to date.\n",
 	}
 }
 

@@ -231,11 +231,11 @@ func TestCreateIssueWorktreeRefreshesDetachedConfiguredBaseBranch(t *testing.T) 
 	branch := IssueBranchName(12, "Use develop")
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
-			"git worktree prune":                                      "ok",
-			"git fetch origin develop":                                "ok",
-			"git worktree list --porcelain":                           "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/feature\n",
-			"git branch -f develop refs/remotes/origin/develop":       "ok",
-			"git worktree add -b " + branch + " " + path + " develop": "ok",
+			"git worktree prune":                                             "ok",
+			"git fetch origin develop":                                       "ok",
+			"git worktree list --porcelain":                                  "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/feature\n",
+			"git branch -f develop refs/remotes/origin/develop":              "ok",
+			"git worktree add -b " + branch + " " + path + " origin/develop": "ok",
 		},
 		Errors: map[string]error{
 			"git show-ref --verify --quiet refs/heads/" + branch:          errors.New("exit status 1"),
@@ -265,10 +265,10 @@ func TestCreateIssueWorktreeFailsWhenAttachedBaseBranchIsDirty(t *testing.T) {
 	branch := IssueBranchName(14, "Dirty base")
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
-			"git worktree prune":            "ok",
-			"git fetch origin main":         "ok",
-			"git worktree list --porcelain": "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n",
-			"git status --porcelain":        " M README.md\n",
+			"git worktree prune":                          "ok",
+			"git fetch origin main":                       "ok",
+			"git worktree list --porcelain":               "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n",
+			"git status --porcelain --untracked-files=no": " M README.md\n",
 		},
 		Errors: map[string]error{
 			"git show-ref --verify --quiet refs/heads/" + branch:          errors.New("exit status 1"),
@@ -279,6 +279,42 @@ func TestCreateIssueWorktreeFailsWhenAttachedBaseBranchIsDirty(t *testing.T) {
 	_, err := CreateIssueWorktree(context.Background(), runner, state.WatchTarget{Path: repo, Repo: "owner/repo", Branch: "main"}, 14, "Dirty base")
 	if err == nil || err.Error() != `base branch "main" has local changes in worktree /tmp/repo` {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCreateIssueWorktreeIgnoresUntrackedFilesWhenAttachedBaseBranchIsOtherwiseClean(t *testing.T) {
+	home := t.TempDir()
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	path := IssueWorktreePath(repo, 15)
+	branch := IssueBranchName(15, "Ignore untracked files")
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"git worktree prune":                                          "ok",
+			"git fetch origin main":                                       "ok",
+			"git worktree list --porcelain":                               "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n",
+			"git status --porcelain --untracked-files=no":                 "",
+			"git merge --ff-only origin/main":                             "Already up to date.\n",
+			"git worktree add -b " + branch + " " + path + " origin/main": "ok",
+		},
+		Errors: map[string]error{
+			"git show-ref --verify --quiet refs/heads/" + branch:          errors.New("exit status 1"),
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-15": errors.New("exit status 1"),
+		},
+	}
+
+	worktree, err := CreateIssueWorktree(context.Background(), runner, state.WatchTarget{Path: repo, Repo: "owner/repo", Branch: "main"}, 15, "Ignore untracked files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if worktree.Branch != branch {
+		t.Fatalf("unexpected branch: got %s want %s", worktree.Branch, branch)
+	}
+	if worktree.Path != path {
+		t.Fatalf("unexpected path: got %s want %s", worktree.Path, path)
 	}
 }
 

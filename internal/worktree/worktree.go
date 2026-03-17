@@ -65,7 +65,7 @@ func CreateIssueWorktree(ctx context.Context, runner environment.Runner, target 
 		return Worktree{}, err
 	}
 
-	if _, err := runner.Run(ctx, target.Path, "git", "worktree", "add", "-b", branch, path, target.Branch); err != nil {
+	if _, err := runner.Run(ctx, target.Path, "git", "worktree", "add", "-b", branch, path, "origin/"+target.Branch); err != nil {
 		return Worktree{}, err
 	}
 	return Worktree{Path: path, Branch: branch}, nil
@@ -85,7 +85,7 @@ func refreshBaseBranch(ctx context.Context, runner environment.Runner, repoPath 
 		return err
 	}
 
-	status, err := runner.Run(ctx, attachedPath, "git", "status", "--porcelain")
+	status, err := runner.Run(ctx, attachedPath, "git", "status", "--porcelain", "--untracked-files=no")
 	if err != nil {
 		return err
 	}
