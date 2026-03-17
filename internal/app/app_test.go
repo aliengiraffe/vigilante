@@ -49,6 +49,109 @@ func TestRunSupportsTopLevelHelpFlags(t *testing.T) {
 	}
 }
 
+func TestDesiredSessionLabels(t *testing.T) {
+	tests := []struct {
+		name             string
+		session          state.Session
+		pr               *ghcli.PullRequest
+		wantState        string
+		wantIntervention string
+	}{
+		{
+			name:             "running",
+			session:          state.Session{Status: state.SessionStatusRunning},
+			wantState:        labelRunning,
+			wantIntervention: "",
+		},
+		{
+			name:             "blocked provider",
+			session:          state.Session{Status: state.SessionStatusBlocked, BlockedReason: state.BlockedReason{Kind: "provider_auth"}},
+			wantState:        labelBlocked,
+			wantIntervention: labelNeedsProviderFix,
+		},
+		{
+			name:             "blocked human input",
+			session:          state.Session{Status: state.SessionStatusBlocked, BlockedReason: state.BlockedReason{Kind: "unknown_operator_action_required"}},
+			wantState:        labelBlocked,
+			wantIntervention: labelNeedsHumanInput,
+		},
+		{
+			name:             "success ready for review",
+			session:          state.Session{Status: state.SessionStatusSuccess},
+			wantState:        labelReadyForReview,
+			wantIntervention: labelNeedsReview,
+		},
+		{
+			name:    "success awaiting validation",
+			session: state.Session{Status: state.SessionStatusSuccess},
+			pr: &ghcli.PullRequest{
+				Number:           17,
+				ReviewDecision:   "APPROVED",
+				MergeStateStatus: "CLEAN",
+				StatusCheckRollup: []ghcli.StatusCheckRoll{
+					{State: "COMPLETED", Conclusion: "SUCCESS"},
+				},
+			},
+			wantState:        labelAwaitingUserValidation,
+			wantIntervention: "",
+		},
+		{
+			name:             "merged done",
+			session:          state.Session{Status: state.SessionStatusSuccess, PullRequestMergedAt: "2026-03-17T18:00:00Z"},
+			wantState:        labelDone,
+			wantIntervention: "",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotState, gotIntervention := desiredSessionLabels(tc.session, tc.pr)
+			if gotState != tc.wantState || gotIntervention != tc.wantIntervention {
+				t.Fatalf("unexpected labels: got (%q, %q), want (%q, %q)", gotState, gotIntervention, tc.wantState, tc.wantIntervention)
+			}
+		})
+	}
+}
+
+func TestSyncIssueManagedLabelsQueued(t *testing.T) {
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/7": `{"labels":[{"name":"bug"},{"name":"vigilante:running"}]}`,
+			"gh issue edit --repo owner/repo 7 --add-label vigilante:queued --remove-label vigilante:running": "ok",
+		},
+	}
+
+	if err := app.syncIssueManagedLabels(context.Background(), "owner/repo", 7, []string{labelQueued}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSyncSessionIssueLabelsUsesPullRequestReviewState(t *testing.T) {
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh pr view --repo owner/repo 17 --json number,url,state,mergedAt,labels,isDraft,mergeStateStatus,reviewDecision,statusCheckRollup": `{"number":17,"url":"https://github.com/owner/repo/pull/17","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}]}`,
+			"gh api repos/owner/repo/issues/7": `{"labels":[{"name":"vigilante:ready-for-review"},{"name":"vigilante:needs-review"}]}`,
+			"gh issue edit --repo owner/repo 7 --add-label vigilante:awaiting-user-validation --remove-label vigilante:needs-review --remove-label vigilante:ready-for-review": "ok",
+		},
+	}
+
+	err := app.syncSessionIssueLabels(context.Background(), state.Session{
+		Repo:              "owner/repo",
+		IssueNumber:       7,
+		Status:            state.SessionStatusSuccess,
+		PullRequestNumber: 17,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunSupportsSubcommandHelp(t *testing.T) {
 	app := New()
 	var stdout bytes.Buffer

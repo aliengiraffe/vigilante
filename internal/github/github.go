@@ -249,6 +249,70 @@ func RemoveIssueLabel(ctx context.Context, runner environment.Runner, repo strin
 	return err
 }
 
+func SyncIssueLabels(ctx context.Context, runner environment.Runner, repo string, number int, current []Label, desired []string, managed []string) error {
+	managedSet := make(map[string]struct{}, len(managed))
+	for _, label := range managed {
+		label = strings.TrimSpace(label)
+		if label == "" {
+			continue
+		}
+		managedSet[label] = struct{}{}
+	}
+
+	currentSet := make(map[string]struct{}, len(current))
+	for _, label := range current {
+		name := strings.TrimSpace(label.Name)
+		if name == "" {
+			continue
+		}
+		currentSet[name] = struct{}{}
+	}
+
+	desiredSet := make(map[string]struct{}, len(desired))
+	for _, label := range desired {
+		label = strings.TrimSpace(label)
+		if label == "" {
+			continue
+		}
+		desiredSet[label] = struct{}{}
+	}
+
+	var toAdd []string
+	for label := range desiredSet {
+		if _, ok := currentSet[label]; ok {
+			continue
+		}
+		toAdd = append(toAdd, label)
+	}
+
+	var toRemove []string
+	for label := range managedSet {
+		if _, ok := currentSet[label]; !ok {
+			continue
+		}
+		if _, ok := desiredSet[label]; ok {
+			continue
+		}
+		toRemove = append(toRemove, label)
+	}
+
+	sort.Strings(toAdd)
+	sort.Strings(toRemove)
+	if len(toAdd) == 0 && len(toRemove) == 0 {
+		return nil
+	}
+
+	args := []string{"issue", "edit", "--repo", repo, fmt.Sprintf("%d", number)}
+	for _, label := range toAdd {
+		args = append(args, "--add-label", label)
+	}
+	for _, label := range toRemove {
+		args = append(args, "--remove-label", label)
+	}
+	_, err := runner.Run(ctx, "", "gh", args...)
+	return err
+}
+
 func HasAnyLabel(labels []Label, wanted ...string) bool {
 	for _, label := range labels {
 		for _, candidate := range wanted {
