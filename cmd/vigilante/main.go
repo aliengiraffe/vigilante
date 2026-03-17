@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 
 	"github.com/nicobistolfi/vigilante/internal/app"
@@ -11,13 +10,21 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/telemetry"
 )
 
-func main() {
-	os.Exit(run())
+type telemetrySession interface {
+	StartCommand(context.Context, []string) (context.Context, func(int))
+	Shutdown(context.Context) error
 }
 
-func run() int {
-	ctx := context.Background()
-	manager, err := telemetry.Setup(ctx, telemetry.SetupConfig{
+var cliArgs = func() []string {
+	return os.Args[1:]
+}
+
+var runCLI = func(ctx context.Context, args []string) int {
+	return app.New().Run(ctx, args)
+}
+
+var setupTelemetry = func(ctx context.Context) (telemetrySession, error) {
+	return telemetry.Setup(ctx, telemetry.SetupConfig{
 		BuildInfo: telemetry.BuildInfo{
 			Version:           build.Version,
 			Distro:            build.Distro,
@@ -28,20 +35,27 @@ func run() int {
 		StateRoot: state.NewStore().Root(),
 		Stderr:    os.Stderr,
 	})
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "warning: telemetry disabled:", err)
+}
+
+func main() {
+	os.Exit(run())
+}
+
+func run() int {
+	ctx := context.Background()
+	args := cliArgs()
+	manager, err := setupTelemetry(ctx)
+	if err != nil || manager == nil {
 		manager = &telemetry.Manager{}
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), telemetry.ShutdownTimeout())
 	defer cancel()
 	defer func() {
-		if err := manager.Shutdown(shutdownCtx); err != nil {
-			fmt.Fprintln(os.Stderr, "warning: telemetry shutdown failed:", err)
-		}
+		_ = manager.Shutdown(shutdownCtx)
 	}()
 
-	commandCtx, finish := manager.StartCommand(ctx, os.Args[1:])
-	exitCode := app.New().Run(commandCtx, os.Args[1:])
+	commandCtx, finish := manager.StartCommand(ctx, args)
+	exitCode := runCLI(commandCtx, args)
 	finish(exitCode)
 	return exitCode
 }
