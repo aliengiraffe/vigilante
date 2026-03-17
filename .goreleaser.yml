@@ -17,6 +17,7 @@ builds:
       - -X github.com/nicobistolfi/vigilante/internal/build.Distro={{ if index .Env "DISTRO" }}{{ .Env.DISTRO }}{{ else }}direct{{ end }}
       - -X github.com/nicobistolfi/vigilante/internal/build.TelemetryEndpoint={{ .Env.OTEL_ENDPOINT }}
       - -X github.com/nicobistolfi/vigilante/internal/build.TelemetryToken={{ .Env.OTEL_TOKEN }}
+      - -X github.com/nicobistolfi/vigilante/internal/build.TelemetryURLPath={{ .Env.OTEL_URL_PATH }}
     goos:
       - darwin
       - linux
