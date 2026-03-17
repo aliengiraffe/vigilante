@@ -218,6 +218,75 @@ func TestSyncIssueLabelsNoopsWhenManagedStateAlreadyMatches(t *testing.T) {
 	}
 }
 
+func TestEnsureRepositoryLabelsCreatesMissingLabelsFromManifest(t *testing.T) {
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"bug"},{"name":"vigilante:queued"}]`,
+			"gh api --method POST repos/owner/repo/labels -f name=vigilante:running -f color=0E8A16 -f description=A coding-agent session is currently executing for the issue.": "ok",
+		},
+	}
+
+	err := EnsureRepositoryLabels(
+		context.Background(),
+		runner,
+		"owner/repo",
+		[]RepositoryLabelSpec{
+			{Name: "vigilante:queued", Color: "BFDADC", Description: "The issue is eligible for dispatch and waiting for a worker slot."},
+			{Name: "vigilante:running", Color: "0E8A16", Description: "A coding-agent session is currently executing for the issue."},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEnsureRepositoryLabelsNoopsWhenLabelsAlreadyExist(t *testing.T) {
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"}]`,
+		},
+	}
+
+	err := EnsureRepositoryLabels(
+		context.Background(),
+		runner,
+		"owner/repo",
+		[]RepositoryLabelSpec{
+			{Name: "vigilante:queued", Color: "BFDADC", Description: "The issue is eligible for dispatch and waiting for a worker slot."},
+			{Name: "vigilante:running", Color: "0E8A16", Description: "A coding-agent session is currently executing for the issue."},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEnsureRepositoryLabelsSurfacesProvisioningFailure(t *testing.T) {
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/labels?per_page=100": `[]`,
+		},
+		Errors: map[string]error{
+			"gh api --method POST repos/owner/repo/labels -f name=vigilante:queued -f color=BFDADC -f description=The issue is eligible for dispatch and waiting for a worker slot.": context.DeadlineExceeded,
+		},
+	}
+
+	err := EnsureRepositoryLabels(
+		context.Background(),
+		runner,
+		"owner/repo",
+		[]RepositoryLabelSpec{
+			{Name: "vigilante:queued", Color: "BFDADC", Description: "The issue is eligible for dispatch and waiting for a worker slot."},
+		},
+	)
+	if err == nil {
+		t.Fatal("expected provisioning error")
+	}
+	if got := err.Error(); got != `create repository label "vigilante:queued": context deadline exceeded` {
+		t.Fatalf("unexpected error: %s", got)
+	}
+}
+
 func TestFindPullRequestForBranch(t *testing.T) {
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{

@@ -121,7 +121,8 @@ func TestSyncIssueManagedLabelsQueued(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/issues/7": `{"labels":[{"name":"bug"},{"name":"vigilante:running"}]}`,
+			"gh api repos/owner/repo/labels?per_page=100":                                                     `[{"name":"bug"},{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/issues/7":                                                                `{"labels":[{"name":"bug"},{"name":"vigilante:running"}]}`,
 			"gh issue edit --repo owner/repo 7 --add-label vigilante:queued --remove-label vigilante:running": "ok",
 		},
 	}
@@ -137,6 +138,7 @@ func TestSyncSessionIssueLabelsUsesPullRequestReviewState(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
+			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"resume"}]`,
 			"gh pr view --repo owner/repo 17 --json number,url,state,mergedAt,labels,isDraft,mergeStateStatus,reviewDecision,statusCheckRollup": `{"number":17,"url":"https://github.com/owner/repo/pull/17","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}]}`,
 			"gh api repos/owner/repo/issues/7": `{"labels":[{"name":"vigilante:ready-for-review"},{"name":"vigilante:needs-review"}]}`,
 			"gh issue edit --repo owner/repo 7 --add-label vigilante:awaiting-user-validation --remove-label vigilante:needs-review --remove-label vigilante:ready-for-review": "ok",
@@ -150,6 +152,38 @@ func TestSyncSessionIssueLabelsUsesPullRequestReviewState(t *testing.T) {
 		PullRequestNumber: 17,
 	}, nil)
 	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSyncIssueManagedLabelsProvisionMissingRepositoryLabels(t *testing.T) {
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"bug"}]`,
+			"gh api --method POST repos/owner/repo/labels -f name=vigilante:queued -f color=BFDADC -f description=The issue is eligible for dispatch and waiting for a worker slot.":                                           "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=vigilante:running -f color=0E8A16 -f description=A coding-agent session is currently executing for the issue.":                                               "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=vigilante:blocked -f color=D93F0B -f description=Execution cannot continue until a blocker is resolved.":                                                     "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=vigilante:ready-for-review -f color=FBCA04 -f description=Implementation is complete enough for a human to review the resulting PR or branch.":               "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=vigilante:awaiting-user-validation -f color=F9D0C4 -f description=Changes are ready for product or operator validation before the issue is considered done.": "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=vigilante:done -f color=5319E7 -f description=Vigilante completed its work on the issue and no further automation is expected.":                              "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=vigilante:needs-review -f color=D4C5F9 -f description=A human should review the implementation output before Vigilante continues or closes the loop.":        "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=vigilante:needs-human-input -f color=F7C6C7 -f description=The agent is waiting on product, operator, or repository-owner guidance.":                         "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=vigilante:needs-provider-fix -f color=E99695 -f description=Execution is blocked by provider auth, quota, or runtime setup issues.":                          "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=vigilante:needs-git-fix -f color=C2E0C6 -f description=Execution is blocked by repository or git state that requires human repair.":                          "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=codex -f color=1D76DB -f description=Routes the issue to the Codex provider for execution.":                                                                  "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=claude -f color=0052CC -f description=Routes the issue to the Claude provider for execution.":                                                                "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=gemini -f color=006B75 -f description=Routes the issue to the Gemini provider for execution.":                                                                "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=vigilante:resume -f color=C5DEF5 -f description=Requests that Vigilante resume a blocked session.":                                                           "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=resume -f color=C5DEF5 -f description=Legacy compatibility alias for vigilante:resume.":                                                                      "ok",
+			"gh api repos/owner/repo/issues/7":                               `{"labels":[{"name":"bug"}]}`,
+			"gh issue edit --repo owner/repo 7 --add-label vigilante:queued": "ok",
+		},
+	}
+
+	if err := app.syncIssueManagedLabels(context.Background(), "owner/repo", 7, []string{labelQueued}); err != nil {
 		t.Fatal(err)
 	}
 }

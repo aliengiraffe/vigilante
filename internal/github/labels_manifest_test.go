@@ -14,6 +14,7 @@ type labelManifest struct {
 
 type labelSpec struct {
 	Name        string   `json:"name"`
+	Color       string   `json:"color"`
 	Group       string   `json:"group"`
 	Behavior    string   `json:"behavior"`
 	Description string   `json:"description"`
@@ -112,6 +113,30 @@ func TestIssueLabelManifestIncludesHumanReviewStates(t *testing.T) {
 		}
 		if label.Behavior != "informational" {
 			t.Fatalf("expected %q to stay informational, got %#v", name, label)
+		}
+	}
+}
+
+func TestLoadRepositoryLabelSpecsUsesCanonicalManifest(t *testing.T) {
+	manifest := loadLabelManifest(t)
+
+	labels, err := LoadRepositoryLabelSpecs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(labels) != len(manifest.Labels) {
+		t.Fatalf("expected %d labels from embedded manifest, got %d", len(manifest.Labels), len(labels))
+	}
+
+	for i, label := range labels {
+		if label.Name != manifest.Labels[i].Name {
+			t.Fatalf("unexpected label at index %d: %#v", i, label)
+		}
+		if label.Color != manifest.Labels[i].Color {
+			t.Fatalf("unexpected color for %q: %#v", label.Name, label)
+		}
+		if label.Description != manifest.Labels[i].Description {
+			t.Fatalf("unexpected description for %q: %#v", label.Name, label)
 		}
 	}
 }
