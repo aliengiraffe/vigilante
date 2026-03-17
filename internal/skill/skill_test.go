@@ -342,6 +342,40 @@ func TestBuildIssuePromptSelectsNxSkill(t *testing.T) {
 	}
 }
 
+func TestBuildIssuePromptSelectsRushMonorepoSkill(t *testing.T) {
+	target := state.WatchTarget{
+		Path: "/tmp/repo",
+		Repo: "owner/repo",
+		Classification: repo.Classification{
+			Shape:         repo.ShapeMonorepo,
+			MonorepoStack: repo.MonorepoStackRush,
+			ProcessHints: repo.ProcessHints{
+				WorkspaceConfigFiles: []string{"rush.json"},
+				MultiPackageRoots:    []string{"apps", "packages"},
+			},
+		},
+	}
+	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
+
+	prompt := BuildIssuePrompt(target, issue, session)
+
+	for _, text := range []string{
+		"Use the `vigilante-issue-implementation-on-rush-monorepo` skill",
+		"Detected repo shape: monorepo",
+		"Detected monorepo stack: rush",
+		"Selected issue implementation skill: vigilante-issue-implementation-on-rush-monorepo",
+		`"monorepo_stack":"rush"`,
+		`"implementation_skill":"vigilante-issue-implementation-on-rush-monorepo"`,
+		`"workspace_config_files":["rush.json"]`,
+		`"multi_package_roots":["apps","packages"]`,
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q: %s", text, prompt)
+		}
+	}
+}
+
 func TestBuildIssuePromptSelectsBazelMonorepoSkill(t *testing.T) {
 	target := state.WatchTarget{
 		Path: "/tmp/repo",
@@ -361,7 +395,11 @@ func TestBuildIssuePromptSelectsBazelMonorepoSkill(t *testing.T) {
 
 	for _, text := range []string{
 		"Use the `vigilante-issue-implementation-on-bazel-monorepo` skill",
+		"Detected repo shape: monorepo",
+		"Detected monorepo stack: unknown",
 		"Selected issue implementation skill: vigilante-issue-implementation-on-bazel-monorepo",
+		`"monorepo_stack":"unknown"`,
+		`"implementation_skill":"vigilante-issue-implementation-on-bazel-monorepo"`,
 		`"bazel_repo_markers":["MODULE.bazel","WORKSPACE"]`,
 		`"bazel_package_roots":["apps","services"]`,
 	} {
@@ -540,7 +578,7 @@ func TestIssueImplementationSkillMapsKnownMonorepoStacks(t *testing.T) {
 	tests := map[repo.MonorepoStack]string{
 		repo.MonorepoStackTurborepo: VigilanteIssueImplementationOnTurborepo,
 		repo.MonorepoStackNx:        VigilanteIssueImplementationOnNx,
-		repo.MonorepoStackRush:      VigilanteIssueImplementationOnRush,
+		repo.MonorepoStackRush:      VigilanteIssueImplementationOnRushMonorepo,
 		repo.MonorepoStackBazel:     VigilanteIssueImplementationOnBazel,
 		repo.MonorepoStackGradle:    VigilanteIssueImplementationOnGradle,
 		repo.MonorepoStackUnknown:   VigilanteIssueImplementationOnMonorepo,
@@ -555,6 +593,21 @@ func TestIssueImplementationSkillMapsKnownMonorepoStacks(t *testing.T) {
 		if got := IssueImplementationSkill(target); got != want {
 			t.Fatalf("stack %s: got %s want %s", stack, got, want)
 		}
+	}
+}
+
+func TestIssueImplementationSkillSelectsRushMonorepo(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape: repo.ShapeMonorepo,
+			ProcessHints: repo.ProcessHints{
+				WorkspaceConfigFiles: []string{"rush.json"},
+			},
+		},
+	}
+
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnRushMonorepo {
+		t.Fatalf("unexpected rush issue skill: %s", got)
 	}
 }
 
@@ -653,6 +706,7 @@ func TestIssueImplementationSkillsReferenceLocalServiceDependencySkill(t *testin
 		VigilanteIssueImplementationOnTurborepo,
 		VigilanteIssueImplementationOnNx,
 		VigilanteIssueImplementationOnRush,
+		VigilanteIssueImplementationOnRushMonorepo,
 		VigilanteIssueImplementationOnBazel,
 		VigilanteIssueImplementationOnGradle,
 		VigilanteIssueImplementationOnGradleMultiProject,
@@ -708,6 +762,26 @@ func TestGradleMultiProjectSkillCoversSubprojectValidationAndComposeLaunch(t *te
 		"`docker-compose-launch`",
 		"Avoid JS workspace assumptions",
 		"Log the selected subproject(s) and Gradle task scope",
+	} {
+		if !strings.Contains(text, snippet) {
+			t.Fatalf("skill missing %q", snippet)
+		}
+	}
+}
+
+func TestRushIssueImplementationSkillMentionsRushTargetingAndDockerComposeLaunch(t *testing.T) {
+	body, err := os.ReadFile(repoSkillPath(VigilanteIssueImplementationOnRushMonorepo))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := string(body)
+	for _, snippet := range []string{
+		"`rush.json`",
+		"Identify the smallest affected package or app scope first",
+		"Prefer Rush-native commands",
+		"`docker-compose-launch`",
+		"Avoid full-repo validation unless the repository workflow requires it",
 	} {
 		if !strings.Contains(text, snippet) {
 			t.Fatalf("skill missing %q", snippet)

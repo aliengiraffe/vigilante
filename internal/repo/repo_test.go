@@ -164,6 +164,25 @@ func TestClassifyNxRepoFromNxConfig(t *testing.T) {
 	}
 }
 
+func TestClassifyRushRepoPreservesRushMarker(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "rush.json"), []byte("{\"rushVersion\":\"5.0.0\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if got.Shape != ShapeMonorepo {
+		t.Fatalf("expected monorepo classification, got %#v", got)
+	}
+	if len(got.ProcessHints.WorkspaceConfigFiles) != 1 || got.ProcessHints.WorkspaceConfigFiles[0] != "rush.json" {
+		t.Fatalf("expected rush workspace config hint, got %#v", got.ProcessHints)
+	}
+	if got.MonorepoStack != MonorepoStackRush {
+		t.Fatalf("expected rush monorepo stack, got %#v", got)
+	}
+}
+
 func TestClassifyMonorepoFromBazelSignals(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "MODULE.bazel"), []byte("module(name = \"demo\")\n"), 0o644); err != nil {
