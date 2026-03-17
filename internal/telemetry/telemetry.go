@@ -28,6 +28,7 @@ type BuildInfo struct {
 	Distro            string
 	TelemetryEndpoint string
 	TelemetryToken    string
+	TelemetryURLPath  string
 }
 
 type SetupConfig struct {
@@ -211,13 +212,18 @@ func newHTTPExporter(ctx context.Context, info BuildInfo) (sdktrace.SpanExporter
 	exportCtx, cancel := context.WithTimeout(ctx, exportTimeout)
 	defer cancel()
 
-	return otlptracehttp.New(exportCtx,
+	opts := []otlptracehttp.Option{
 		otlptracehttp.WithEndpointURL(info.TelemetryEndpoint),
 		otlptracehttp.WithHeaders(map[string]string{
 			"Authorization": fmt.Sprintf("Bearer %s", info.TelemetryToken),
 		}),
 		otlptracehttp.WithTimeout(exportTimeout),
-	)
+	}
+	if path := telemetryURLPath(info); path != "" {
+		opts = append(opts, otlptracehttp.WithURLPath(path))
+	}
+
+	return otlptracehttp.New(exportCtx, opts...)
 }
 
 func defaultString(value string, fallback string) string {
@@ -225,6 +231,10 @@ func defaultString(value string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func telemetryURLPath(info BuildInfo) string {
+	return strings.TrimSpace(info.TelemetryURLPath)
 }
 
 func disabledManager() *Manager {

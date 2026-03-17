@@ -24,6 +24,7 @@ func run() int {
 			Distro:            build.Distro,
 			TelemetryEndpoint: build.TelemetryEndpoint,
 			TelemetryToken:    build.TelemetryToken,
+			TelemetryURLPath:  os.Getenv("OTEL_URL_PATH"),
 		},
 		StateRoot: state.NewStore().Root(),
 		Stderr:    os.Stderr,

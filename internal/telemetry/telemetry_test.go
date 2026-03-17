@@ -114,6 +114,17 @@ func TestCommandName(t *testing.T) {
 	}
 }
 
+func TestTelemetryURLPath(t *testing.T) {
+	t.Parallel()
+
+	if got, want := telemetryURLPath(BuildInfo{TelemetryURLPath: " /custom/v1/traces \n"}), "/custom/v1/traces"; got != want {
+		t.Fatalf("telemetryURLPath() = %q, want %q", got, want)
+	}
+	if got := telemetryURLPath(BuildInfo{}); got != "" {
+		t.Fatalf("telemetryURLPath() = %q, want empty string", got)
+	}
+}
+
 type noopExporter struct{}
 
 func (noopExporter) ExportSpans(context.Context, []sdktrace.ReadOnlySpan) error { return nil }
