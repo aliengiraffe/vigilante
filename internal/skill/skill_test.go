@@ -166,15 +166,21 @@ func TestBuildIssuePromptIncludesReusedRemoteBranchContext(t *testing.T) {
 }
 
 func TestVigilanteSkillNamesIncludesLocalServiceDependencies(t *testing.T) {
-	found := false
+	foundLocalServices := false
+	foundComposeLaunch := false
 	for _, name := range VigilanteSkillNames() {
 		if name == VigilanteLocalServiceDependencies {
-			found = true
-			break
+			foundLocalServices = true
+		}
+		if name == DockerComposeLaunch {
+			foundComposeLaunch = true
 		}
 	}
-	if !found {
+	if !foundLocalServices {
 		t.Fatalf("expected %s to be bundled", VigilanteLocalServiceDependencies)
+	}
+	if !foundComposeLaunch {
+		t.Fatalf("expected %s to be bundled", DockerComposeLaunch)
 	}
 }
 
@@ -183,9 +189,10 @@ func TestBuildIssuePromptSelectsMonorepoSkill(t *testing.T) {
 		Path: "/tmp/repo",
 		Repo: "owner/repo",
 		Classification: repo.Classification{
-			Shape: repo.ShapeMonorepo,
+			Shape:         repo.ShapeMonorepo,
+			MonorepoStack: repo.MonorepoStackTurborepo,
 			ProcessHints: repo.ProcessHints{
-				WorkspaceConfigFiles: []string{"pnpm-workspace.yaml"},
+				WorkspaceConfigFiles: []string{"pnpm-workspace.yaml", "turbo.json"},
 				MultiPackageRoots:    []string{"apps", "packages"},
 			},
 		},
@@ -196,11 +203,42 @@ func TestBuildIssuePromptSelectsMonorepoSkill(t *testing.T) {
 	prompt := BuildIssuePrompt(target, issue, session)
 
 	for _, text := range []string{
-		"Use the `vigilante-issue-implementation-on-monorepo` skill",
+		"Use the `vigilante-issue-implementation-on-turborepo` skill",
 		"Detected repo shape: monorepo",
-		"Selected issue implementation skill: vigilante-issue-implementation-on-monorepo",
-		`"workspace_config_files":["pnpm-workspace.yaml"]`,
+		"Detected monorepo stack: turborepo",
+		"Selected issue implementation skill: vigilante-issue-implementation-on-turborepo",
+		`"monorepo_stack":"turborepo"`,
+		`"implementation_skill":"vigilante-issue-implementation-on-turborepo"`,
+		`"workspace_config_files":["pnpm-workspace.yaml","turbo.json"]`,
+		`"turbo.json"`,
 		`"multi_package_roots":["apps","packages"]`,
+		`"launch_skill":"docker-compose-launch"`,
+		`"supported_service_types":["mysql","mariadb","postgres","mongodb"]`,
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q: %s", text, prompt)
+		}
+	}
+}
+
+func TestBuildIssuePromptFallsBackForUnknownMonorepoStack(t *testing.T) {
+	target := state.WatchTarget{
+		Path: "/tmp/repo",
+		Repo: "owner/repo",
+		Classification: repo.Classification{
+			Shape:         repo.ShapeMonorepo,
+			MonorepoStack: repo.MonorepoStackUnknown,
+		},
+	}
+	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
+
+	prompt := BuildIssuePrompt(target, issue, session)
+
+	for _, text := range []string{
+		"Use the `vigilante-issue-implementation-on-monorepo` skill",
+		"Detected monorepo stack: unknown",
+		"Selected issue implementation skill: vigilante-issue-implementation-on-monorepo",
 	} {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q: %s", text, prompt)
@@ -361,6 +399,28 @@ func TestIssueImplementationSkillDefaultsToTraditional(t *testing.T) {
 	}
 }
 
+func TestIssueImplementationSkillMapsKnownMonorepoStacks(t *testing.T) {
+	tests := map[repo.MonorepoStack]string{
+		repo.MonorepoStackTurborepo: VigilanteIssueImplementationOnTurborepo,
+		repo.MonorepoStackNx:        VigilanteIssueImplementationOnNx,
+		repo.MonorepoStackRush:      VigilanteIssueImplementationOnRush,
+		repo.MonorepoStackBazel:     VigilanteIssueImplementationOnBazel,
+		repo.MonorepoStackGradle:    VigilanteIssueImplementationOnGradle,
+		repo.MonorepoStackUnknown:   VigilanteIssueImplementationOnMonorepo,
+	}
+	for stack, want := range tests {
+		target := state.WatchTarget{
+			Classification: repo.Classification{
+				Shape:         repo.ShapeMonorepo,
+				MonorepoStack: stack,
+			},
+		}
+		if got := IssueImplementationSkill(target); got != want {
+			t.Fatalf("stack %s: got %s want %s", stack, got, want)
+		}
+	}
+}
+
 func TestVigilanteCreateIssueSkillCoversIssueTypeClassification(t *testing.T) {
 	body, err := os.ReadFile(repoSkillPath(VigilanteCreateIssue))
 	if err != nil {
@@ -426,13 +486,45 @@ func TestLocalServiceDependenciesSkillCoversStructuredOutputAndFailureModes(t *t
 }
 
 func TestIssueImplementationSkillsReferenceLocalServiceDependencySkill(t *testing.T) {
-	for _, name := range []string{VigilanteIssueImplementation, VigilanteIssueImplementationOnMonorepo} {
+	for _, name := range []string{
+		VigilanteIssueImplementationOnMonorepo,
+		VigilanteIssueImplementationOnTurborepo,
+		VigilanteIssueImplementationOnNx,
+		VigilanteIssueImplementationOnRush,
+		VigilanteIssueImplementationOnBazel,
+		VigilanteIssueImplementationOnGradle,
+	} {
 		body, err := os.ReadFile(repoSkillPath(name))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(body), VigilanteLocalServiceDependencies) {
+		text := string(body)
+		if !strings.Contains(text, VigilanteLocalServiceDependencies) {
 			t.Fatalf("%s does not mention %s", name, VigilanteLocalServiceDependencies)
+		}
+		if !strings.Contains(text, DockerComposeLaunch) {
+			t.Fatalf("%s does not mention %s", name, DockerComposeLaunch)
+		}
+	}
+}
+
+func TestDockerComposeLaunchSkillDocumentsSharedContract(t *testing.T) {
+	body, err := os.ReadFile(repoSkillPath(DockerComposeLaunch))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := string(body)
+	for _, snippet := range []string{
+		"assigned worktree",
+		"`required`: `true` or `false`",
+		"`service_types`: one or more of `mysql`, `mariadb`, `postgres`, or `mongodb`",
+		"`status`: `ready`, `not_needed`, or `failed`",
+		"`connection`",
+		"`cleanup`",
+	} {
+		if !strings.Contains(text, snippet) {
+			t.Fatalf("skill missing %q", snippet)
 		}
 	}
 }

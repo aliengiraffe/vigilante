@@ -1,0 +1,4 @@
+interface:
+  display_name: "Docker Compose Launch"
+  short_description: "Launch worktree-scoped local database services for monorepo issue implementation"
+  default_prompt: "Use $docker-compose-launch only when the selected implementation workflow requires local services, scope startup to the assigned worktree, and return structured connection and cleanup details."

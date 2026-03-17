@@ -179,9 +179,15 @@ Expected behavior:
 - installs the bundled coding-agent skills for regular runtime use, including any companion files under each skill directory
   - `vigilante-issue-implementation`
   - `vigilante-issue-implementation-on-monorepo`
+  - `vigilante-issue-implementation-on-turborepo`
+  - `vigilante-issue-implementation-on-nx`
+  - `vigilante-issue-implementation-on-rush`
+  - `vigilante-issue-implementation-on-bazel`
+  - `vigilante-issue-implementation-on-gradle`
   - `vigilante-conflict-resolution`
   - `vigilante-create-issue`
   - `vigilante-local-service-dependencies`
+  - `docker-compose-launch`
 - installs or updates the daemon definition when requested
 
 On macOS, `vigilante setup -d` resolves Homebrew-style symlinks before it prepares the daemon binary. The launchd plist still uses the invoked path, but Vigilante removes `com.apple.provenance` and `com.apple.quarantine` from the resolved binary when present, ad-hoc signs that binary, and runs `spctl --assess --type execute -vv` against the resolved path before loading the service.

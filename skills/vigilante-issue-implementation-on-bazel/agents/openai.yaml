@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vigilante Bazel Issue Implementation"
+  short_description: "Implement a Vigilante-dispatched issue in a Bazel monorepo"
+  default_prompt: "Use $vigilante-issue-implementation-on-bazel to implement the assigned Bazel issue in the provided worktree, respect target scope, comment on the issue, and open a PR."

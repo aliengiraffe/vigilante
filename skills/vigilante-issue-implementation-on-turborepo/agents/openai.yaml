@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vigilante Turborepo Issue Implementation"
+  short_description: "Implement a Vigilante-dispatched issue in a Turborepo monorepo"
+  default_prompt: "Use $vigilante-issue-implementation-on-turborepo to implement the assigned Turborepo issue in the provided worktree, respect workspace scope, comment on the issue, and open a PR."

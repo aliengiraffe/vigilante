@@ -66,14 +66,20 @@ func TestClassifyMonorepoFromWorkspaceSignals(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "pnpm-workspace.yaml"), []byte("packages:\n  - apps/*\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, "turbo.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	got := Classify(dir)
 
 	if got.Shape != ShapeMonorepo {
 		t.Fatalf("expected monorepo classification, got %#v", got)
 	}
-	if len(got.ProcessHints.WorkspaceConfigFiles) != 1 || got.ProcessHints.WorkspaceConfigFiles[0] != "pnpm-workspace.yaml" {
-		t.Fatalf("expected workspace config hint, got %#v", got.ProcessHints)
+	if len(got.ProcessHints.WorkspaceConfigFiles) != 2 {
+		t.Fatalf("expected workspace config hints, got %#v", got.ProcessHints)
+	}
+	if got.MonorepoStack != MonorepoStackTurborepo {
+		t.Fatalf("expected turborepo stack, got %#v", got)
 	}
 }
 
@@ -90,6 +96,25 @@ func TestClassifyFallsBackSafelyForAmbiguousRepo(t *testing.T) {
 	}
 	if len(got.ProcessHints.MultiPackageRoots) != 1 || got.ProcessHints.MultiPackageRoots[0] != "apps" {
 		t.Fatalf("expected ambiguous multi-package hint to be preserved, got %#v", got.ProcessHints)
+	}
+	if got.MonorepoStack != "" {
+		t.Fatalf("expected no monorepo stack for traditional repo fallback, got %#v", got)
+	}
+}
+
+func TestClassifyMonorepoUsesUnknownStackFallback(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "pnpm-workspace.yaml"), []byte("packages:\n  - apps/*\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if got.Shape != ShapeMonorepo {
+		t.Fatalf("expected monorepo classification, got %#v", got)
+	}
+	if got.MonorepoStack != MonorepoStackUnknown {
+		t.Fatalf("expected unknown monorepo stack fallback, got %#v", got)
 	}
 }
 

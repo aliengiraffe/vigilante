@@ -298,9 +298,10 @@ func TestRunIssueSessionUsesMonorepoSkillWhenClassified(t *testing.T) {
 		Path: "/tmp/repo",
 		Repo: "owner/repo",
 		Classification: repo.Classification{
-			Shape: repo.ShapeMonorepo,
+			Shape:         repo.ShapeMonorepo,
+			MonorepoStack: repo.MonorepoStackTurborepo,
 			ProcessHints: repo.ProcessHints{
-				WorkspaceConfigFiles: []string{"pnpm-workspace.yaml"},
+				WorkspaceConfigFiles: []string{"pnpm-workspace.yaml", "turbo.json"},
 				MultiPackageRoots:    []string{"apps", "packages"},
 			},
 		},

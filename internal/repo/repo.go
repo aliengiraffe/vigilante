@@ -20,6 +20,17 @@ const (
 	ShapeMonorepo    Shape = "monorepo"
 )
 
+type MonorepoStack string
+
+const (
+	MonorepoStackUnknown   MonorepoStack = "unknown"
+	MonorepoStackTurborepo MonorepoStack = "turborepo"
+	MonorepoStackNx        MonorepoStack = "nx"
+	MonorepoStackRush      MonorepoStack = "rush"
+	MonorepoStackBazel     MonorepoStack = "bazel"
+	MonorepoStackGradle    MonorepoStack = "gradle"
+)
+
 type ProcessHints struct {
 	WorkspaceConfigFiles   []string `json:"workspace_config_files,omitempty"`
 	WorkspaceManifestFiles []string `json:"workspace_manifest_files,omitempty"`
@@ -27,8 +38,9 @@ type ProcessHints struct {
 }
 
 type Classification struct {
-	Shape        Shape        `json:"shape"`
-	ProcessHints ProcessHints `json:"process_hints,omitempty"`
+	Shape         Shape         `json:"shape"`
+	MonorepoStack MonorepoStack `json:"monorepo_stack,omitempty"`
+	ProcessHints  ProcessHints  `json:"process_hints,omitempty"`
 }
 
 type Info struct {
@@ -98,11 +110,32 @@ func Classify(path string) Classification {
 		len(classification.ProcessHints.WorkspaceManifestFiles) > 0 ||
 		len(classification.ProcessHints.MultiPackageRoots) >= 2 {
 		classification.Shape = ShapeMonorepo
+		classification.MonorepoStack = detectMonorepoStack(absPath)
 	}
 	slices.Sort(classification.ProcessHints.WorkspaceConfigFiles)
 	slices.Sort(classification.ProcessHints.WorkspaceManifestFiles)
 	slices.Sort(classification.ProcessHints.MultiPackageRoots)
 	return classification
+}
+
+func detectMonorepoStack(absPath string) MonorepoStack {
+	switch {
+	case fileExists(filepath.Join(absPath, "turbo.json")):
+		return MonorepoStackTurborepo
+	case fileExists(filepath.Join(absPath, "nx.json")):
+		return MonorepoStackNx
+	case fileExists(filepath.Join(absPath, "rush.json")):
+		return MonorepoStackRush
+	case fileExists(filepath.Join(absPath, "WORKSPACE")) ||
+		fileExists(filepath.Join(absPath, "WORKSPACE.bazel")) ||
+		fileExists(filepath.Join(absPath, "MODULE.bazel")):
+		return MonorepoStackBazel
+	case fileExists(filepath.Join(absPath, "settings.gradle")) ||
+		fileExists(filepath.Join(absPath, "settings.gradle.kts")):
+		return MonorepoStackGradle
+	default:
+		return MonorepoStackUnknown
+	}
 }
 
 func ParseGitHubRepo(remote string) (string, error) {
