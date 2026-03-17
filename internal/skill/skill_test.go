@@ -308,6 +308,40 @@ func TestBuildIssuePromptSelectsGradleMultiProjectSkill(t *testing.T) {
 	}
 }
 
+func TestBuildIssuePromptSelectsNxSkill(t *testing.T) {
+	target := state.WatchTarget{
+		Path: "/tmp/repo",
+		Repo: "owner/repo",
+		Classification: repo.Classification{
+			Shape:         repo.ShapeMonorepo,
+			MonorepoStack: repo.MonorepoStackNx,
+			ProcessHints: repo.ProcessHints{
+				WorkspaceConfigFiles: []string{"nx.json", "pnpm-workspace.yaml"},
+				MultiPackageRoots:    []string{"apps", "libs"},
+			},
+		},
+	}
+	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
+
+	prompt := BuildIssuePrompt(target, issue, session)
+
+	for _, text := range []string{
+		"Use the `vigilante-issue-implementation-on-nx` skill",
+		"Detected repo shape: monorepo",
+		"Detected monorepo stack: nx",
+		"Selected issue implementation skill: vigilante-issue-implementation-on-nx",
+		`"monorepo_stack":"nx"`,
+		`"implementation_skill":"vigilante-issue-implementation-on-nx"`,
+		`"workspace_config_files":["nx.json","pnpm-workspace.yaml"]`,
+		`"multi_package_roots":["apps","libs"]`,
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q: %s", text, prompt)
+		}
+	}
+}
+
 func TestBuildIssuePreflightPrompt(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}

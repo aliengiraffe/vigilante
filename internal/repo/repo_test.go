@@ -142,6 +142,28 @@ func TestClassifyGradleMultiProjectFromSettingsInclude(t *testing.T) {
 	}
 }
 
+func TestClassifyNxRepoFromNxConfig(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "nx.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pnpm-workspace.yaml"), []byte("packages:\n  - apps/*\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if got.Shape != ShapeMonorepo {
+		t.Fatalf("expected nx classification, got %#v", got)
+	}
+	if len(got.ProcessHints.WorkspaceConfigFiles) != 2 {
+		t.Fatalf("expected nx and workspace config hints, got %#v", got.ProcessHints)
+	}
+	if got.MonorepoStack != MonorepoStackNx {
+		t.Fatalf("expected nx monorepo stack, got %#v", got)
+	}
+}
+
 func TestClassifyFallsBackSafelyForAmbiguousRepo(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "apps", "web"), 0o755); err != nil {
