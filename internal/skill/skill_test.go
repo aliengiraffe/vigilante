@@ -278,6 +278,36 @@ func TestBuildIssuePromptSelectsTurborepoSkill(t *testing.T) {
 	}
 }
 
+func TestBuildIssuePromptSelectsGradleMultiProjectSkill(t *testing.T) {
+	target := state.WatchTarget{
+		Path: "/tmp/repo",
+		Repo: "owner/repo",
+		Classification: repo.Classification{
+			Shape: repo.ShapeGradleMultiProject,
+			ProcessHints: repo.ProcessHints{
+				GradleSettingsFiles:  []string{"settings.gradle.kts"},
+				GradleRootBuildFiles: []string{"build.gradle.kts"},
+			},
+		},
+	}
+	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
+
+	prompt := BuildIssuePrompt(target, issue, session)
+
+	for _, text := range []string{
+		"Use the `vigilante-issue-implementation-on-gradle-multi-project` skill",
+		"Detected repo shape: gradle_multi_project",
+		"Selected issue implementation skill: vigilante-issue-implementation-on-gradle-multi-project",
+		`"gradle_settings_files":["settings.gradle.kts"]`,
+		`"gradle_root_build_files":["build.gradle.kts"]`,
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q: %s", text, prompt)
+		}
+	}
+}
+
 func TestBuildIssuePreflightPrompt(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
@@ -469,6 +499,15 @@ func TestIssueImplementationSkillSelectsTurborepo(t *testing.T) {
 	}
 }
 
+func TestIssueImplementationSkillSelectsGradleMultiProject(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{Shape: repo.ShapeGradleMultiProject},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnGradleMultiProject {
+		t.Fatalf("unexpected gradle multi-project issue skill: %s", got)
+	}
+}
+
 func TestVigilanteCreateIssueSkillCoversIssueTypeClassification(t *testing.T) {
 	body, err := os.ReadFile(repoSkillPath(VigilanteCreateIssue))
 	if err != nil {
@@ -541,6 +580,7 @@ func TestIssueImplementationSkillsReferenceLocalServiceDependencySkill(t *testin
 		VigilanteIssueImplementationOnRush,
 		VigilanteIssueImplementationOnBazel,
 		VigilanteIssueImplementationOnGradle,
+		VigilanteIssueImplementationOnGradleMultiProject,
 	} {
 		body, err := os.ReadFile(repoSkillPath(name))
 		if err != nil {
@@ -570,6 +610,28 @@ func TestDockerComposeLaunchSkillDocumentsSharedContract(t *testing.T) {
 		"`status`: `ready`, `not_needed`, or `failed`",
 		"`connection`",
 		"`cleanup`",
+	} {
+		if !strings.Contains(text, snippet) {
+			t.Fatalf("skill missing %q", snippet)
+		}
+	}
+}
+
+func TestGradleMultiProjectSkillCoversSubprojectValidationAndComposeLaunch(t *testing.T) {
+	body, err := os.ReadFile(repoSkillPath(VigilanteIssueImplementationOnGradleMultiProject))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := string(body)
+	for _, snippet := range []string{
+		"Use `settings.gradle` or `settings.gradle.kts`",
+		"identify the relevant Gradle subproject scope",
+		"Prefer repo-defined Gradle tasks",
+		"Keep implementation and validation scoped to the affected subproject(s)",
+		"`docker-compose-launch`",
+		"Avoid JS workspace assumptions",
+		"Log the selected subproject(s) and Gradle task scope",
 	} {
 		if !strings.Contains(text, snippet) {
 			t.Fatalf("skill missing %q", snippet)

@@ -120,6 +120,28 @@ func TestClassifyPreservesTurborepoMarkers(t *testing.T) {
 	}
 }
 
+func TestClassifyGradleMultiProjectFromSettingsInclude(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "settings.gradle.kts"), []byte("rootProject.name = \"demo\"\ninclude(\":app\", \":shared\")\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "build.gradle.kts"), []byte("plugins {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if got.Shape != ShapeGradleMultiProject {
+		t.Fatalf("expected gradle multi-project classification, got %#v", got)
+	}
+	if len(got.ProcessHints.GradleSettingsFiles) != 1 || got.ProcessHints.GradleSettingsFiles[0] != "settings.gradle.kts" {
+		t.Fatalf("expected gradle settings hint, got %#v", got.ProcessHints)
+	}
+	if len(got.ProcessHints.GradleRootBuildFiles) != 1 || got.ProcessHints.GradleRootBuildFiles[0] != "build.gradle.kts" {
+		t.Fatalf("expected gradle root build hint, got %#v", got.ProcessHints)
+	}
+}
+
 func TestClassifyFallsBackSafelyForAmbiguousRepo(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "apps", "web"), 0o755); err != nil {
