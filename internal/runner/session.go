@@ -17,10 +17,10 @@ import (
 )
 
 func RunIssueSession(ctx context.Context, env *environment.Environment, store *state.Store, target state.WatchTarget, issue ghcli.Issue, session state.Session) state.Session {
-	logPath := store.SessionLogPath(issue.Number)
 	if session.Repo == "" {
 		session.Repo = target.Repo
 	}
+	logPath := store.SessionLogPath(session.Repo, issue.Number)
 	selectedProvider, err := provider.Resolve(session.Provider)
 	if err != nil {
 		session.Status = state.SessionStatusFailed
@@ -171,7 +171,11 @@ func fallbackSessionText(value string, fallback string) string {
 }
 
 func RunConflictResolutionSession(ctx context.Context, env *environment.Environment, store *state.Store, target state.WatchTarget, session state.Session, pr ghcli.PullRequest) error {
-	logPath := store.SessionLogPath(session.IssueNumber)
+	repoSlug := session.Repo
+	if repoSlug == "" {
+		repoSlug = target.Repo
+	}
+	logPath := store.SessionLogPath(repoSlug, session.IssueNumber)
 	selectedProvider, err := provider.Resolve(session.Provider)
 	if err != nil {
 		appendSessionLog(logPath, "conflict resolution provider resolution failed", session, err.Error())

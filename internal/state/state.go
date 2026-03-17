@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -169,8 +170,27 @@ func (s *Store) DaemonLogPath() string {
 	return filepath.Join(s.LogsDir(), "vigilante.log")
 }
 
-func (s *Store) SessionLogPath(issueNumber int) string {
-	return filepath.Join(s.LogsDir(), fmt.Sprintf("issue-%d.log", issueNumber))
+var invalidSessionLogNameChars = regexp.MustCompile(`[^A-Za-z0-9]+`)
+
+func (s *Store) SessionLogPath(repoSlug string, issueNumber int) string {
+	return filepath.Join(s.LogsDir(), fmt.Sprintf("%s-issue-%d.log", sanitizeSessionLogRepoSlug(repoSlug), issueNumber))
+}
+
+func sanitizeSessionLogRepoSlug(repoSlug string) string {
+	parts := strings.Split(strings.TrimSpace(repoSlug), "/")
+	sanitized := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = invalidSessionLogNameChars.ReplaceAllString(strings.TrimSpace(part), "-")
+		part = strings.Trim(part, "-")
+		if part == "" {
+			continue
+		}
+		sanitized = append(sanitized, part)
+	}
+	if len(sanitized) == 0 {
+		return "unknown-repo"
+	}
+	return strings.Join(sanitized, "-")
 }
 
 func (s *Store) watchlistPath() string {

@@ -49,7 +49,7 @@ func TestRunIssueSessionSuccess(t *testing.T) {
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
 	}
-	data, err := os.ReadFile(store.SessionLogPath(7))
+	data, err := os.ReadFile(store.SessionLogPath("owner/repo", 7))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func TestRunIssueSessionFailureCommentsOnIssue(t *testing.T) {
 	if !strings.Contains(got.LastError, "go test ./...") {
 		t.Fatalf("unexpected error: %#v", got)
 	}
-	data, err := os.ReadFile(store.SessionLogPath(7))
+	data, err := os.ReadFile(store.SessionLogPath("owner/repo", 7))
 	if err != nil {
 		t.Fatal(err)
 	}
