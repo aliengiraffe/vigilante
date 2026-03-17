@@ -61,4 +61,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           HOMEBREW_GITHUB_API_TOKEN: ${{ steps.tap_token.outputs.token }}
+          OTEL_ENDPOINT: ${{ secrets.OTEL_ENDPOINT }}
+          OTEL_TOKEN: ${{ secrets.OTEL_TOKEN }}
         run: goreleaser release --clean
