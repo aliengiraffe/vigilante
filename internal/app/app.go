@@ -758,7 +758,6 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 				}
 				continue
 			}
-			session.LastMaintenanceError = ""
 			continue
 		}
 
@@ -827,6 +826,8 @@ func (a *App) waitForSessions() {
 }
 
 func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Session, pr ghcli.PullRequest) error {
+	session.LastMaintenanceError = ""
+
 	if _, err := a.env.Runner.Run(ctx, session.WorktreePath, "git", "fetch", "origin", "main"); err != nil {
 		return err
 	}
@@ -870,7 +871,7 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 	session.LastMaintainedAt = a.clock().Format(time.RFC3339)
 	session.UpdatedAt = session.LastMaintainedAt
 	if !rebased {
-		return nil
+		return a.tryAutoSquashMerge(ctx, session, pr)
 	}
 
 	if _, err := a.env.Runner.Run(ctx, session.WorktreePath, "go", "test", "./..."); err != nil {
@@ -893,6 +894,30 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 		Tagline: "Success is where preparation and opportunity meet.",
 	})
 	return ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body)
+}
+
+func (a *App) tryAutoSquashMerge(ctx context.Context, session *state.Session, pr ghcli.PullRequest) error {
+	details, err := ghcli.GetPullRequestDetails(ctx, a.env.Runner, session.Repo, pr.Number)
+	if err != nil {
+		return err
+	}
+	if !ghcli.HasAnyLabel(details.Labels, "automerge") {
+		return nil
+	}
+
+	waitReason := automergeWaitReason(*details)
+	if waitReason != "" {
+		session.LastMaintenanceError = waitReason
+		a.state.AppendDaemonLog("automerge waiting repo=%s issue=%d pr=%d branch=%s reason=%s", session.Repo, session.IssueNumber, pr.Number, session.Branch, waitReason)
+		return nil
+	}
+
+	if err := ghcli.MergePullRequestSquash(ctx, a.env.Runner, session.Repo, pr.Number); err != nil {
+		return fmt.Errorf("squash automerge pr #%d: %w", pr.Number, err)
+	}
+
+	a.state.AppendDaemonLog("automerge merged repo=%s issue=%d pr=%d branch=%s strategy=squash", session.Repo, session.IssueNumber, pr.Number, session.Branch)
+	return nil
 }
 
 func (a *App) listBlockedSessions() error {
@@ -1626,6 +1651,78 @@ func shouldCommentMaintenanceFailure(session state.Session, err error) bool {
 
 func summarizeMaintenanceError(err error) string {
 	return summarizeText(err.Error())
+}
+
+func automergeWaitReason(pr ghcli.PullRequest) string {
+	if pr.IsDraft {
+		return fmt.Sprintf("automerge waiting for PR #%d to leave draft state", pr.Number)
+	}
+
+	switch strings.TrimSpace(pr.ReviewDecision) {
+	case "CHANGES_REQUESTED":
+		return fmt.Sprintf("automerge waiting for review changes on PR #%d", pr.Number)
+	case "REVIEW_REQUIRED":
+		return fmt.Sprintf("automerge waiting for required reviews on PR #%d", pr.Number)
+	}
+
+	checkState := requiredChecksState(pr.StatusCheckRollup)
+	switch checkState {
+	case "pending":
+		return fmt.Sprintf("automerge waiting for required checks on PR #%d", pr.Number)
+	case "failing":
+		return fmt.Sprintf("automerge waiting for required checks to pass on PR #%d", pr.Number)
+	}
+
+	switch strings.TrimSpace(pr.MergeStateStatus) {
+	case "", "CLEAN":
+		return ""
+	case "BLOCKED":
+		return fmt.Sprintf("automerge waiting for GitHub mergeability on PR #%d: blocked", pr.Number)
+	case "BEHIND":
+		return fmt.Sprintf("automerge waiting for GitHub mergeability on PR #%d: branch is behind base", pr.Number)
+	case "DIRTY":
+		return fmt.Sprintf("automerge waiting for GitHub mergeability on PR #%d: merge conflicts detected", pr.Number)
+	case "DRAFT":
+		return fmt.Sprintf("automerge waiting for GitHub mergeability on PR #%d: pull request is draft", pr.Number)
+	case "HAS_HOOKS":
+		return fmt.Sprintf("automerge waiting for GitHub mergeability on PR #%d: pre-merge hooks still pending", pr.Number)
+	case "UNKNOWN", "UNSTABLE":
+		return fmt.Sprintf("automerge waiting for GitHub mergeability on PR #%d: state %s", pr.Number, strings.ToLower(pr.MergeStateStatus))
+	default:
+		return fmt.Sprintf("automerge waiting for GitHub mergeability on PR #%d: state %s", pr.Number, strings.ToLower(pr.MergeStateStatus))
+	}
+}
+
+func requiredChecksState(checks []ghcli.StatusCheckRoll) string {
+	if len(checks) == 0 {
+		return "passing"
+	}
+
+	pending := false
+	for _, check := range checks {
+		state := strings.ToUpper(strings.TrimSpace(check.State))
+		conclusion := strings.ToUpper(strings.TrimSpace(check.Conclusion))
+
+		switch conclusion {
+		case "ACTION_REQUIRED", "CANCELLED", "FAILURE", "STALE", "STARTUP_FAILURE", "TIMED_OUT":
+			return "failing"
+		}
+
+		switch state {
+		case "", "COMPLETED", "SUCCESS":
+		default:
+			pending = true
+		}
+
+		if state == "COMPLETED" && conclusion == "" {
+			pending = true
+		}
+	}
+
+	if pending {
+		return "pending"
+	}
+	return "passing"
 }
 
 func summarizeText(text string) string {

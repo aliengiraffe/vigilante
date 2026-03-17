@@ -368,6 +368,14 @@ Initial rules:
 
 Future policy can expand to richer label filters, assignment rules, and priority queues.
 
+## Pull Request Maintenance
+
+For pull requests tied to an active Vigilante session:
+
+- keep the branch updated against `origin/main` through the existing maintenance loop
+- if the PR has an `automerge` label, attempt a GitHub squash merge only after required checks pass and GitHub reports the PR is mergeable
+- never force through branch protection, required reviews, or failing checks
+
 ## Headless Agent Execution Contract
 
 When `vigilante` launches a coding agent for an issue, it should:

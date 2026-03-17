@@ -25,10 +25,22 @@ type Label struct {
 }
 
 type PullRequest struct {
-	Number   int        `json:"number"`
-	URL      string     `json:"url"`
-	State    string     `json:"state"`
-	MergedAt *time.Time `json:"mergedAt"`
+	Number            int               `json:"number"`
+	URL               string            `json:"url"`
+	State             string            `json:"state"`
+	MergedAt          *time.Time        `json:"mergedAt"`
+	Labels            []Label           `json:"labels"`
+	IsDraft           bool              `json:"isDraft"`
+	MergeStateStatus  string            `json:"mergeStateStatus"`
+	ReviewDecision    string            `json:"reviewDecision"`
+	StatusCheckRollup []StatusCheckRoll `json:"statusCheckRollup"`
+}
+
+type StatusCheckRoll struct {
+	Context    string `json:"context"`
+	Name       string `json:"name"`
+	State      string `json:"state"`
+	Conclusion string `json:"conclusion"`
 }
 
 type IssueComment struct {
@@ -304,6 +316,35 @@ func FindPullRequestForBranch(ctx context.Context, runner environment.Runner, re
 		return nil, nil
 	}
 	return &prs[0], nil
+}
+
+func GetPullRequestDetails(ctx context.Context, runner environment.Runner, repo string, number int) (*PullRequest, error) {
+	output, err := runner.Run(
+		ctx,
+		"",
+		"gh",
+		"pr",
+		"view",
+		"--repo",
+		repo,
+		fmt.Sprintf("%d", number),
+		"--json",
+		"number,url,state,mergedAt,labels,isDraft,mergeStateStatus,reviewDecision,statusCheckRollup",
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	var pr PullRequest
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &pr); err != nil {
+		return nil, fmt.Errorf("parse gh pr view output: %w", err)
+	}
+	return &pr, nil
+}
+
+func MergePullRequestSquash(ctx context.Context, runner environment.Runner, repo string, number int) error {
+	_, err := runner.Run(ctx, "", "gh", "pr", "merge", "--repo", repo, fmt.Sprintf("%d", number), "--squash", "--delete-branch")
+	return err
 }
 
 func issueAPIPath(repo string, number int) string {
