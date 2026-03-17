@@ -1125,7 +1125,7 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 	session.LastMaintainedAt = a.clock().Format(time.RFC3339)
 	session.UpdatedAt = session.LastMaintainedAt
 	if !rebased {
-		return a.tryAutoSquashMerge(ctx, session, pr)
+		return a.maintainPullRequestChecks(ctx, session, pr)
 	}
 
 	if _, err := a.env.Runner.Run(ctx, session.WorktreePath, "go", "test", "./..."); err != nil {
@@ -1150,16 +1150,33 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 	return ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body)
 }
 
-func (a *App) tryAutoSquashMerge(ctx context.Context, session *state.Session, pr ghcli.PullRequest) error {
+func (a *App) maintainPullRequestChecks(ctx context.Context, session *state.Session, pr ghcli.PullRequest) error {
 	details, err := ghcli.GetPullRequestDetails(ctx, a.env.Runner, session.Repo, pr.Number)
 	if err != nil {
 		return err
 	}
-	if !ghcli.HasAnyLabel(details.Labels, "automerge") {
+	if err := a.handleFailingPullRequestChecks(ctx, session, *details); err != nil {
+		return err
+	}
+	if requiredChecksState(details.StatusCheckRollup) == "failing" {
+		return nil
+	}
+	return a.tryAutoSquashMerge(ctx, session, *details)
+}
+
+func (a *App) tryAutoSquashMerge(ctx context.Context, session *state.Session, pr ghcli.PullRequest) error {
+	checkState := requiredChecksState(pr.StatusCheckRollup)
+	if !ghcli.HasAnyLabel(pr.Labels, "automerge") {
+		if checkState == "pending" {
+			session.LastMaintenanceError = fmt.Sprintf("pr maintenance waiting for required checks on PR #%d", pr.Number)
+		} else if checkState == "passing" {
+			session.LastCIRemediationFingerprint = ""
+			session.LastCIRemediationAttemptedAt = ""
+		}
 		return nil
 	}
 
-	waitReason := automergeWaitReason(*details)
+	waitReason := automergeWaitReason(pr)
 	if waitReason != "" {
 		session.LastMaintenanceError = waitReason
 		a.state.AppendDaemonLog("automerge waiting repo=%s issue=%d pr=%d branch=%s reason=%s", session.Repo, session.IssueNumber, pr.Number, session.Branch, waitReason)
@@ -1171,6 +1188,80 @@ func (a *App) tryAutoSquashMerge(ctx context.Context, session *state.Session, pr
 	}
 
 	a.state.AppendDaemonLog("automerge merged repo=%s issue=%d pr=%d branch=%s strategy=squash", session.Repo, session.IssueNumber, pr.Number, session.Branch)
+	return nil
+}
+
+func (a *App) handleFailingPullRequestChecks(ctx context.Context, session *state.Session, pr ghcli.PullRequest) error {
+	checkState := requiredChecksState(pr.StatusCheckRollup)
+	switch checkState {
+	case "pending":
+		if !ghcli.HasAnyLabel(pr.Labels, "automerge") {
+			session.LastMaintenanceError = fmt.Sprintf("pr maintenance waiting for required checks on PR #%d", pr.Number)
+		}
+		return nil
+	case "passing":
+		session.LastCIRemediationFingerprint = ""
+		session.LastCIRemediationAttemptedAt = ""
+		return nil
+	}
+
+	failingChecks := failingStatusChecks(pr.StatusCheckRollup)
+	if len(failingChecks) == 0 {
+		return nil
+	}
+	fingerprint := ciFailureFingerprint(pr.Number, failingChecks)
+	if fingerprint == session.LastCIRemediationFingerprint {
+		blocked := state.BlockedReason{
+			Kind:      "unknown_operator_action_required",
+			Operation: "ci remediation",
+			Summary:   fmt.Sprintf("CI remediation already ran for PR #%d but the same failing checks are still unresolved", pr.Number),
+			Detail:    formatFailingChecksSummary(failingChecks),
+		}
+		markSessionBlocked(session, "ci_remediation", blocked, a.clock())
+		session.LastMaintenanceError = blocked.Summary
+		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+			Stage:      "CI Needs Manual Review",
+			Emoji:      "🧱",
+			Percent:    94,
+			ETAMinutes: 10,
+			Items: []string{
+				fmt.Sprintf("PR #%d still reports the same failing checks after an automated remediation attempt.", pr.Number),
+				fmt.Sprintf("Failing checks: %s", formatFailingChecksSummary(failingChecks)),
+				fmt.Sprintf("Next step: inspect the branch `%s`, apply a manual fix, then run `%s` or request resume from GitHub.", session.Branch, session.ResumeHint),
+			},
+			Tagline: "One clean retry is enough to prove the point.",
+		})
+		a.commentOnIssueBestEffort(ctx, session.Repo, session.IssueNumber, body, "ci remediation blocked")
+		return nil
+	}
+
+	startBody := ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "CI Remediation Started",
+		Emoji:      "🛠️",
+		Percent:    80,
+		ETAMinutes: 12,
+		Items: []string{
+			fmt.Sprintf("Vigilante detected failing required checks on PR #%d and is launching a focused remediation pass.", pr.Number),
+			fmt.Sprintf("Failing checks: %s", formatFailingChecksSummary(failingChecks)),
+			"Next step: investigate the failure, apply the smallest fix that restores CI, and push to the existing PR branch.",
+		},
+		Tagline: "Tight loop, targeted repair.",
+	})
+	a.commentOnIssueBestEffort(ctx, session.Repo, session.IssueNumber, startBody, "ci remediation start")
+
+	target := state.WatchTarget{Path: session.RepoPath, Repo: session.Repo, Branch: "main"}
+	if err := issuerunner.RunCIRemediationSession(ctx, a.env, a.state, target, *session, pr, failingChecks); err != nil {
+		blocked := classifyBlockedReason("ci_remediation", "coding agent remediation", err)
+		markSessionBlocked(session, "ci_remediation", blocked, a.clock())
+		session.LastMaintenanceError = err.Error()
+		session.LastCIRemediationFingerprint = fingerprint
+		session.LastCIRemediationAttemptedAt = a.clock().Format(time.RFC3339)
+		return nil
+	}
+
+	session.LastCIRemediationFingerprint = fingerprint
+	session.LastCIRemediationAttemptedAt = a.clock().Format(time.RFC3339)
+	session.LastMaintenanceError = fmt.Sprintf("ci remediation dispatched for PR #%d; waiting for updated checks", pr.Number)
 	return nil
 }
 
@@ -1681,6 +1772,8 @@ func (a *App) resetSessionForRedispatch(ctx context.Context, session *state.Sess
 	session.PullRequestMergedAt = ""
 	session.LastMaintainedAt = ""
 	session.LastMaintenanceError = ""
+	session.LastCIRemediationFingerprint = ""
+	session.LastCIRemediationAttemptedAt = ""
 	session.BlockedAt = ""
 	session.BlockedStage = ""
 	session.BlockedReason = state.BlockedReason{}
@@ -1728,6 +1821,8 @@ func (a *App) resumeBlockedSession(ctx context.Context, session *state.Session, 
 	var err error
 	switch session.BlockedStage {
 	case "pr_maintenance":
+		err = a.resumeBlockedMaintenance(ctx, session)
+	case "ci_remediation":
 		err = a.resumeBlockedMaintenance(ctx, session)
 	case "conflict_resolution":
 		err = a.resumeBlockedConflictResolution(ctx, session)
@@ -2151,6 +2246,53 @@ func requiredChecksState(checks []ghcli.StatusCheckRoll) string {
 	return "passing"
 }
 
+func failingStatusChecks(checks []ghcli.StatusCheckRoll) []ghcli.StatusCheckRoll {
+	failing := make([]ghcli.StatusCheckRoll, 0, len(checks))
+	for _, check := range checks {
+		switch strings.ToUpper(strings.TrimSpace(check.Conclusion)) {
+		case "ACTION_REQUIRED", "CANCELLED", "FAILURE", "STALE", "STARTUP_FAILURE", "TIMED_OUT":
+			failing = append(failing, check)
+		}
+	}
+	sort.Slice(failing, func(i, j int) bool {
+		return failingCheckName(failing[i]) < failingCheckName(failing[j])
+	})
+	return failing
+}
+
+func ciFailureFingerprint(prNumber int, checks []ghcli.StatusCheckRoll) string {
+	parts := []string{fmt.Sprintf("pr:%d", prNumber)}
+	for _, check := range checks {
+		parts = append(parts, strings.Join([]string{
+			failingCheckName(check),
+			strings.ToUpper(strings.TrimSpace(check.State)),
+			strings.ToUpper(strings.TrimSpace(check.Conclusion)),
+		}, ":"))
+	}
+	return strings.Join(parts, "|")
+}
+
+func formatFailingChecksSummary(checks []ghcli.StatusCheckRoll) string {
+	if len(checks) == 0 {
+		return "unknown failing checks"
+	}
+	parts := make([]string, 0, len(checks))
+	for _, check := range checks {
+		parts = append(parts, fmt.Sprintf("%s (%s)", failingCheckName(check), strings.ToLower(fallbackText(strings.TrimSpace(check.Conclusion), "unknown"))))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func failingCheckName(check ghcli.StatusCheckRoll) string {
+	if name := strings.TrimSpace(check.Name); name != "" {
+		return name
+	}
+	if context := strings.TrimSpace(check.Context); context != "" {
+		return context
+	}
+	return "unnamed-check"
+}
+
 func summarizeText(text string) string {
 	text = strings.TrimSpace(text)
 	if len(text) > 400 {
@@ -2229,6 +2371,8 @@ func clearBlockedState(session *state.Session, now time.Time, source string) {
 	session.UpdatedAt = session.RecoveredAt
 	session.LastError = ""
 	session.LastMaintenanceError = ""
+	session.LastCIRemediationFingerprint = ""
+	session.LastCIRemediationAttemptedAt = ""
 	session.LastResumeSource = source
 	session.LastResumeFailureFingerprint = ""
 	session.LastResumeFailureCommentedAt = ""

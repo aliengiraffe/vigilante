@@ -217,6 +217,53 @@ func RunConflictResolutionSession(ctx context.Context, env *environment.Environm
 	return nil
 }
 
+func RunCIRemediationSession(ctx context.Context, env *environment.Environment, store *state.Store, target state.WatchTarget, session state.Session, pr ghcli.PullRequest, failingChecks []ghcli.StatusCheckRoll) error {
+	repoSlug := session.Repo
+	if repoSlug == "" {
+		repoSlug = target.Repo
+	}
+	logPath := store.SessionLogPath(repoSlug, session.IssueNumber)
+	selectedProvider, err := provider.Resolve(session.Provider)
+	if err != nil {
+		appendSessionLog(logPath, "ci remediation provider resolution failed", session, err.Error())
+		return err
+	}
+	session.Provider = selectedProvider.ID()
+	appendSessionLog(logPath, "ci remediation started", session, fmt.Sprintf("pr=%d url=%s", pr.Number, pr.URL))
+	if err := provider.ValidateRuntimeCompatibility(ctx, env.Runner, selectedProvider); err != nil {
+		appendSessionLog(logPath, "ci remediation provider compatibility failed", session, err.Error())
+		return err
+	}
+
+	invocation, err := selectedProvider.BuildCIRemediationInvocation(provider.CIRemediationTask{Target: target, Session: session, PR: pr, FailingChecks: failingChecks})
+	if err != nil {
+		appendSessionLog(logPath, "ci remediation invocation build failed", session, err.Error())
+		return err
+	}
+	output, err := env.Runner.Run(ctx, invocation.Dir, invocation.Name, invocation.Args...)
+	if err != nil {
+		appendSessionLog(logPath, "ci remediation failed", session, combineLogDetails(output, err.Error()))
+		blocked := classifyBlockedFailure("ci_remediation", invocation.Name, output, err)
+		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+			Stage:      "CI Remediation Blocked",
+			Emoji:      "🧯",
+			Percent:    92,
+			ETAMinutes: 10,
+			Items: []string{
+				blockedCIRemediationMessage(blocked, pr.Number, session.Branch, selectedProvider.ID()),
+				blocking.CauseLine(blocked),
+				fmt.Sprintf("Next step: fix the blocker, then run `%s` or request resume from GitHub.", buildResumeHint(session)),
+			},
+			Tagline: "Stop the loop before it turns into noise.",
+		})
+		_ = ghcli.CommentOnIssue(ctx, env.Runner, target.Repo, session.IssueNumber, body)
+		return err
+	}
+
+	appendSessionLog(logPath, "ci remediation succeeded", session, output)
+	return nil
+}
+
 func summarizeError(err error) string {
 	text := strings.TrimSpace(err.Error())
 	if len(text) > 400 {
@@ -250,6 +297,13 @@ func blockedPreflightMessage(blocked state.BlockedReason, providerID string) str
 		return fmt.Sprintf("The `%s` provider hit a usage or subscription limit during issue preflight.", providerID)
 	}
 	return "Repository baseline validation failed before issue implementation began."
+}
+
+func blockedCIRemediationMessage(blocked state.BlockedReason, prNumber int, branch string, providerID string) string {
+	if blocked.Kind == "provider_quota" {
+		return fmt.Sprintf("CI remediation for PR #%d on `%s` stopped because the `%s` account hit a usage or subscription limit.", prNumber, branch, providerID)
+	}
+	return fmt.Sprintf("CI remediation for PR #%d on `%s` did not complete automatically.", prNumber, branch)
 }
 
 func blockedPreflightItems(blocked state.BlockedReason, providerID string, preflightOutput string, resumeHint string) []string {

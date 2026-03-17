@@ -3963,13 +3963,34 @@ func TestScanOnceAutomergeWaitsForPendingChecks(t *testing.T) {
 	}
 }
 
-func TestScanOnceAutomergeWaitsForFailingChecks(t *testing.T) {
+func TestScanOnceFailingChecksTriggerCIRemediation(t *testing.T) {
 	app, _ := newPullRequestMaintenanceTestApp(t, map[string]string{
 		"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
 		"git fetch origin main":  "ok",
 		"git status --porcelain": "",
 		"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
-		"gh pr view --repo owner/repo 31 --json number,url,state,mergedAt,labels,isDraft,mergeStateStatus,reviewDecision,statusCheckRollup": automergePRDetailsJSON("automerge", "BLOCKED", "APPROVED", "COMPLETED", "FAILURE"),
+		"gh pr view --repo owner/repo 31 --json number,url,state,mergedAt,labels,isDraft,mergeStateStatus,reviewDecision,statusCheckRollup": automergePRDetailsJSON("", "BLOCKED", "APPROVED", "COMPLETED", "FAILURE"),
+		"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+			Stage:      "CI Remediation Started",
+			Emoji:      "🛠️",
+			Percent:    80,
+			ETAMinutes: 12,
+			Items: []string{
+				"Vigilante detected failing required checks on PR #31 and is launching a focused remediation pass.",
+				"Failing checks: test (failure)",
+				"Next step: investigate the failure, apply the smallest fix that restores CI, and push to the existing PR branch.",
+			},
+			Tagline: "Tight loop, targeted repair.",
+		}): "ok",
+		"codex --version": "codex 0.114.0",
+		ciRemediationPromptCommand(filepath.Join("/tmp/repo", ".worktrees", "vigilante", "issue-1"), "owner/repo", "/tmp/repo", state.Session{
+			IssueNumber:  1,
+			IssueTitle:   "first",
+			IssueURL:     "https://github.com/owner/repo/issues/1",
+			WorktreePath: filepath.Join("/tmp/repo", ".worktrees", "vigilante", "issue-1"),
+			Branch:       "vigilante/issue-1",
+			Provider:     "codex",
+		}, ghcli.PullRequest{Number: 31, URL: "https://github.com/owner/repo/pull/31"}, []ghcli.StatusCheckRoll{{Context: "test", State: "COMPLETED", Conclusion: "FAILURE"}}): "fixed and pushed",
 		"gh api user --jq .login": "nicobistolfi\n",
 		"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
 	})
@@ -3983,8 +4004,64 @@ func TestScanOnceAutomergeWaitsForFailingChecks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sessions[0].LastMaintenanceError != "automerge waiting for required checks to pass on PR #31" {
-		t.Fatalf("expected failing-checks wait state, got: %#v", sessions[0])
+	if sessions[0].Status != state.SessionStatusSuccess {
+		t.Fatalf("expected maintenance to stay active after remediation dispatch: %#v", sessions[0])
+	}
+	if sessions[0].LastMaintenanceError != "ci remediation dispatched for PR #31; waiting for updated checks" {
+		t.Fatalf("expected remediation wait state, got: %#v", sessions[0])
+	}
+	if sessions[0].LastCIRemediationFingerprint == "" || sessions[0].LastCIRemediationAttemptedAt == "" {
+		t.Fatalf("expected remediation fingerprint tracking, got: %#v", sessions[0])
+	}
+}
+
+func TestScanOnceRepeatedIdenticalFailingChecksBlockForManualReview(t *testing.T) {
+	app, _ := newPullRequestMaintenanceTestApp(t, map[string]string{
+		"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
+		"git fetch origin main":  "ok",
+		"git status --porcelain": "",
+		"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
+		"gh pr view --repo owner/repo 31 --json number,url,state,mergedAt,labels,isDraft,mergeStateStatus,reviewDecision,statusCheckRollup": automergePRDetailsJSON("", "BLOCKED", "APPROVED", "COMPLETED", "FAILURE"),
+		"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+			Stage:      "CI Needs Manual Review",
+			Emoji:      "🧱",
+			Percent:    94,
+			ETAMinutes: 10,
+			Items: []string{
+				"PR #31 still reports the same failing checks after an automated remediation attempt.",
+				"Failing checks: test (failure)",
+				"Next step: inspect the branch `vigilante/issue-1`, apply a manual fix, then run `vigilante resume --repo owner/repo --issue 1` or request resume from GitHub.",
+			},
+			Tagline: "One clean retry is enough to prove the point.",
+		}): "ok",
+		"gh api user --jq .login": "nicobistolfi\n",
+		"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+	})
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions[0].LastCIRemediationFingerprint = ciFailureFingerprint(31, []ghcli.StatusCheckRoll{{Context: "test", State: "COMPLETED", Conclusion: "FAILURE"}})
+	sessions[0].LastCIRemediationAttemptedAt = "2026-03-17T19:30:00Z"
+	if err := app.state.SaveSessions(sessions); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.waitForSessions()
+
+	sessions, err = app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].Status != state.SessionStatusBlocked || sessions[0].BlockedStage != "ci_remediation" {
+		t.Fatalf("expected manual-review block after repeated failure, got: %#v", sessions[0])
+	}
+	if sessions[0].ResumeHint != "vigilante resume --repo owner/repo --issue 1" {
+		t.Fatalf("unexpected resume hint: %#v", sessions[0])
 	}
 }
 
@@ -4484,4 +4561,13 @@ func resumeDiagnosticSummaryCommandForProvider(worktreePath string, providerID s
 	default:
 		return resumeDiagnosticSummaryCommand(worktreePath, session, previousStage)
 	}
+}
+
+func ciRemediationPromptCommand(worktreePath string, repo string, repoPath string, session state.Session, pr ghcli.PullRequest, checks []ghcli.StatusCheckRoll) string {
+	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildCIRemediationPrompt(
+		state.WatchTarget{Path: repoPath, Repo: repo},
+		session,
+		pr,
+		checks,
+	))
 }

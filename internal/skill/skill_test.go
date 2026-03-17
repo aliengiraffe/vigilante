@@ -416,6 +416,18 @@ func TestBuildConflictResolutionPrompt(t *testing.T) {
 	}
 }
 
+func TestBuildCIRemediationPrompt(t *testing.T) {
+	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
+	session := state.Session{IssueNumber: 12, IssueTitle: "Fix bug", IssueURL: "https://example.com/issues/12", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12"}
+	pr := ghcli.PullRequest{Number: 88, URL: "https://example.com/pull/88"}
+	prompt := BuildCIRemediationPrompt(target, session, pr, []ghcli.StatusCheckRoll{{Context: "test", Conclusion: "FAILURE"}})
+	for _, text := range []string{"Use the `vigilante-issue-implementation` skill", "Pull Request: #88", "CI remediation context", "Failing check: test", "do not open a new pull request", "exit with a non-zero status"} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q: %s", text, prompt)
+		}
+	}
+}
+
 func TestEnsureInstalledForClaudeCreatesCommandsAndSkills(t *testing.T) {
 	dir := t.TempDir()
 	repoRoot := t.TempDir()

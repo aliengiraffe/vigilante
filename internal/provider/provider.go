@@ -31,6 +31,13 @@ type ConflictTask struct {
 	PR      ghcli.PullRequest
 }
 
+type CIRemediationTask struct {
+	Target        state.WatchTarget
+	Session       state.Session
+	PR            ghcli.PullRequest
+	FailingChecks []ghcli.StatusCheckRoll
+}
+
 type Provider interface {
 	ID() string
 	DisplayName() string
@@ -39,6 +46,7 @@ type Provider interface {
 	BuildIssuePreflightInvocation(task IssueTask) (Invocation, error)
 	BuildIssueInvocation(task IssueTask) (Invocation, error)
 	BuildConflictResolutionInvocation(task ConflictTask) (Invocation, error)
+	BuildCIRemediationInvocation(task CIRemediationTask) (Invocation, error)
 }
 
 var registry = map[string]Provider{

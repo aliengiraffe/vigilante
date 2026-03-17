@@ -116,6 +116,21 @@ func TestClaudeInvocationUsesWorktreeDirForHeadlessRuns(t *testing.T) {
 	}
 	wantConflictArgs := []string{"--print", "--permission-mode", "acceptEdits", skill.BuildConflictResolutionPromptForRuntime(skill.RuntimeClaude, target, session, pr)}
 	assertInvocationArgs(t, conflictInvocation.Args, wantConflictArgs)
+
+	remediationInvocation, err := selectedProvider.BuildCIRemediationInvocation(CIRemediationTask{
+		Target:        target,
+		Session:       session,
+		PR:            pr,
+		FailingChecks: []ghcli.StatusCheckRoll{{Context: "test", Conclusion: "FAILURE"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remediationInvocation.Dir != "/tmp/worktree" {
+		t.Fatalf("expected remediation dir to be worktree, got %#v", remediationInvocation)
+	}
+	wantRemediationArgs := []string{"--print", "--permission-mode", "acceptEdits", skill.BuildCIRemediationPromptForRuntime(skill.RuntimeClaude, target, session, pr, []ghcli.StatusCheckRoll{{Context: "test", Conclusion: "FAILURE"}})}
+	assertInvocationArgs(t, remediationInvocation.Args, wantRemediationArgs)
 }
 
 func TestResolveIssueLabelUsesRegisteredProviderIDs(t *testing.T) {
@@ -286,5 +301,9 @@ func (p testProvider) BuildIssueInvocation(task IssueTask) (Invocation, error) {
 }
 
 func (p testProvider) BuildConflictResolutionInvocation(task ConflictTask) (Invocation, error) {
+	return Invocation{}, nil
+}
+
+func (p testProvider) BuildCIRemediationInvocation(task CIRemediationTask) (Invocation, error) {
 	return Invocation{}, nil
 }

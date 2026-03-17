@@ -58,3 +58,15 @@ func (geminiProvider) BuildConflictResolutionInvocation(task ConflictTask) (Invo
 		},
 	}, nil
 }
+
+func (geminiProvider) BuildCIRemediationInvocation(task CIRemediationTask) (Invocation, error) {
+	return Invocation{
+		Dir:  task.Session.WorktreePath,
+		Name: "gemini",
+		Args: []string{
+			"--prompt",
+			skill.BuildCIRemediationPromptForRuntime(skill.RuntimeGemini, task.Target, task.Session, task.PR, task.FailingChecks),
+			"--yolo",
+		},
+	}, nil
+}

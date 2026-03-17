@@ -58,3 +58,15 @@ func (codexProvider) BuildConflictResolutionInvocation(task ConflictTask) (Invoc
 		},
 	}, nil
 }
+
+func (codexProvider) BuildCIRemediationInvocation(task CIRemediationTask) (Invocation, error) {
+	return Invocation{
+		Name: "codex",
+		Args: []string{
+			"exec",
+			"--cd", task.Session.WorktreePath,
+			"--dangerously-bypass-approvals-and-sandbox",
+			skill.BuildCIRemediationPrompt(task.Target, task.Session, task.PR, task.FailingChecks),
+		},
+	}, nil
+}

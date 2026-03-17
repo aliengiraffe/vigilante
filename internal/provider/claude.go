@@ -61,3 +61,15 @@ func (claudeProvider) BuildConflictResolutionInvocation(task ConflictTask) (Invo
 		},
 	}, nil
 }
+
+func (claudeProvider) BuildCIRemediationInvocation(task CIRemediationTask) (Invocation, error) {
+	return Invocation{
+		Dir:  task.Session.WorktreePath,
+		Name: "claude",
+		Args: []string{
+			"--print",
+			"--permission-mode", "acceptEdits",
+			skill.BuildCIRemediationPromptForRuntime(skill.RuntimeClaude, task.Target, task.Session, task.PR, task.FailingChecks),
+		},
+	}, nil
+}
