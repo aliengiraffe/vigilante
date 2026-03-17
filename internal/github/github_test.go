@@ -205,6 +205,40 @@ func TestFindPullRequestForBranch(t *testing.T) {
 	}
 }
 
+func TestGetPullRequestDetails(t *testing.T) {
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh pr view --repo owner/repo 17 --json number,url,state,mergedAt,labels,isDraft,mergeStateStatus,reviewDecision,statusCheckRollup": `{"number":17,"url":"https://github.com/owner/repo/pull/17","state":"OPEN","mergedAt":null,"labels":[{"name":"automerge"}],"isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}]}`,
+		},
+	}
+
+	pr, err := GetPullRequestDetails(context.Background(), runner, "owner/repo", 17)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pr.Number != 17 || pr.MergeStateStatus != "CLEAN" || pr.ReviewDecision != "APPROVED" {
+		t.Fatalf("unexpected pull request details: %#v", pr)
+	}
+	if len(pr.Labels) != 1 || pr.Labels[0].Name != "automerge" {
+		t.Fatalf("expected automerge label, got: %#v", pr.Labels)
+	}
+	if len(pr.StatusCheckRollup) != 1 || pr.StatusCheckRollup[0].Conclusion != "SUCCESS" {
+		t.Fatalf("unexpected status checks: %#v", pr.StatusCheckRollup)
+	}
+}
+
+func TestMergePullRequestSquash(t *testing.T) {
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh pr merge --repo owner/repo 17 --squash --delete-branch": "ok",
+		},
+	}
+
+	if err := MergePullRequestSquash(context.Background(), runner, "owner/repo", 17); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFindCleanupComment(t *testing.T) {
 	now := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
 	comments := []IssueComment{
