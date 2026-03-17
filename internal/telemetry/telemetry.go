@@ -20,7 +20,10 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 )
 
-const exportTimeout = 500 * time.Millisecond
+const (
+	exportTimeout   = 2 * time.Second
+	shutdownTimeout = 3 * time.Second
+)
 
 type BuildInfo struct {
 	Version           string
@@ -269,6 +272,10 @@ func telemetryExporterSettings(info BuildInfo) exporterSettings {
 
 func disabledManager() *Manager {
 	return &Manager{}
+}
+
+func ShutdownTimeout() time.Duration {
+	return shutdownTimeout
 }
 
 func (cfg SetupConfig) envLookup() func(string) string {
