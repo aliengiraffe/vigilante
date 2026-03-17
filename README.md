@@ -497,6 +497,35 @@ For pull requests tied to an active Vigilante session:
 - if the PR has an `automerge` label, attempt a GitHub squash merge only after required checks pass and GitHub reports the PR is mergeable
 - never force through branch protection, required reviews, or failing checks
 
+## Issue Labeling System
+
+Vigilante should use a small issue-label taxonomy that complements issue comments instead of replacing them. The repository-owned proposal lives in [`.github/labels.json`](.github/labels.json).
+
+Label ownership rules:
+
+- Work-classification labels such as `bug`, `feature`, and `good first issue` remain repository-managed and should not be changed by Vigilante.
+- `vigilante:*` lifecycle and intervention labels are primarily informational and should be set or cleared by Vigilante as the issue moves through execution.
+- Provider-routing labels `codex`, `claude`, and `gemini` keep their existing control semantics and remain human-managed overrides.
+- `vigilante:resume` is the preferred control label for unblocking a paused session; `resume` remains a legacy-compatible alias.
+
+Proposed groups:
+
+- Execution state: `vigilante:queued`, `vigilante:running`, `vigilante:blocked`, `vigilante:ready-for-review`, `vigilante:awaiting-user-validation`, `vigilante:done`
+- Human-intervention state: `vigilante:needs-review`, `vigilante:needs-human-input`, `vigilante:needs-provider-fix`, `vigilante:needs-git-fix`
+- Provider routing controls: `codex`, `claude`, `gemini`
+- Explicit control labels: `vigilante:resume` and legacy `resume`
+
+Recommended lifecycle:
+
+1. When an issue becomes eligible but has not started, add `vigilante:queued`.
+2. When execution starts, replace `vigilante:queued` with `vigilante:running`.
+3. If execution stalls on a known blocker, replace `vigilante:running` with `vigilante:blocked` and add exactly one matching `vigilante:needs-*` label when possible.
+4. When implementation is ready for a human to inspect, replace blocked or running state with `vigilante:ready-for-review`, keeping `vigilante:needs-review` when a human handoff is still pending.
+5. When code review is complete but a product or operator check is still required, use `vigilante:awaiting-user-validation`.
+6. When the issue reaches a terminal successful state, clear transient labels and leave `vigilante:done`.
+
+This keeps control semantics narrow while making the issue list readable at a glance. Existing label-based behaviors stay compatible: watch-target allowlists still match repository-managed labels, provider overrides still use provider ids, and blocked-session recovery still honors both `resume` and `vigilante:resume`.
+
 ## Headless Agent Execution Contract
 
 When `vigilante` launches a coding agent for an issue, it should:

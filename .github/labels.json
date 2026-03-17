@@ -1,0 +1,179 @@
+{
+  "work_classification_policy": {
+    "owner": "repository maintainers",
+    "notes": [
+      "Repo-specific planning labels such as bug, feature, or good first issue remain user-managed.",
+      "Vigilante should not add or remove work-classification labels automatically."
+    ]
+  },
+  "labels": [
+    {
+      "name": "vigilante:queued",
+      "color": "BFDADC",
+      "group": "execution-state",
+      "behavior": "informational",
+      "applied_by": "vigilante",
+      "description": "The issue is eligible for dispatch and waiting for a worker slot.",
+      "notes": [
+        "Set when Vigilante decides the issue is ready to run but has not started execution yet.",
+        "Clear when execution begins or when the issue becomes ineligible."
+      ]
+    },
+    {
+      "name": "vigilante:running",
+      "color": "0E8A16",
+      "group": "execution-state",
+      "behavior": "informational",
+      "applied_by": "vigilante",
+      "description": "A coding-agent session is currently executing for the issue.",
+      "notes": [
+        "Replaces vigilante:queued while a worktree session is active."
+      ]
+    },
+    {
+      "name": "vigilante:blocked",
+      "color": "D93F0B",
+      "group": "execution-state",
+      "behavior": "informational",
+      "applied_by": "vigilante",
+      "description": "Execution cannot continue until a blocker is resolved.",
+      "notes": [
+        "Pair with exactly one vigilante:needs-* label when the next step is known."
+      ]
+    },
+    {
+      "name": "vigilante:ready-for-review",
+      "color": "FBCA04",
+      "group": "execution-state",
+      "behavior": "informational",
+      "applied_by": "vigilante",
+      "description": "Implementation is complete enough for a human to review the resulting PR or branch.",
+      "notes": [
+        "Preferred first-class review handoff label."
+      ]
+    },
+    {
+      "name": "vigilante:awaiting-user-validation",
+      "color": "F9D0C4",
+      "group": "execution-state",
+      "behavior": "informational",
+      "applied_by": "vigilante",
+      "description": "Changes are ready for product or operator validation before the issue is considered done.",
+      "notes": [
+        "Use when code review is complete but a human still needs to validate behavior."
+      ]
+    },
+    {
+      "name": "vigilante:done",
+      "color": "5319E7",
+      "group": "execution-state",
+      "behavior": "informational",
+      "applied_by": "vigilante",
+      "description": "Vigilante completed its work on the issue and no further automation is expected.",
+      "notes": [
+        "Typically set after merge, explicit operator completion, or another terminal success condition."
+      ]
+    },
+    {
+      "name": "vigilante:needs-review",
+      "color": "D4C5F9",
+      "group": "intervention",
+      "behavior": "informational",
+      "applied_by": "vigilante",
+      "description": "A human should review the implementation output before Vigilante continues or closes the loop.",
+      "notes": [
+        "Can coexist with vigilante:ready-for-review or vigilante:blocked depending on the workflow stage."
+      ]
+    },
+    {
+      "name": "vigilante:needs-human-input",
+      "color": "F7C6C7",
+      "group": "intervention",
+      "behavior": "informational",
+      "applied_by": "vigilante",
+      "description": "The agent is waiting on product, operator, or repository-owner guidance.",
+      "notes": [
+        "Use for ambiguous requirements, missing decisions, or manual approvals."
+      ]
+    },
+    {
+      "name": "vigilante:needs-provider-fix",
+      "color": "E99695",
+      "group": "intervention",
+      "behavior": "informational",
+      "applied_by": "vigilante",
+      "description": "Execution is blocked by provider auth, quota, or runtime setup issues.",
+      "notes": [
+        "Maps naturally from existing blocked provider failure classes."
+      ]
+    },
+    {
+      "name": "vigilante:needs-git-fix",
+      "color": "C2E0C6",
+      "group": "intervention",
+      "behavior": "informational",
+      "applied_by": "vigilante",
+      "description": "Execution is blocked by repository or git state that requires human repair.",
+      "notes": [
+        "Use for auth failures, dirty worktrees, rebase conflicts, or branch repair."
+      ]
+    },
+    {
+      "name": "codex",
+      "color": "1D76DB",
+      "group": "provider-routing",
+      "behavior": "control",
+      "applied_by": "human",
+      "description": "Routes the issue to the Codex provider for execution.",
+      "notes": [
+        "Existing control behavior remains unchanged."
+      ]
+    },
+    {
+      "name": "claude",
+      "color": "0052CC",
+      "group": "provider-routing",
+      "behavior": "control",
+      "applied_by": "human",
+      "description": "Routes the issue to the Claude provider for execution.",
+      "notes": [
+        "Existing control behavior remains unchanged."
+      ]
+    },
+    {
+      "name": "gemini",
+      "color": "006B75",
+      "group": "provider-routing",
+      "behavior": "control",
+      "applied_by": "human",
+      "description": "Routes the issue to the Gemini provider for execution.",
+      "notes": [
+        "Existing control behavior remains unchanged."
+      ]
+    },
+    {
+      "name": "vigilante:resume",
+      "color": "C5DEF5",
+      "group": "control",
+      "behavior": "control",
+      "applied_by": "human",
+      "description": "Requests that Vigilante resume a blocked session.",
+      "notes": [
+        "Preferred namespaced control label.",
+        "Vigilante should remove it after acknowledging the resume request."
+      ]
+    },
+    {
+      "name": "resume",
+      "color": "C5DEF5",
+      "group": "control",
+      "behavior": "control",
+      "applied_by": "human",
+      "description": "Legacy compatibility alias for vigilante:resume.",
+      "alias_for": "vigilante:resume",
+      "notes": [
+        "Keep until existing operator workflows are migrated."
+      ]
+    }
+  ]
+}
