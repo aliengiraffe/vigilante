@@ -5,4 +5,5 @@ var (
 	Distro            = "direct"
 	TelemetryEndpoint = ""
 	TelemetryToken    = ""
+	TelemetryURLPath  = ""
 )

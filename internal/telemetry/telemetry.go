@@ -13,12 +13,11 @@ import (
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
+	otellog "go.opentelemetry.io/otel/log"
+	sdklog "go.opentelemetry.io/otel/sdk/log"
 	"go.opentelemetry.io/otel/sdk/resource"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
-	"go.opentelemetry.io/otel/trace"
 )
 
 const exportTimeout = 500 * time.Millisecond
@@ -36,12 +35,12 @@ type SetupConfig struct {
 	StateRoot   string
 	Stderr      io.Writer
 	EnvLookup   func(string) string
-	NewExporter func(context.Context, BuildInfo) (sdktrace.SpanExporter, error)
+	NewExporter func(context.Context, BuildInfo) (sdklog.Exporter, error)
 }
 
 type Manager struct {
-	provider *sdktrace.TracerProvider
-	tracer   trace.Tracer
+	provider *sdklog.LoggerProvider
+	logger   otellog.Logger
 	version  string
 	distro   string
 }
@@ -88,18 +87,20 @@ func Setup(ctx context.Context, cfg SetupConfig) (*Manager, error) {
 		return nil, err
 	}
 
-	provider := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(
-			exp,
-			sdktrace.WithBatchTimeout(100*time.Millisecond),
-			sdktrace.WithExportTimeout(exportTimeout),
+	provider := sdklog.NewLoggerProvider(
+		sdklog.WithProcessor(
+			sdklog.NewBatchProcessor(
+				exp,
+				sdklog.WithExportInterval(100*time.Millisecond),
+				sdklog.WithExportTimeout(exportTimeout),
+			),
 		),
-		sdktrace.WithResource(res),
+		sdklog.WithResource(res),
 	)
 
 	return &Manager{
 		provider: provider,
-		tracer:   provider.Tracer("github.com/nicobistolfi/vigilante/internal/telemetry"),
+		logger:   provider.Logger("github.com/nicobistolfi/vigilante/internal/telemetry"),
 		version:  defaultString(cfg.BuildInfo.Version, "dev"),
 		distro:   defaultString(cfg.BuildInfo.Distro, "direct"),
 	}, nil
@@ -118,23 +119,33 @@ func (m *Manager) StartCommand(ctx context.Context, args []string) (context.Cont
 	}
 
 	commandName := CommandName(args)
-	ctx, span := m.tracer.Start(ctx, "cli.command", trace.WithAttributes(
-		attribute.String("command.name", commandName),
-	))
+	startedAt := time.Now()
 
 	return ctx, func(exitCode int) {
-		span.SetAttributes(
-			attribute.Int("command.exit_code", exitCode),
-			attribute.String("command.name", commandName),
-			attribute.String("platform.os", runtime.GOOS),
-			attribute.String("platform.arch", runtime.GOARCH),
-			attribute.String("app.version", m.version),
-			attribute.String("distro", m.distro),
+		record := otellog.Record{}
+		record.SetEventName("cli.command")
+		record.SetTimestamp(startedAt)
+		record.SetObservedTimestamp(time.Now())
+		record.SetBody(otellog.StringValue("command completed"))
+		record.AddAttributes(
+			otellog.KeyValueFromAttribute(attribute.Int("command.exit_code", exitCode)),
+			otellog.KeyValueFromAttribute(attribute.String("command.name", commandName)),
+			otellog.KeyValueFromAttribute(attribute.Int64("command.duration_ms", time.Since(startedAt).Milliseconds())),
+			otellog.KeyValueFromAttribute(attribute.String("platform.os", runtime.GOOS)),
+			otellog.KeyValueFromAttribute(attribute.String("platform.arch", runtime.GOARCH)),
+			otellog.KeyValueFromAttribute(attribute.String("app.version", m.version)),
+			otellog.KeyValueFromAttribute(attribute.String("distro", m.distro)),
 		)
 		if exitCode != 0 {
-			span.SetStatus(codes.Error, fmt.Sprintf("exit code %d", exitCode))
+			record.SetBody(otellog.StringValue("command failed"))
+			record.SetSeverity(otellog.SeverityError)
+			record.SetSeverityText("ERROR")
+		} else {
+			record.SetBody(otellog.StringValue("command completed"))
+			record.SetSeverity(otellog.SeverityInfo)
+			record.SetSeverityText("INFO")
 		}
-		span.End()
+		m.logger.Emit(ctx, record)
 	}
 }
 
@@ -174,7 +185,9 @@ func telemetryDisabled(info BuildInfo, lookup func(string) string) bool {
 	if strings.EqualFold(lookup("CI"), "true") {
 		return true
 	}
-	return strings.TrimSpace(info.TelemetryEndpoint) == "" || strings.TrimSpace(info.TelemetryToken) == ""
+	return strings.TrimSpace(info.TelemetryEndpoint) == "" ||
+		strings.TrimSpace(info.TelemetryToken) == "" ||
+		telemetryURLPath(info) == ""
 }
 
 func ensureLocalState(root string) (localState, bool, error) {
@@ -208,22 +221,28 @@ func ensureLocalState(root string) (localState, bool, error) {
 	return state, true, nil
 }
 
-func newHTTPExporter(ctx context.Context, info BuildInfo) (sdktrace.SpanExporter, error) {
+type exporterSettings struct {
+	Endpoint string
+	Headers  map[string]string
+	Timeout  time.Duration
+	URLPath  string
+}
+
+func newHTTPExporter(ctx context.Context, info BuildInfo) (sdklog.Exporter, error) {
 	exportCtx, cancel := context.WithTimeout(ctx, exportTimeout)
 	defer cancel()
 
-	opts := []otlptracehttp.Option{
-		otlptracehttp.WithEndpointURL(info.TelemetryEndpoint),
-		otlptracehttp.WithHeaders(map[string]string{
-			"Authorization": fmt.Sprintf("Bearer %s", info.TelemetryToken),
-		}),
-		otlptracehttp.WithTimeout(exportTimeout),
+	settings := telemetryExporterSettings(info)
+	opts := []otlploghttp.Option{
+		otlploghttp.WithEndpoint(settings.Endpoint),
+		otlploghttp.WithHeaders(settings.Headers),
+		otlploghttp.WithTimeout(settings.Timeout),
 	}
-	if path := telemetryURLPath(info); path != "" {
-		opts = append(opts, otlptracehttp.WithURLPath(path))
+	if settings.URLPath != "" {
+		opts = append(opts, otlploghttp.WithURLPath(settings.URLPath))
 	}
 
-	return otlptracehttp.New(exportCtx, opts...)
+	return otlploghttp.New(exportCtx, opts...)
 }
 
 func defaultString(value string, fallback string) string {
@@ -235,6 +254,17 @@ func defaultString(value string, fallback string) string {
 
 func telemetryURLPath(info BuildInfo) string {
 	return strings.TrimSpace(info.TelemetryURLPath)
+}
+
+func telemetryExporterSettings(info BuildInfo) exporterSettings {
+	return exporterSettings{
+		Endpoint: strings.TrimSpace(info.TelemetryEndpoint),
+		Headers: map[string]string{
+			"Authorization": fmt.Sprintf("Bearer %s", strings.TrimSpace(info.TelemetryToken)),
+		},
+		Timeout: exportTimeout,
+		URLPath: telemetryURLPath(info),
+	}
 }
 
 func disabledManager() *Manager {
