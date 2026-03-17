@@ -110,6 +110,10 @@ func Prune(ctx context.Context, runner environment.Runner, repoPath string) erro
 }
 
 func CleanupIssueArtifacts(ctx context.Context, runner environment.Runner, repoPath string, worktreePath string, branch string) error {
+	return CleanupIssueArtifactsForBranches(ctx, runner, repoPath, worktreePath, []string{branch})
+}
+
+func CleanupIssueArtifactsForBranches(ctx context.Context, runner environment.Runner, repoPath string, worktreePath string, branches []string) error {
 	if err := Prune(ctx, runner, repoPath); err != nil {
 		return err
 	}
@@ -126,24 +130,38 @@ func CleanupIssueArtifacts(ctx context.Context, runner environment.Runner, repoP
 		return err
 	}
 
-	attached, err := branchAttachedToWorktree(ctx, runner, repoPath, branch)
-	if err != nil {
-		return err
-	}
-	if attached {
-		return nil
-	}
+	seen := map[string]struct{}{}
+	for _, branch := range branches {
+		branch = strings.TrimSpace(branch)
+		if branch == "" {
+			continue
+		}
+		if _, ok := seen[branch]; ok {
+			continue
+		}
+		seen[branch] = struct{}{}
 
-	exists, err := branchExistsWithError(ctx, runner, repoPath, branch)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return nil
-	}
+		attached, err := branchAttachedToWorktree(ctx, runner, repoPath, branch)
+		if err != nil {
+			return err
+		}
+		if attached {
+			continue
+		}
 
-	_, err = runner.Run(ctx, repoPath, "git", "branch", "-D", branch)
-	return err
+		exists, err := branchExistsWithError(ctx, runner, repoPath, branch)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+
+		if _, err := runner.Run(ctx, repoPath, "git", "branch", "-D", branch); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func branchExists(ctx context.Context, runner environment.Runner, repoPath string, branch string) bool {
