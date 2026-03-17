@@ -146,6 +146,8 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		return a.List(*blockedOnly, *runningOnly)
 	case "cleanup":
 		return a.runCleanupCommand(ctx, args[1:])
+	case "redispatch":
+		return a.runRedispatchCommand(ctx, args[1:])
 	case "resume":
 		return a.runResumeCommand(ctx, args[1:])
 	case "daemon":
@@ -174,6 +176,20 @@ func (a *App) runResumeCommand(ctx context.Context, args []string) error {
 		return errors.New("usage: vigilante resume --repo <owner/name> --issue <n>")
 	}
 	return a.ResumeSession(ctx, *repo, *issue, "cli")
+}
+
+func (a *App) runRedispatchCommand(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("redispatch", flag.ContinueOnError)
+	fs.SetOutput(a.stderr)
+	repo := fs.String("repo", "", "repository slug")
+	issue := fs.Int("issue", 0, "issue number")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *repo == "" || *issue <= 0 {
+		return errors.New("usage: vigilante redispatch --repo <owner/name> --issue <n>")
+	}
+	return a.RedispatchSession(ctx, *repo, *issue, "cli")
 }
 
 func (a *App) runCleanupCommand(ctx context.Context, args []string) error {
@@ -834,9 +850,15 @@ func (a *App) launchIssueSession(ctx context.Context, target state.WatchTarget, 
 			a.state.AppendDaemonLog("session result load failed repo=%s issue=%d err=%v", target.Repo, issue.Number, err)
 			return
 		}
-		if existing, ok := findSession(sessions, target.Repo, issue.Number); ok && existing.LastCleanupSource != "" {
-			a.state.AppendDaemonLog("session result ignored after cleanup repo=%s issue=%d source=%s", target.Repo, issue.Number, existing.LastCleanupSource)
-			return
+		if existing, ok := findSession(sessions, target.Repo, issue.Number); ok {
+			if existing.StartedAt != "" && existing.StartedAt != result.StartedAt {
+				a.state.AppendDaemonLog("session result ignored for superseded run repo=%s issue=%d started_at=%s latest_started_at=%s", target.Repo, issue.Number, result.StartedAt, existing.StartedAt)
+				return
+			}
+			if existing.LastCleanupSource != "" {
+				a.state.AppendDaemonLog("session result ignored after cleanup repo=%s issue=%d source=%s", target.Repo, issue.Number, existing.LastCleanupSource)
+				return
+			}
 		}
 		if previous, _ := findSession(sessions, target.Repo, issue.Number); shouldCommentStartupFailure(result) {
 			a.commentDispatchFailure(ctx, previous, &result, "issue_startup")
@@ -1242,6 +1264,106 @@ func (a *App) ResumeSession(ctx context.Context, repo string, issue int, source 
 	return nil
 }
 
+func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int, source string) error {
+	if err := a.state.EnsureLayout(); err != nil {
+		return err
+	}
+
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+
+	targets, err := a.state.LoadWatchTargets()
+	if err != nil {
+		return err
+	}
+	target, ok := findWatchTargetByRepo(targets, repoSlug)
+	if !ok {
+		return fmt.Errorf("watch target not found for %s", repoSlug)
+	}
+	target.Assignee = assigneeOrDefault(target.Assignee)
+	if strings.TrimSpace(target.Provider) == "" {
+		target.Provider = provider.DefaultID
+	}
+	target.MaxParallel = configuredMaxParallel(target.MaxParallel)
+	target.Classification = repo.Classify(target.Path)
+
+	sessions, err := a.state.LoadSessions()
+	if err != nil {
+		return err
+	}
+
+	for i := range sessions {
+		if sessions[i].Repo != repoSlug || sessions[i].IssueNumber != issue {
+			continue
+		}
+		if err := a.resetSessionForRedispatch(ctx, &sessions[i], source); err != nil {
+			return err
+		}
+		break
+	}
+
+	issues, err := ghcli.ListOpenIssues(ctx, a.env.Runner, target.Repo, target.Assignee)
+	if err != nil {
+		return err
+	}
+
+	var selectedIssue *ghcli.Issue
+	for i := range issues {
+		if issues[i].Number == issue {
+			selectedIssue = &issues[i]
+			break
+		}
+	}
+	if selectedIssue == nil || !issueMatchesLabelAllowlist(*selectedIssue, target.Labels) {
+		return fmt.Errorf("issue #%d is not open and eligible for redispatch in watched repo %s", issue, repoSlug)
+	}
+
+	activeCount := ghcli.ActiveSessionCount(sessions, target)
+	if target.MaxParallel > 0 && activeCount >= target.MaxParallel {
+		return fmt.Errorf("redispatch would exceed max parallel sessions for %s", repoSlug)
+	}
+
+	selectedProvider, err := resolveIssueProvider(target, *selectedIssue)
+	if err != nil {
+		return err
+	}
+
+	wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, target, selectedIssue.Number, selectedIssue.Title)
+	if err != nil {
+		return err
+	}
+
+	now := a.clock().Format(time.RFC3339)
+	session := state.Session{
+		RepoPath:        target.Path,
+		Repo:            target.Repo,
+		Provider:        selectedProvider,
+		IssueNumber:     selectedIssue.Number,
+		IssueTitle:      selectedIssue.Title,
+		IssueURL:        selectedIssue.URL,
+		Branch:          wt.Branch,
+		WorktreePath:    wt.Path,
+		Status:          state.SessionStatusRunning,
+		ProcessID:       os.Getpid(),
+		StartedAt:       now,
+		LastHeartbeatAt: now,
+		UpdatedAt:       now,
+	}
+	sessions = upsertSession(sessions, session)
+	if err := a.state.SaveSessions(sessions); err != nil {
+		return err
+	}
+
+	if source == "cli" {
+		a.commentOnIssueBestEffort(ctx, repoSlug, issue, localRedispatchStartedComment(session), "local redispatch result")
+	}
+	a.state.AppendDaemonLog("redispatch started repo=%s issue=%d branch=%s worktree=%s", repoSlug, issue, wt.Branch, wt.Path)
+	fmt.Fprintf(a.stdout, "redispatched %s issue #%d in %s\n", repoSlug, issue, wt.Path)
+
+	a.launchIssueSession(ctx, target, *selectedIssue, session)
+	return nil
+}
+
 func (a *App) cleanupSessions(ctx context.Context, source string, successFormat string, match func(state.Session) bool, args ...any) error {
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
@@ -1306,6 +1428,54 @@ func (a *App) cleanupRunningSession(ctx context.Context, session *state.Session,
 	session.CleanupCompletedAt = now
 	session.CleanupError = ""
 	a.state.AppendDaemonLog("running session cleanup complete repo=%s issue=%d source=%s branch=%s worktree=%s", session.Repo, session.IssueNumber, source, session.Branch, session.WorktreePath)
+	return nil
+}
+
+func (a *App) resetSessionForRedispatch(ctx context.Context, session *state.Session, source string) error {
+	now := a.clock().Format(time.RFC3339)
+	a.cancelRunningSession(session.Repo, session.IssueNumber)
+
+	branches := worktree.IssueBranchCandidates(session.IssueNumber, session.IssueTitle)
+	if session.Branch != "" && !containsString(branches, session.Branch) {
+		branches = append(branches, session.Branch)
+	}
+	if err := worktree.CleanupIssueArtifactsForBranches(ctx, a.env.Runner, session.RepoPath, session.WorktreePath, branches); err != nil {
+		session.LastCleanupSource = source
+		session.CleanupError = err.Error()
+		session.LastError = fmt.Sprintf("redispatch requested via %s; artifact cleanup failed: %s", source, err)
+		session.UpdatedAt = now
+		a.state.AppendDaemonLog("redispatch cleanup failed repo=%s issue=%d source=%s branch=%s worktree=%s err=%v", session.Repo, session.IssueNumber, source, session.Branch, session.WorktreePath, err)
+		return err
+	}
+
+	session.Status = state.SessionStatusFailed
+	session.PullRequestNumber = 0
+	session.PullRequestURL = ""
+	session.PullRequestState = ""
+	session.PullRequestMergedAt = ""
+	session.LastMaintainedAt = ""
+	session.LastMaintenanceError = ""
+	session.BlockedAt = ""
+	session.BlockedStage = ""
+	session.BlockedReason = state.BlockedReason{}
+	session.RetryPolicy = ""
+	session.ResumeRequired = false
+	session.ResumeHint = ""
+	session.LastResumeSource = ""
+	session.LastResumeCommentAt = ""
+	session.LastResumeFailureFingerprint = ""
+	session.LastResumeFailureCommentedAt = ""
+	session.RecoveredAt = ""
+	session.MonitoringStoppedAt = ""
+	session.ProcessID = 0
+	session.LastHeartbeatAt = ""
+	session.EndedAt = now
+	session.UpdatedAt = now
+	session.CleanupCompletedAt = now
+	session.CleanupError = ""
+	session.LastCleanupSource = source
+	session.LastError = fmt.Sprintf("redispatch requested via %s", source)
+	a.state.AppendDaemonLog("redispatch cleanup complete repo=%s issue=%d source=%s branch=%s worktree=%s", session.Repo, session.IssueNumber, source, session.Branch, session.WorktreePath)
 	return nil
 }
 
@@ -2018,6 +2188,21 @@ func localCleanupNoopComment() string {
 	})
 }
 
+func localRedispatchStartedComment(session state.Session) string {
+	return ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Local Redispatch Started",
+		Emoji:      "🚀",
+		Percent:    15,
+		ETAMinutes: 20,
+		Items: []string{
+			"A local operator ran `vigilante redispatch` for this issue.",
+			fmt.Sprintf("Result: succeeded. Vigilante reset the local issue artifacts and started a fresh session on `%s`.", session.Branch),
+			fmt.Sprintf("New worktree: `%s`.", session.WorktreePath),
+		},
+		Tagline: "Operator action recorded.",
+	})
+}
+
 func localResumeSuccessComment(session state.Session, previousStage string, previousKind string) string {
 	return ghcli.FormatProgressComment(ghcli.ProgressComment{
 		Stage:      "Local Resume Completed",
@@ -2370,6 +2555,7 @@ func (a *App) printUsage() {
 	fmt.Fprintln(a.stderr, "  vigilante list [--blocked | --running]")
 	fmt.Fprintln(a.stderr, "  vigilante cleanup --repo <owner/name> [--issue <n>]")
 	fmt.Fprintln(a.stderr, "  vigilante cleanup --all")
+	fmt.Fprintln(a.stderr, "  vigilante redispatch --repo <owner/name> --issue <n>")
 	fmt.Fprintln(a.stderr, "  vigilante resume --repo <owner/name> --issue <n>")
 	fmt.Fprintln(a.stderr, "  vigilante resume --all-blocked")
 	fmt.Fprintln(a.stderr, "  vigilante daemon run [--once] [--interval duration]")
@@ -2402,6 +2588,38 @@ func ExpandPath(raw string) (string, error) {
 		}
 	}
 	return filepath.Abs(raw)
+}
+
+func findWatchTargetByRepo(targets []state.WatchTarget, repo string) (state.WatchTarget, bool) {
+	for _, target := range targets {
+		if target.Repo == repo {
+			return target, true
+		}
+	}
+	return state.WatchTarget{}, false
+}
+
+func issueMatchesLabelAllowlist(issue ghcli.Issue, allowlist []string) bool {
+	if len(allowlist) == 0 {
+		return true
+	}
+	for _, configured := range allowlist {
+		for _, label := range issue.Labels {
+			if label.Name == configured {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func containsString(values []string, needle string) bool {
+	for _, value := range values {
+		if value == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func assigneeOrDefault(value string) string {
