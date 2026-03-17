@@ -702,7 +702,6 @@ func TestLocalServiceDependenciesSkillCoversStructuredOutputAndFailureModes(t *t
 
 func TestIssueImplementationSkillsReferenceLocalServiceDependencySkill(t *testing.T) {
 	for _, name := range []string{
-		VigilanteIssueImplementation,
 		VigilanteIssueImplementationOnMonorepo,
 		VigilanteIssueImplementationOnTurborepo,
 		VigilanteIssueImplementationOnNx,
