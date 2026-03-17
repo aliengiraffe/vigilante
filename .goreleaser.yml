@@ -8,6 +8,14 @@ builds:
     binary: vigilante
     env:
       - CGO_ENABLED=0
+      - OTEL_ENDPOINT
+      - OTEL_TOKEN
+      - DISTRO
+    ldflags:
+      - -X github.com/nicobistolfi/vigilante/internal/build.Version={{ .Version }}
+      - -X github.com/nicobistolfi/vigilante/internal/build.Distro={{ if index .Env "DISTRO" }}{{ .Env.DISTRO }}{{ else }}direct{{ end }}
+      - -X github.com/nicobistolfi/vigilante/internal/build.TelemetryEndpoint={{ .Env.OTEL_ENDPOINT }}
+      - -X github.com/nicobistolfi/vigilante/internal/build.TelemetryToken={{ .Env.OTEL_TOKEN }}
     goos:
       - darwin
       - linux
