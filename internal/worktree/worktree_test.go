@@ -2,24 +2,32 @@ package worktree
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	"github.com/nicobistolfi/vigilante/internal/state"
+	"github.com/nicobistolfi/vigilante/internal/testutil"
 )
 
 func TestCreateAndRemoveWorktree(t *testing.T) {
 	home := t.TempDir()
 	repo := filepath.Join(home, "repo")
+	origin := filepath.Join(home, "origin.git")
+	updater := filepath.Join(home, "updater")
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(origin, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
 	runner := environment.ExecRunner{}
 	ctx := context.Background()
+	mustRun(t, runner, ctx, origin, "git", "init", "--bare")
 	mustRun(t, runner, ctx, repo, "git", "init", "--initial-branch=main")
 	mustRun(t, runner, ctx, repo, "git", "config", "user.email", "test@example.com")
 	mustRun(t, runner, ctx, repo, "git", "config", "user.name", "Test User")
@@ -28,6 +36,18 @@ func TestCreateAndRemoveWorktree(t *testing.T) {
 	}
 	mustRun(t, runner, ctx, repo, "git", "add", "README.md")
 	mustRun(t, runner, ctx, repo, "git", "commit", "-m", "init")
+	mustRun(t, runner, ctx, repo, "git", "remote", "add", "origin", origin)
+	mustRun(t, runner, ctx, repo, "git", "push", "-u", "origin", "HEAD:main")
+
+	mustRun(t, runner, ctx, home, "git", "clone", "--branch", "main", origin, updater)
+	mustRun(t, runner, ctx, updater, "git", "config", "user.email", "test@example.com")
+	mustRun(t, runner, ctx, updater, "git", "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(updater, "README.md"), []byte("hello\nremote update\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustRun(t, runner, ctx, updater, "git", "add", "README.md")
+	mustRun(t, runner, ctx, updater, "git", "commit", "-m", "remote update")
+	mustRun(t, runner, ctx, updater, "git", "push", "origin", "HEAD:main")
 
 	worktree, err := CreateIssueWorktree(ctx, runner, state.WatchTarget{Path: repo, Repo: "owner/repo", Branch: "main"}, 9, "Add daemon status command")
 	if err != nil {
@@ -41,6 +61,13 @@ func TestCreateAndRemoveWorktree(t *testing.T) {
 	}
 	if _, err := os.Stat(worktree.Path); err != nil {
 		t.Fatal(err)
+	}
+	content, err := os.ReadFile(filepath.Join(worktree.Path, "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "hello\nremote update\n" {
+		t.Fatalf("expected refreshed base content, got %q", string(content))
 	}
 	if err := Remove(ctx, runner, repo, worktree.Path); err != nil {
 		t.Fatal(err)
@@ -190,6 +217,68 @@ func TestCreateIssueWorktreePrefersPrimaryRemoteBranchOverLegacyFallback(t *test
 	}
 	if _, err := os.Stat(filepath.Join(worktree.Path, "legacy.txt")); err == nil {
 		t.Fatalf("did not expect legacy-only file in preferred primary branch worktree")
+	}
+}
+
+func TestCreateIssueWorktreeRefreshesDetachedConfiguredBaseBranch(t *testing.T) {
+	home := t.TempDir()
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	path := IssueWorktreePath(repo, 12)
+	branch := IssueBranchName(12, "Use develop")
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"git worktree prune":                                      "ok",
+			"git fetch origin develop":                                "ok",
+			"git worktree list --porcelain":                           "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/feature\n",
+			"git branch -f develop refs/remotes/origin/develop":       "ok",
+			"git worktree add -b " + branch + " " + path + " develop": "ok",
+		},
+		Errors: map[string]error{
+			"git show-ref --verify --quiet refs/heads/" + branch:          errors.New("exit status 1"),
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-12": errors.New("exit status 1"),
+		},
+	}
+
+	worktree, err := CreateIssueWorktree(context.Background(), runner, state.WatchTarget{Path: repo, Repo: "owner/repo", Branch: "develop"}, 12, "Use develop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if worktree.Branch != branch {
+		t.Fatalf("unexpected branch: got %s want %s", worktree.Branch, branch)
+	}
+	if worktree.Path != path {
+		t.Fatalf("unexpected path: got %s want %s", worktree.Path, path)
+	}
+}
+
+func TestCreateIssueWorktreeFailsWhenAttachedBaseBranchIsDirty(t *testing.T) {
+	home := t.TempDir()
+	repo := filepath.Join(home, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	branch := IssueBranchName(14, "Dirty base")
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"git worktree prune":            "ok",
+			"git fetch origin main":         "ok",
+			"git worktree list --porcelain": "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n",
+			"git status --porcelain":        " M README.md\n",
+		},
+		Errors: map[string]error{
+			"git show-ref --verify --quiet refs/heads/" + branch:          errors.New("exit status 1"),
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-14": errors.New("exit status 1"),
+		},
+	}
+
+	_, err := CreateIssueWorktree(context.Background(), runner, state.WatchTarget{Path: repo, Repo: "owner/repo", Branch: "main"}, 14, "Dirty base")
+	if err == nil || err.Error() != `base branch "main" has local changes in worktree /tmp/repo` {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
