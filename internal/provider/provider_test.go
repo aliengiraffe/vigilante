@@ -94,7 +94,7 @@ func TestClaudeInvocationUsesWorktreeDirForHeadlessRuns(t *testing.T) {
 	if preflight.Dir != "/tmp/worktree" {
 		t.Fatalf("expected preflight dir to be worktree, got %#v", preflight)
 	}
-	wantPreflightArgs := []string{"--print", "--permission-mode", "acceptEdits", skill.BuildIssuePreflightPrompt(target, issue, session)}
+	wantPreflightArgs := []string{"--print", "--dangerously-skip-permissions", skill.BuildIssuePreflightPrompt(target, issue, session)}
 	assertInvocationArgs(t, preflight.Args, wantPreflightArgs)
 
 	issueInvocation, err := selectedProvider.BuildIssueInvocation(IssueTask{Target: target, Issue: issue, Session: session})
@@ -104,7 +104,7 @@ func TestClaudeInvocationUsesWorktreeDirForHeadlessRuns(t *testing.T) {
 	if issueInvocation.Dir != "/tmp/worktree" {
 		t.Fatalf("expected issue dir to be worktree, got %#v", issueInvocation)
 	}
-	wantIssueArgs := []string{"--print", "--permission-mode", "acceptEdits", skill.BuildIssuePromptForRuntime(skill.RuntimeClaude, target, issue, session)}
+	wantIssueArgs := []string{"--print", "--dangerously-skip-permissions", skill.BuildIssuePromptForRuntime(skill.RuntimeClaude, target, issue, session)}
 	assertInvocationArgs(t, issueInvocation.Args, wantIssueArgs)
 
 	conflictInvocation, err := selectedProvider.BuildConflictResolutionInvocation(ConflictTask{Target: target, Session: session, PR: pr})
@@ -114,7 +114,7 @@ func TestClaudeInvocationUsesWorktreeDirForHeadlessRuns(t *testing.T) {
 	if conflictInvocation.Dir != "/tmp/worktree" {
 		t.Fatalf("expected conflict dir to be worktree, got %#v", conflictInvocation)
 	}
-	wantConflictArgs := []string{"--print", "--permission-mode", "acceptEdits", skill.BuildConflictResolutionPromptForRuntime(skill.RuntimeClaude, target, session, pr)}
+	wantConflictArgs := []string{"--print", "--dangerously-skip-permissions", skill.BuildConflictResolutionPromptForRuntime(skill.RuntimeClaude, target, session, pr)}
 	assertInvocationArgs(t, conflictInvocation.Args, wantConflictArgs)
 
 	remediationInvocation, err := selectedProvider.BuildCIRemediationInvocation(CIRemediationTask{
