@@ -342,6 +342,35 @@ func TestBuildIssuePromptSelectsNxSkill(t *testing.T) {
 	}
 }
 
+func TestBuildIssuePromptSelectsBazelMonorepoSkill(t *testing.T) {
+	target := state.WatchTarget{
+		Path: "/tmp/repo",
+		Repo: "owner/repo",
+		Classification: repo.Classification{
+			Shape: repo.ShapeMonorepo,
+			ProcessHints: repo.ProcessHints{
+				BazelRepoMarkers:  []string{"MODULE.bazel", "WORKSPACE"},
+				BazelPackageRoots: []string{"apps", "services"},
+			},
+		},
+	}
+	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
+
+	prompt := BuildIssuePrompt(target, issue, session)
+
+	for _, text := range []string{
+		"Use the `vigilante-issue-implementation-on-bazel-monorepo` skill",
+		"Selected issue implementation skill: vigilante-issue-implementation-on-bazel-monorepo",
+		`"bazel_repo_markers":["MODULE.bazel","WORKSPACE"]`,
+		`"bazel_package_roots":["apps","services"]`,
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q: %s", text, prompt)
+		}
+	}
+}
+
 func TestBuildIssuePreflightPrompt(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
@@ -608,6 +637,7 @@ func TestLocalServiceDependenciesSkillCoversStructuredOutputAndFailureModes(t *t
 
 func TestIssueImplementationSkillsReferenceLocalServiceDependencySkill(t *testing.T) {
 	for _, name := range []string{
+		VigilanteIssueImplementation,
 		VigilanteIssueImplementationOnMonorepo,
 		VigilanteIssueImplementationOnTurborepo,
 		VigilanteIssueImplementationOnNx,
@@ -615,6 +645,7 @@ func TestIssueImplementationSkillsReferenceLocalServiceDependencySkill(t *testin
 		VigilanteIssueImplementationOnBazel,
 		VigilanteIssueImplementationOnGradle,
 		VigilanteIssueImplementationOnGradleMultiProject,
+		VigilanteIssueImplementationOnBazelMonorepo,
 	} {
 		body, err := os.ReadFile(repoSkillPath(name))
 		if err != nil {
@@ -666,6 +697,26 @@ func TestGradleMultiProjectSkillCoversSubprojectValidationAndComposeLaunch(t *te
 		"`docker-compose-launch`",
 		"Avoid JS workspace assumptions",
 		"Log the selected subproject(s) and Gradle task scope",
+	} {
+		if !strings.Contains(text, snippet) {
+			t.Fatalf("skill missing %q", snippet)
+		}
+	}
+}
+
+func TestBazelMonorepoSkillCoversTargetSelectionAndDatabaseFlows(t *testing.T) {
+	body, err := os.ReadFile(repoSkillPath(VigilanteIssueImplementationOnBazelMonorepo))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := string(body)
+	for _, snippet := range []string{
+		"Work in terms of Bazel packages and targets",
+		"Choose the smallest explainable Bazel target scope",
+		"Log which Bazel target or package scope you selected and why.",
+		"`docker-compose-launch`",
+		VigilanteLocalServiceDependencies,
 	} {
 		if !strings.Contains(text, snippet) {
 			t.Fatalf("skill missing %q", snippet)

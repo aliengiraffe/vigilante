@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vigilante Bazel Monorepo Issue Implementation"
+  short_description: "Implement a Vigilante-dispatched GitHub issue in a Bazel monorepo with issue comments, pushed changes, and a PR"
+  default_prompt: "Use $vigilante-issue-implementation-on-bazel-monorepo to implement the assigned Bazel monorepo issue in the provided worktree, push the branch, open a PR, comment on the issue as progress is made, and report failures clearly."

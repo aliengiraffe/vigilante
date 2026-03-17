@@ -23,6 +23,7 @@ const VigilanteIssueImplementationOnRush = "vigilante-issue-implementation-on-ru
 const VigilanteIssueImplementationOnBazel = "vigilante-issue-implementation-on-bazel"
 const VigilanteIssueImplementationOnGradle = "vigilante-issue-implementation-on-gradle"
 const VigilanteIssueImplementationOnGradleMultiProject = "vigilante-issue-implementation-on-gradle-multi-project"
+const VigilanteIssueImplementationOnBazelMonorepo = "vigilante-issue-implementation-on-bazel-monorepo"
 const VigilanteConflictResolution = "vigilante-conflict-resolution"
 const VigilanteCreateIssue = "vigilante-create-issue"
 const VigilanteLocalServiceDependencies = "vigilante-local-service-dependencies"
@@ -42,6 +43,7 @@ func VigilanteSkillNames() []string {
 		VigilanteIssueImplementationOnBazel,
 		VigilanteIssueImplementationOnGradle,
 		VigilanteIssueImplementationOnGradleMultiProject,
+		VigilanteIssueImplementationOnBazelMonorepo,
 		VigilanteConflictResolution,
 		VigilanteCreateIssue,
 		VigilanteLocalServiceDependencies,
@@ -205,6 +207,9 @@ func IssueImplementationSkill(target state.WatchTarget) string {
 	if normalizedRepoShape(target) != string(repo.ShapeMonorepo) {
 		return VigilanteIssueImplementation
 	}
+	if isBazelMonorepo(target.Classification) {
+		return VigilanteIssueImplementationOnBazelMonorepo
+	}
 	switch normalizedMonorepoStack(target) {
 	case string(repo.MonorepoStackTurborepo):
 		return VigilanteIssueImplementationOnTurborepo
@@ -247,6 +252,10 @@ func slicesContains(values []string, want string) bool {
 	return false
 }
 
+func isBazelMonorepo(classification repo.Classification) bool {
+	return len(classification.ProcessHints.BazelRepoMarkers) > 0 && len(classification.ProcessHints.BazelPackageRoots) > 0
+}
+
 func normalizedRepoShape(target state.WatchTarget) string {
 	shape := strings.TrimSpace(string(target.Classification.Shape))
 	if shape == "" {
@@ -285,7 +294,10 @@ func repoClassificationJSON(target state.WatchTarget) string {
 		len(classification.ProcessHints.WorkspaceManifestFiles) > 0 ||
 		len(classification.ProcessHints.MultiPackageRoots) > 0 ||
 		len(classification.ProcessHints.GradleSettingsFiles) > 0 ||
-		len(classification.ProcessHints.GradleRootBuildFiles) > 0 {
+		len(classification.ProcessHints.GradleSettingsFiles) > 0 ||
+		len(classification.ProcessHints.GradleRootBuildFiles) > 0 ||
+		len(classification.ProcessHints.BazelRepoMarkers) > 0 ||
+		len(classification.ProcessHints.BazelPackageRoots) > 0 {
 		payload.ProcessHints = &classification.ProcessHints
 	}
 	data, err := json.Marshal(payload)
@@ -313,7 +325,9 @@ func monorepoExecutionContextJSON(target state.WatchTarget, selectedSkill string
 	}
 	if len(target.Classification.ProcessHints.WorkspaceConfigFiles) > 0 ||
 		len(target.Classification.ProcessHints.WorkspaceManifestFiles) > 0 ||
-		len(target.Classification.ProcessHints.MultiPackageRoots) > 0 {
+		len(target.Classification.ProcessHints.MultiPackageRoots) > 0 ||
+		len(target.Classification.ProcessHints.BazelRepoMarkers) > 0 ||
+		len(target.Classification.ProcessHints.BazelPackageRoots) > 0 {
 		payload.ProcessHints = &target.Classification.ProcessHints
 	}
 	payload.LocalServices.Required = false

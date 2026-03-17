@@ -164,6 +164,31 @@ func TestClassifyNxRepoFromNxConfig(t *testing.T) {
 	}
 }
 
+func TestClassifyMonorepoFromBazelSignals(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "MODULE.bazel"), []byte("module(name = \"demo\")\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "services", "api"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "services", "api", "BUILD.bazel"), []byte("go_test(name = \"api_test\")\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if got.Shape != ShapeMonorepo {
+		t.Fatalf("expected bazel monorepo classification, got %#v", got)
+	}
+	if len(got.ProcessHints.BazelRepoMarkers) != 1 || got.ProcessHints.BazelRepoMarkers[0] != "MODULE.bazel" {
+		t.Fatalf("expected bazel repo marker hint, got %#v", got.ProcessHints)
+	}
+	if len(got.ProcessHints.BazelPackageRoots) != 1 || got.ProcessHints.BazelPackageRoots[0] != "services" {
+		t.Fatalf("expected bazel package root hint, got %#v", got.ProcessHints)
+	}
+}
+
 func TestClassifyFallsBackSafelyForAmbiguousRepo(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "apps", "web"), 0o755); err != nil {
