@@ -32,7 +32,7 @@ func (claudeProvider) BuildIssuePreflightInvocation(task IssueTask) (Invocation,
 		Name: "claude",
 		Args: []string{
 			"--print",
-			"--permission-mode", "acceptEdits",
+			"--dangerously-skip-permissions",
 			skill.BuildIssuePreflightPrompt(task.Target, task.Issue, task.Session),
 		},
 	}, nil
@@ -44,7 +44,7 @@ func (claudeProvider) BuildIssueInvocation(task IssueTask) (Invocation, error) {
 		Name: "claude",
 		Args: []string{
 			"--print",
-			"--permission-mode", "acceptEdits",
+			"--dangerously-skip-permissions",
 			skill.BuildIssuePromptForRuntime(skill.RuntimeClaude, task.Target, task.Issue, task.Session),
 		},
 	}, nil
@@ -56,7 +56,7 @@ func (claudeProvider) BuildConflictResolutionInvocation(task ConflictTask) (Invo
 		Name: "claude",
 		Args: []string{
 			"--print",
-			"--permission-mode", "acceptEdits",
+			"--dangerously-skip-permissions",
 			skill.BuildConflictResolutionPromptForRuntime(skill.RuntimeClaude, task.Target, task.Session, task.PR),
 		},
 	}, nil

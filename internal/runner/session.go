@@ -86,6 +86,8 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		appendSessionLog(logPath, "issue preflight invocation build failed", session, err.Error())
 		return session
 	}
+	appendSessionLog(logPath, "issue preflight invocation starting", session, formatInvocationDebug(preflightInvocation))
+	preflightStart := time.Now()
 	preflightOutput, err := env.Runner.Run(ctx, preflightInvocation.Dir, preflightInvocation.Name, preflightInvocation.Args...)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
@@ -115,7 +117,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		_ = ghcli.CommentOnIssue(ctx, env.Runner, target.Repo, issue.Number, body)
 		return session
 	}
-	appendSessionLog(logPath, "issue preflight succeeded", session, preflightOutput)
+	appendSessionLog(logPath, fmt.Sprintf("issue preflight succeeded duration=%s output_bytes=%d", time.Since(preflightStart).Truncate(time.Second), len(preflightOutput)), session, preflightOutput)
 
 	invocation, err := selectedProvider.BuildIssueInvocation(provider.IssueTask{Target: target, Issue: issue, Session: session})
 	if err != nil {
@@ -127,6 +129,8 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		appendSessionLog(logPath, "issue invocation build failed", session, err.Error())
 		return session
 	}
+	appendSessionLog(logPath, "issue invocation starting", session, formatInvocationDebug(invocation))
+	invocationStart := time.Now()
 	output, err := env.Runner.Run(ctx, invocation.Dir, invocation.Name, invocation.Args...)
 	session.EndedAt = time.Now().UTC().Format(time.RFC3339)
 	session.LastHeartbeatAt = session.EndedAt
@@ -141,7 +145,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		blocked := classifyBlockedFailure("issue_execution", invocation.Name, output, err)
 		markSessionBlocked(&session, "issue_execution", blocked, time.Now().UTC())
 		session.LastError = err.Error()
-		appendSessionLog(logPath, "session failed", session, combineLogDetails(output, err.Error()))
+		appendSessionLog(logPath, fmt.Sprintf("session failed duration=%s output_bytes=%d", time.Since(invocationStart).Truncate(time.Second), len(output)), session, combineLogDetails(output, err.Error()))
 		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
 			Stage:      "Blocked",
 			Emoji:      "🛑",
@@ -159,7 +163,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 	}
 
 	session.Status = state.SessionStatusSuccess
-	appendSessionLog(logPath, "session succeeded", session, output)
+	appendSessionLog(logPath, fmt.Sprintf("session succeeded duration=%s output_bytes=%d", time.Since(invocationStart).Truncate(time.Second), len(output)), session, output)
 	return session
 }
 
@@ -335,6 +339,21 @@ func appendSessionLog(path string, event string, session state.Session, details 
 		_, _ = fmt.Fprintln(f, strings.TrimSpace(details))
 	}
 	_, _ = fmt.Fprintln(f)
+}
+
+func formatInvocationDebug(inv provider.Invocation) string {
+	lines := []string{
+		fmt.Sprintf("dir=%s", inv.Dir),
+		fmt.Sprintf("cmd=%s", inv.Name),
+	}
+	for i, arg := range inv.Args {
+		if len(arg) > 200 {
+			lines = append(lines, fmt.Sprintf("arg[%d]=(%d bytes) %s...", i, len(arg), arg[:200]))
+		} else {
+			lines = append(lines, fmt.Sprintf("arg[%d]=%s", i, arg))
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func combineLogDetails(output string, errText string) string {

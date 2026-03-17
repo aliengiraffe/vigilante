@@ -4344,7 +4344,7 @@ func resumeDiagnosticSummaryCommand(worktreePath string, session state.Session, 
 func resumeDiagnosticSummaryCommandForProvider(worktreePath string, providerID string, session state.Session, previousStage string) string {
 	switch providerID {
 	case "claude":
-		return testutil.Key("claude", "--print", "--permission-mode", "acceptEdits", buildResumeFailureSummaryPrompt(session, previousStage))
+		return testutil.Key("claude", "--print", "--dangerously-skip-permissions", buildResumeFailureSummaryPrompt(session, previousStage))
 	case "gemini":
 		return testutil.Key("gemini", "--prompt", buildResumeFailureSummaryPrompt(session, previousStage), "--yolo")
 	default:

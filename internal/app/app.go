@@ -2672,7 +2672,7 @@ func buildResumeFailureSummaryInvocation(selectedProvider provider.Provider, wor
 			Name: "claude",
 			Args: []string{
 				"--print",
-				"--permission-mode", "acceptEdits",
+				"--dangerously-skip-permissions",
 				prompt,
 			},
 		}, nil
