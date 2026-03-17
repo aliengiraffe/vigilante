@@ -91,6 +91,15 @@ Once a folder is registered, `vigilante` should:
 
 In the current implementation, that worker loop already covers repository onboarding, issue intake, isolated worktrees, provider orchestration, repo-aware execution skills, local session recovery, and part of the pull request maintenance path. CI/CD promotion and richer deployment control are planned next-stage capabilities.
 
+## Telemetry
+
+Vigilante emits anonymous telemetry with two different purposes:
+
+- PostHog analytics events track product usage, such as command starts and completions, using bounded properties like command name, feature area, result, platform, and distro.
+- OTLP logs remain the operational debugging stream when log export is configured.
+
+Analytics events intentionally avoid raw repository contents, issue text, file paths, and other free-form command arguments. Operators can disable both streams with `DO_NOT_TRACK=1` or `MYTOOL_NO_ANALYTICS=1`.
+
 ## Core Workflow
 
 For each watched repository:
