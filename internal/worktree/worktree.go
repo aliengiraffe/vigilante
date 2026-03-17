@@ -61,11 +61,40 @@ func CreateIssueWorktree(ctx context.Context, runner environment.Runner, target 
 			return Worktree{Path: path, Branch: branch}, nil
 		}
 	}
+	if err := refreshBaseBranch(ctx, runner, target.Path, target.Branch); err != nil {
+		return Worktree{}, err
+	}
 
 	if _, err := runner.Run(ctx, target.Path, "git", "worktree", "add", "-b", branch, path, target.Branch); err != nil {
 		return Worktree{}, err
 	}
 	return Worktree{Path: path, Branch: branch}, nil
+}
+
+func refreshBaseBranch(ctx context.Context, runner environment.Runner, repoPath string, branch string) error {
+	if _, err := runner.Run(ctx, repoPath, "git", "fetch", "origin", branch); err != nil {
+		return err
+	}
+
+	attachedPath, err := worktreePathForBranch(ctx, runner, repoPath, branch)
+	if err != nil {
+		return err
+	}
+	if attachedPath == "" {
+		_, err := runner.Run(ctx, repoPath, "git", "branch", "-f", branch, "refs/remotes/origin/"+branch)
+		return err
+	}
+
+	status, err := runner.Run(ctx, attachedPath, "git", "status", "--porcelain")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(status) != "" {
+		return fmt.Errorf("base branch %q has local changes in worktree %s", branch, attachedPath)
+	}
+
+	_, err = runner.Run(ctx, attachedPath, "git", "merge", "--ff-only", "origin/"+branch)
+	return err
 }
 
 func IssueBranchName(issueNumber int, issueTitle string) string {
@@ -192,15 +221,29 @@ func remoteBranchExistsWithError(ctx context.Context, runner environment.Runner,
 }
 
 func branchAttachedToWorktree(ctx context.Context, runner environment.Runner, repoPath string, branch string) (bool, error) {
-	output, err := runner.Run(ctx, repoPath, "git", "worktree", "list", "--porcelain")
+	path, err := worktreePathForBranch(ctx, runner, repoPath, branch)
 	if err != nil {
 		return false, err
 	}
+	return path != "", nil
+}
+
+func worktreePathForBranch(ctx context.Context, runner environment.Runner, repoPath string, branch string) (string, error) {
+	output, err := runner.Run(ctx, repoPath, "git", "worktree", "list", "--porcelain")
+	if err != nil {
+		return "", err
+	}
 	needle := "branch refs/heads/" + branch
+	currentPath := ""
 	for _, line := range strings.Split(output, "\n") {
-		if strings.TrimSpace(line) == needle {
-			return true, nil
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "worktree ") {
+			currentPath = strings.TrimSpace(strings.TrimPrefix(line, "worktree "))
+			continue
+		}
+		if line == needle {
+			return currentPath, nil
 		}
 	}
-	return false, nil
+	return "", nil
 }

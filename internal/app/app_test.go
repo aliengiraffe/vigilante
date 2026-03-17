@@ -976,7 +976,7 @@ func TestRedispatchSessionRunningIssue(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"codex": "/usr/bin/codex"},
-		Outputs: map[string]string{
+		Outputs: mergeStringMaps(freshBaseBranchOutputs(repoPath, "main"), map[string]string{
 			"git worktree prune":            "ok",
 			"git worktree list --porcelain": "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/main\n",
 			"git show-ref --verify --quiet refs/heads/vigilante/issue-44-old-run":                                                                      "ok",
@@ -987,7 +987,7 @@ func TestRedispatchSessionRunningIssue(t *testing.T) {
 			preflightPromptCommand(worktreePath, "owner/repo", repoPath, 44, "force redispatch", "https://github.com/owner/repo/issues/44", branch):    "baseline ok",
 			issuePromptCommand(worktreePath, "owner/repo", repoPath, 44, "force redispatch", "https://github.com/owner/repo/issues/44", branch):        "done",
 			"gh issue comment --repo owner/repo 44 --body " + localRedispatchStartedComment(state.Session{Branch: branch, WorktreePath: worktreePath}): "ok",
-		},
+		}),
 		Errors: map[string]error{
 			"git show-ref --verify --quiet refs/heads/" + branch:          errors.New("exit status 1"),
 			"git show-ref --verify --quiet refs/heads/vigilante/issue-44": errors.New("exit status 1"),
@@ -2552,7 +2552,7 @@ func TestScanOnceSelectsEligibleIssueAndPersistsSession(t *testing.T) {
 	branch := "vigilante/issue-1-first"
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
-		Outputs: map[string]string{
+		Outputs: mergeStringMaps(freshBaseBranchOutputs("/tmp/repo", "main"), map[string]string{
 			"gh auth status":          "ok",
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[{"name":"to-do"}]}]`,
@@ -2572,7 +2572,7 @@ func TestScanOnceSelectsEligibleIssueAndPersistsSession(t *testing.T) {
 			}): "ok",
 			preflightPromptCommand(worktreePath, "owner/repo", "/tmp/repo", 1, "first", "https://github.com/owner/repo/issues/1", branch): "baseline ok",
 			issuePromptCommand(worktreePath, "owner/repo", "/tmp/repo", 1, "first", "https://github.com/owner/repo/issues/1", branch):     "done",
-		},
+		}),
 		Errors: map[string]error{
 			"git show-ref --verify --quiet refs/heads/" + branch:         errors.New("exit status 1"),
 			"git show-ref --verify --quiet refs/heads/vigilante/issue-1": errors.New("exit status 1"),
@@ -2724,14 +2724,14 @@ func TestScanOnceUsesProviderLabelOverrideForSession(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
-		Outputs: map[string]string{
+		Outputs: mergeStringMaps(freshBaseBranchOutputs(repoPath, "main"), map[string]string{
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[{"name":"codex"}]}]`,
 			"git worktree prune": "ok",
 			"git worktree add -b " + branch + " " + worktreePath + " main":                                                         "ok",
 			sessionStartCommentCommand("owner/repo", 1, worktreePath, state.Session{Branch: branch}):                               "ok",
 			issuePromptCommand(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", branch): "done",
-		},
+		}),
 		Errors: map[string]error{
 			"git show-ref --verify --quiet refs/heads/" + branch:         errors.New("exit status 1"),
 			"git show-ref --verify --quiet refs/heads/vigilante/issue-1": errors.New("exit status 1"),
@@ -2822,7 +2822,7 @@ func TestScanOnceMaintainedIssueDoesNotConsumeOnlyDispatchSlot(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
-		Outputs: map[string]string{
+		Outputs: mergeStringMaps(freshBaseBranchOutputs(repoPath, "main"), map[string]string{
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
 			"git fetch origin main":  "ok",
@@ -2859,7 +2859,7 @@ func TestScanOnceMaintainedIssueDoesNotConsumeOnlyDispatchSlot(t *testing.T) {
 			}): "ok",
 			preflightPromptCommand(worktreePath2, "owner/repo", repoPath, 2, "second", "https://github.com/owner/repo/issues/2", branch2): "baseline ok",
 			issuePromptCommand(worktreePath2, "owner/repo", repoPath, 2, "second", "https://github.com/owner/repo/issues/2", branch2):     "done",
-		},
+		}),
 		Errors: map[string]error{
 			"git show-ref --verify --quiet refs/heads/" + branch2:        errors.New("exit status 1"),
 			"git show-ref --verify --quiet refs/heads/vigilante/issue-2": errors.New("exit status 1"),
@@ -2922,7 +2922,7 @@ func TestScanOnceWithMaxParallelOnePreservesSerialBehavior(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
-		Outputs: map[string]string{
+		Outputs: mergeStringMaps(freshBaseBranchOutputs(repoPath, "main"), map[string]string{
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[]}]`,
 			"git worktree prune": "ok",
@@ -2930,7 +2930,7 @@ func TestScanOnceWithMaxParallelOnePreservesSerialBehavior(t *testing.T) {
 			sessionStartCommentCommand("owner/repo", 1, worktreePath1, state.Session{Branch: "vigilante/issue-1-first"}):                                   "ok",
 			preflightPromptCommand(worktreePath1, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", "vigilante/issue-1-first"): "baseline ok",
 			issuePromptCommand(worktreePath1, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", "vigilante/issue-1-first"):     "done",
-		},
+		}),
 	}
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
@@ -2972,7 +2972,7 @@ func TestScanOnceWithUnlimitedMaxParallelStartsAllEligibleIssues(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
-		Outputs: map[string]string{
+		Outputs: mergeStringMaps(freshBaseBranchOutputs(repoPath, "main"), map[string]string{
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[]},{"number":3,"title":"third","createdAt":"2026-03-11T12:00:00Z","url":"https://github.com/owner/repo/issues/3","labels":[]}]`,
 			"git worktree prune": "ok",
@@ -2988,7 +2988,7 @@ func TestScanOnceWithUnlimitedMaxParallelStartsAllEligibleIssues(t *testing.T) {
 			issuePromptCommand(worktreePath1, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", "vigilante/issue-1-first"):       "done",
 			issuePromptCommand(worktreePath2, "owner/repo", repoPath, 2, "second", "https://github.com/owner/repo/issues/2", "vigilante/issue-2-second"):     "done",
 			issuePromptCommand(worktreePath3, "owner/repo", repoPath, 3, "third", "https://github.com/owner/repo/issues/3", "vigilante/issue-3-third"):       "done",
-		},
+		}),
 	}
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
@@ -3035,7 +3035,7 @@ func TestScanOnceStartsMultipleIssuesUpToConfiguredLimit(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
-		Outputs: map[string]string{
+		Outputs: mergeStringMaps(freshBaseBranchOutputs(repoPath, "main"), map[string]string{
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[]},{"number":3,"title":"third","createdAt":"2026-03-11T12:00:00Z","url":"https://github.com/owner/repo/issues/3","labels":[]}]`,
 			"git worktree prune": "ok",
@@ -3047,7 +3047,7 @@ func TestScanOnceStartsMultipleIssuesUpToConfiguredLimit(t *testing.T) {
 			preflightPromptCommand(worktreePath2, "owner/repo", repoPath, 2, "second", "https://github.com/owner/repo/issues/2", "vigilante/issue-2-second"): "baseline ok",
 			issuePromptCommand(worktreePath1, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", "vigilante/issue-1-first"):       "done",
 			issuePromptCommand(worktreePath2, "owner/repo", repoPath, 2, "second", "https://github.com/owner/repo/issues/2", "vigilante/issue-2-second"):     "done",
-		},
+		}),
 	}
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
@@ -3093,14 +3093,14 @@ func TestScanOnceDoesNotExceedConfiguredLimit(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
-		Outputs: map[string]string{
+		Outputs: mergeStringMaps(freshBaseBranchOutputs(repoPath, "main"), map[string]string{
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[]},{"number":3,"title":"third","createdAt":"2026-03-11T12:00:00Z","url":"https://github.com/owner/repo/issues/3","labels":[]}]`,
 			"git worktree prune": "ok",
 			"git worktree add -b vigilante/issue-2-second " + worktreePath2 + " main":                                                                    "ok",
 			sessionStartCommentCommand("owner/repo", 2, worktreePath2, state.Session{Branch: "vigilante/issue-2-second"}):                                "ok",
 			issuePromptCommand(worktreePath2, "owner/repo", repoPath, 2, "second", "https://github.com/owner/repo/issues/2", "vigilante/issue-2-second"): "done",
-		},
+		}),
 	}
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
@@ -3164,7 +3164,7 @@ func TestScanOnceBlocksFailedIssueDispatchAndContinuesToNextIssue(t *testing.T) 
 	)
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
-		Outputs: map[string]string{
+		Outputs: mergeStringMaps(freshBaseBranchOutputs(repoPath, "main"), map[string]string{
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[]}]`,
 			"git worktree prune": "ok",
@@ -3179,7 +3179,7 @@ func TestScanOnceBlocksFailedIssueDispatchAndContinuesToNextIssue(t *testing.T) 
 			sessionStartCommentCommand("owner/repo", 2, worktreePath2, state.Session{Branch: branch2}):                                    "ok",
 			preflightPromptCommand(worktreePath2, "owner/repo", repoPath, 2, "second", "https://github.com/owner/repo/issues/2", branch2): "baseline ok",
 			issuePromptCommand(worktreePath2, "owner/repo", repoPath, 2, "second", "https://github.com/owner/repo/issues/2", branch2):     "done",
-		},
+		}),
 		Errors: map[string]error{
 			"git worktree add -b vigilante/issue-1-first " + worktreePath1 + " main": errors.New("exit status 1: worktree add failed"),
 		},
@@ -3222,6 +3222,53 @@ func TestScanOnceBlocksFailedIssueDispatchAndContinuesToNextIssue(t *testing.T) 
 	}
 }
 
+func TestScanOnceBlocksIssueWhenBaseRefreshFails(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	var stdout bytes.Buffer
+	app := New()
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: mergeStringMaps(freshBaseBranchOutputs(repoPath, "main"), map[string]string{
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
+			"git worktree prune": "ok",
+		}),
+		Errors: map[string]error{
+			"git fetch origin main": errors.New("exit status 1: fetch failed"),
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := stdout.String()
+	if !strings.Contains(got, "repo: owner/repo blocked issue #1: exit status 1: fetch failed") {
+		t.Fatalf("expected blocked output, got: %s", got)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].Status != state.SessionStatusBlocked || sessions[0].LastError != "exit status 1: fetch failed" {
+		t.Fatalf("expected blocked session from base refresh failure: %#v", sessions)
+	}
+}
+
 func TestScanOnceCommentsOnProviderStartupFailure(t *testing.T) {
 	home := t.TempDir()
 	repoPath := filepath.Join(home, "repo")
@@ -3249,10 +3296,9 @@ func TestScanOnceCommentsOnProviderStartupFailure(t *testing.T) {
 		LastError:    "codex CLI version 2.0.0 is incompatible with this Vigilante build (supported: >=0.114.0, <2.0.0); install a compatible codex CLI version or use a matching Vigilante build",
 	}
 	expectedSession.BlockedReason = classifyBlockedReason("issue_execution", "issue startup", errors.New(expectedSession.LastError))
-
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
-		Outputs: map[string]string{
+		Outputs: mergeStringMaps(freshBaseBranchOutputs(repoPath, "main"), map[string]string{
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
 			"git worktree prune": "ok",
@@ -3265,7 +3311,7 @@ func TestScanOnceCommentsOnProviderStartupFailure(t *testing.T) {
 				NextStep:     dispatchFailureNextStep(expectedSession, "issue_startup"),
 			}): "ok",
 			"codex --version": "codex 2.0.0",
-		},
+		}),
 	}
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
@@ -3319,11 +3365,11 @@ func TestScanOnceSuppressesDuplicateDispatchFailureComment(t *testing.T) {
 
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh"},
-		Outputs: map[string]string{
+		Outputs: mergeStringMaps(freshBaseBranchOutputs(repoPath, "main"), map[string]string{
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
 			"git worktree prune": "ok",
-		},
+		}),
 		Errors: map[string]error{
 			"git worktree add -b vigilante/issue-1-first " + filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1") + " main": errors.New("worktree already exists for issue #1"),
 		},
@@ -3371,7 +3417,7 @@ func TestScanOnceEnforcesLimitsIndependentlyAcrossRepositories(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
-		Outputs: map[string]string{
+		Outputs: mergeStringMaps(freshBaseBranchOutputs(repoPathA, "main"), map[string]string{
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo-a --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first-a","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo-a/issues/1","labels":[]},{"number":2,"title":"second-a","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo-a/issues/2","labels":[]}]`,
 			"gh issue list --repo owner/repo-b --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":10,"title":"first-b","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo-b/issues/10","labels":[]},{"number":11,"title":"second-b","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo-b/issues/11","labels":[]}]`,
@@ -3388,7 +3434,7 @@ func TestScanOnceEnforcesLimitsIndependentlyAcrossRepositories(t *testing.T) {
 			issuePromptCommand(worktreeA1, "owner/repo-a", repoPathA, 1, "first-a", "https://github.com/owner/repo-a/issues/1", "vigilante/issue-1-first-a"):         "done",
 			issuePromptCommand(worktreeA2, "owner/repo-a", repoPathA, 2, "second-a", "https://github.com/owner/repo-a/issues/2", "vigilante/issue-2-second-a"):       "done",
 			issuePromptCommand(worktreeB10, "owner/repo-b", repoPathB, 10, "first-b", "https://github.com/owner/repo-b/issues/10", "vigilante/issue-10-first-b"):     "done",
-		},
+		}),
 	}
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
@@ -3434,7 +3480,7 @@ func TestScanOnceContinuesWhenOneRepositoryScanFails(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
-		Outputs: map[string]string{
+		Outputs: mergeStringMaps(freshBaseBranchOutputs(repoPathB, "main"), map[string]string{
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo-b --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":10,"title":"first-b","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo-b/issues/10","labels":[]}]`,
 			"git worktree prune": "ok",
@@ -3442,7 +3488,7 @@ func TestScanOnceContinuesWhenOneRepositoryScanFails(t *testing.T) {
 			sessionStartCommentCommand("owner/repo-b", 10, worktreeB10, state.Session{Branch: branchB10}):                                         "ok",
 			preflightPromptCommand(worktreeB10, "owner/repo-b", repoPathB, 10, "first-b", "https://github.com/owner/repo-b/issues/10", branchB10): "baseline ok",
 			issuePromptCommand(worktreeB10, "owner/repo-b", repoPathB, 10, "first-b", "https://github.com/owner/repo-b/issues/10", branchB10):     "done",
-		},
+		}),
 		Errors: map[string]error{
 			"gh issue list --repo owner/repo-a --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": errors.New("gh auth status failed"),
 		},
@@ -3906,7 +3952,7 @@ func TestScanOnceRecoversStalledSessionAndRedispatchesIssue(t *testing.T) {
 	branch := "vigilante/issue-1-first"
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
-		Outputs: map[string]string{
+		Outputs: mergeStringMaps(freshBaseBranchOutputs(filepath.Join(home, "repo"), "main"), map[string]string{
 			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": "[]",
 			"git worktree prune":                                         "ok",
 			"git worktree list --porcelain":                              "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n",
@@ -3941,7 +3987,7 @@ func TestScanOnceRecoversStalledSessionAndRedispatchesIssue(t *testing.T) {
 			}): "ok",
 			preflightPromptCommand(worktreePath, "owner/repo", filepath.Join(home, "repo"), 1, "first", "https://github.com/owner/repo/issues/1", branch): "baseline ok",
 			issuePromptCommand(worktreePath, "owner/repo", filepath.Join(home, "repo"), 1, "first", "https://github.com/owner/repo/issues/1", branch):     "done",
-		},
+		}),
 		Errors: map[string]error{
 			"git show-ref --verify --quiet refs/heads/" + branch:         errors.New("exit status 1"),
 			"git show-ref --verify --quiet refs/heads/vigilante/issue-1": errors.New("exit status 1"),
@@ -4124,6 +4170,25 @@ func failedResumeSession(session state.Session) state.Session {
 	session.LastResumeSource = "cli"
 	session.LastError = "resume run failed"
 	return session
+}
+
+func freshBaseBranchOutputs(repoPath string, branch string) map[string]string {
+	return map[string]string{
+		"git fetch origin " + branch:           "ok",
+		"git worktree list --porcelain":        "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/" + branch + "\n",
+		"git status --porcelain":               "",
+		"git merge --ff-only origin/" + branch: "Already up to date.\n",
+	}
+}
+
+func mergeStringMaps(maps ...map[string]string) map[string]string {
+	merged := map[string]string{}
+	for _, current := range maps {
+		for key, value := range current {
+			merged[key] = value
+		}
+	}
+	return merged
 }
 
 func issuePromptCommand(worktreePath string, repo string, repoPath string, issueNumber int, title string, issueURL string, branch string) string {
