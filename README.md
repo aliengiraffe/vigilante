@@ -4,17 +4,70 @@
 
 # vigilante
 
-`vigilante` is a Go CLI and background service that watches local Git repositories, discovers their GitHub remotes, monitors open issues with the GitHub CLI, and orchestrates headless coding agent sessions in isolated git worktrees.
+`vigilante` is a GitHub-native control plane for autonomous software delivery. It watches repositories, selects executable issues, prepares isolated implementation environments, dispatches headless coding agents, keeps GitHub updated with progress, and maintains the delivery loop around pull requests.
 
-The initial target platforms are macOS and Ubuntu. The first implementation should keep dependencies minimal and lean on existing system tools where possible: `git`, `gh`, one or more headless coding agent CLIs such as `claude code`, `codex`, and `gemini`.
+It is a Go CLI and background service that runs locally on top of the tools teams already use: `git`, `gh`, and a supported coding-agent CLI such as `codex`, `claude`, or `gemini`. The current target platforms are macOS and Ubuntu.
 
 ## What Vigilante Is
 
-`vigilante` is the control plane around headless coding agents. It watches repositories, chooses eligible issues, prepares isolated worktrees, launches agent sessions, tracks their lifecycle, reports progress back to GitHub, and keeps automation running as a daemon.
+`vigilante` is the orchestration layer around coding agents. It is responsible for:
+
+- treating GitHub issues as the work queue
+- selecting eligible work based on labels, assignees, and repository limits
+- creating dedicated git worktrees and issue branches for each session
+- choosing the right execution playbook from repository classification
+- launching supported coding-agent CLIs under a consistent lifecycle
+- posting execution state back to GitHub through issue comments and PR tracking
+- recovering, resuming, redispatching, and cleaning up local sessions safely
 
 ## What Vigilante Is Not
 
-`vigilante` is not itself the code-generating agent. Tools such as Codex, Claude Code, and similar headless coding CLIs are the execution engines that read the prompt, edit code, run checks, and prepare pull requests. Keeping orchestration separate from code generation makes the system easier to evolve: Vigilante can handle scheduling, worktree isolation, PR maintenance, repo monitoring, and GitHub status reporting while remaining flexible about which provider actually performs the implementation work.
+`vigilante` is not the code-generating model itself. Tools such as Codex, Claude Code, and Gemini are the execution engines that read prompts, edit code, run validation, and prepare pull requests. Keeping orchestration separate from code generation lets Vigilante stay provider-neutral while owning scheduling, worktree isolation, GitHub coordination, and PR maintenance.
+
+## Why Use Vigilante
+
+Vigilante turns a repository checkout into a controlled autonomous worker instead of a loose collection of scripts.
+
+- GitHub stays the operator surface for issue intake, progress, resume commands, cleanup, and PR visibility.
+- Each issue runs in an isolated worktree, which keeps the main checkout stable and makes unattended execution safer.
+- Repository-aware skills let the same control plane adapt to standard repositories, monorepos, and supported build systems.
+- Session state persists locally, so Vigilante can recover from failures, clean up stalled work, and avoid duplicate dispatch.
+- Provider support is pluggable, so the orchestration layer remains stable even when teams change coding-agent runtimes.
+
+## Quickstart
+
+Install with Homebrew:
+
+```sh
+brew tap aliengiraffe/spaceship
+brew install --cask vigilante
+```
+
+Prepare the local machine with your preferred coding-agent provider:
+
+```sh
+vigilante setup --provider codex
+```
+
+Register a repository and install the background service:
+
+```sh
+vigilante watch -d ~/path/to/repo
+```
+
+Useful follow-up commands:
+
+```sh
+vigilante list
+vigilante list --running
+vigilante daemon run --once
+```
+
+Quickstart requirements:
+
+- `git`
+- `gh` authenticated against the GitHub account you want Vigilante to operate with
+- one supported coding-agent CLI installed locally: `codex`, `claude`, or `gemini`
 
 ## Product Goal
 
@@ -33,6 +86,8 @@ Once a folder is registered, `vigilante` should:
 5. Classify the watched repository and use the matching issue implementation skill from the repo `skills/` folder as part of the execution prompt.
 6. Post progress comments back to the GitHub issue, including session start and failures.
 7. Track watched repositories locally and optionally run as a daemon.
+
+In the current implementation, that worker loop already covers repository onboarding, issue intake, isolated worktrees, provider orchestration, repo-aware execution skills, local session recovery, and part of the pull request maintenance path. CI/CD promotion and richer deployment control are planned next-stage capabilities.
 
 ## Core Workflow
 
@@ -93,7 +148,7 @@ vigilante completion fish > ~/.config/fish/completions/vigilante.fish
 
 ## Installation
 
-Install `vigilante` from the existing Homebrew tap:
+Install `vigilante` from the Homebrew tap:
 
 ```sh
 brew tap aliengiraffe/spaceship
