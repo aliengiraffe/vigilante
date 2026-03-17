@@ -60,6 +60,8 @@ Useful follow-up commands:
 ```sh
 vigilante list
 vigilante list --running
+vigilante status
+vigilante service restart
 vigilante daemon run --once
 ```
 
@@ -228,6 +230,27 @@ Expected fields:
 ### `vigilante list --running`
 
 Show currently running sessions with their repository, issue number, branch, and worktree path.
+
+### `vigilante status`
+
+Show whether the Vigilante OS-managed user service is installed and currently running.
+
+Expected behavior:
+
+- reports a stable `state` value of `running`, `stopped`, or `not-installed`
+- includes the service manager, service identifier, and installed service file path
+- exits successfully when the service is not installed so operators and scripts can inspect the reported state
+- fails with a clear error on unsupported operating systems or when the underlying service manager cannot be queried
+
+### `vigilante service restart`
+
+Restart the installed Vigilante user service through the operating system service manager.
+
+Expected behavior:
+
+- uses `launchctl` on macOS and `systemctl --user` on Linux
+- restarts the installed managed service instead of launching an unmanaged background process
+- fails clearly when the service is not installed or the platform is unsupported
 
 ### `vigilante cleanup --repo <owner/name> [--issue <n>]`
 

@@ -212,6 +212,196 @@ func TestBuildConfigFailsWhenProviderVersionIsIncompatible(t *testing.T) {
 	}
 }
 
+func TestServiceStatusReportsLaunchdRunning(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	plistPath := filepath.Join(home, "Library", "LaunchAgents", "com.vigilante.agent.plist")
+	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plistPath, []byte("plist"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	env := &environment.Environment{
+		OS: "darwin",
+		Runner: testutil.FakeRunner{
+			Outputs: map[string]string{
+				testutil.Key("launchctl", "print", launchdTarget()): "pid = 412\nstate = running\n",
+			},
+		},
+	}
+
+	status, err := ServiceStatus(context.Background(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Installed || !status.Running || status.State != StatusRunning {
+		t.Fatalf("unexpected status: %#v", status)
+	}
+	if status.Manager != "launchd" || status.Service != launchdLabel || status.FilePath != plistPath {
+		t.Fatalf("unexpected service metadata: %#v", status)
+	}
+}
+
+func TestServiceStatusReportsLaunchdStoppedWhenServiceIsUnloaded(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	plistPath := filepath.Join(home, "Library", "LaunchAgents", "com.vigilante.agent.plist")
+	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plistPath, []byte("plist"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	env := &environment.Environment{
+		OS: "darwin",
+		Runner: testutil.FakeRunner{
+			Errors: map[string]error{
+				testutil.Key("launchctl", "print", launchdTarget()): errors.New("Could not find service"),
+			},
+		},
+	}
+
+	status, err := ServiceStatus(context.Background(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Installed || status.Running || status.State != StatusStopped {
+		t.Fatalf("unexpected status: %#v", status)
+	}
+}
+
+func TestServiceStatusReportsSystemdRunning(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	unitPath := filepath.Join(home, ".config", "systemd", "user", "vigilante.service")
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unitPath, []byte("unit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	env := &environment.Environment{
+		OS: "linux",
+		Runner: testutil.FakeRunner{
+			Outputs: map[string]string{
+				testutil.Key("systemctl", "--user", "show", "--property=LoadState,ActiveState", systemdUnitName): "LoadState=loaded\nActiveState=active\n",
+			},
+		},
+	}
+
+	status, err := ServiceStatus(context.Background(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Installed || !status.Running || status.State != StatusRunning {
+		t.Fatalf("unexpected status: %#v", status)
+	}
+}
+
+func TestServiceStatusReportsNotInstalledWhenUnitFileIsMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	env := &environment.Environment{
+		OS:     "linux",
+		Runner: testutil.FakeRunner{},
+	}
+
+	status, err := ServiceStatus(context.Background(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Installed || status.Running || status.State != StatusNotInstalled {
+		t.Fatalf("unexpected status: %#v", status)
+	}
+	if status.FilePath != filepath.Join(home, ".config", "systemd", "user", "vigilante.service") {
+		t.Fatalf("unexpected service file path: %#v", status)
+	}
+}
+
+func TestServiceStatusReturnsErrorWhenSystemdStatusFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	unitPath := filepath.Join(home, ".config", "systemd", "user", "vigilante.service")
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unitPath, []byte("unit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	env := &environment.Environment{
+		OS: "linux",
+		Runner: testutil.FakeRunner{
+			Errors: map[string]error{
+				testutil.Key("systemctl", "--user", "show", "--property=LoadState,ActiveState", systemdUnitName): errors.New("dbus unavailable"),
+			},
+		},
+	}
+
+	_, err := ServiceStatus(context.Background(), env)
+	if err == nil || !strings.Contains(err.Error(), "query systemd user service status") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRestartUsesLaunchctlKickstart(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	plistPath := filepath.Join(home, "Library", "LaunchAgents", "com.vigilante.agent.plist")
+	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(plistPath, []byte("plist"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &recordingRunner{
+		FakeRunner: testutil.FakeRunner{
+			Outputs: map[string]string{
+				testutil.Key("launchctl", "print", launchdTarget()):           "pid = 412\nstate = running\n",
+				testutil.Key("launchctl", "kickstart", "-k", launchdTarget()): "",
+			},
+		},
+	}
+
+	env := &environment.Environment{OS: "darwin", Runner: runner}
+	if err := Restart(context.Background(), env); err != nil {
+		t.Fatal(err)
+	}
+
+	wantCalls := []string{
+		testutil.Key("launchctl", "print", launchdTarget()),
+		testutil.Key("launchctl", "kickstart", "-k", launchdTarget()),
+	}
+	if !reflect.DeepEqual(runner.calls, wantCalls) {
+		t.Fatalf("unexpected command sequence:\n got: %#v\nwant: %#v", runner.calls, wantCalls)
+	}
+}
+
+func TestRestartReturnsErrorWhenServiceIsNotInstalled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	env := &environment.Environment{OS: "linux", Runner: testutil.FakeRunner{}}
+	err := Restart(context.Background(), env)
+	if err == nil || !strings.Contains(err.Error(), "service is not installed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRestartReturnsUnsupportedOSError(t *testing.T) {
+	env := &environment.Environment{OS: "windows", Runner: testutil.FakeRunner{}}
+	err := Restart(context.Background(), env)
+	if err == nil || !strings.Contains(err.Error(), `unsupported OS "windows"`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestPrepareMacOSDaemonBinaryUsesResolvedPath(t *testing.T) {
 	dir := t.TempDir()
 	resolvedPath := filepath.Join(dir, "Caskroom", "vigilante", "1.2.3", "vigilante")
