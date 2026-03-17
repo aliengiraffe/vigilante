@@ -83,6 +83,43 @@ func TestClassifyMonorepoFromWorkspaceSignals(t *testing.T) {
 	}
 }
 
+func TestClassifyPreservesTurborepoMarkers(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "pnpm-workspace.yaml"), []byte("packages:\n  - apps/*\n  - packages/*\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "turbo.json"), []byte("{\"pipeline\":{}}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte("{\"workspaces\":[\"apps/*\",\"packages/*\"]}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "apps", "web"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "packages", "ui"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if got.Shape != ShapeMonorepo {
+		t.Fatalf("expected monorepo classification, got %#v", got)
+	}
+	if len(got.ProcessHints.WorkspaceConfigFiles) != 2 {
+		t.Fatalf("expected turborepo config hints, got %#v", got.ProcessHints)
+	}
+	if got.ProcessHints.WorkspaceConfigFiles[0] != "pnpm-workspace.yaml" || got.ProcessHints.WorkspaceConfigFiles[1] != "turbo.json" {
+		t.Fatalf("expected sorted turborepo config hints, got %#v", got.ProcessHints.WorkspaceConfigFiles)
+	}
+	if len(got.ProcessHints.WorkspaceManifestFiles) != 1 || got.ProcessHints.WorkspaceManifestFiles[0] != "package.json" {
+		t.Fatalf("expected package.json workspace manifest hint, got %#v", got.ProcessHints.WorkspaceManifestFiles)
+	}
+	if len(got.ProcessHints.MultiPackageRoots) != 2 || got.ProcessHints.MultiPackageRoots[0] != "apps" || got.ProcessHints.MultiPackageRoots[1] != "packages" {
+		t.Fatalf("expected apps/packages roots, got %#v", got.ProcessHints.MultiPackageRoots)
+	}
+}
+
 func TestClassifyFallsBackSafelyForAmbiguousRepo(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "apps", "web"), 0o755); err != nil {

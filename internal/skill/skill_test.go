@@ -246,6 +246,38 @@ func TestBuildIssuePromptFallsBackForUnknownMonorepoStack(t *testing.T) {
 	}
 }
 
+func TestBuildIssuePromptSelectsTurborepoSkill(t *testing.T) {
+	target := state.WatchTarget{
+		Path: "/tmp/repo",
+		Repo: "owner/repo",
+		Classification: repo.Classification{
+			Shape: repo.ShapeMonorepo,
+			ProcessHints: repo.ProcessHints{
+				WorkspaceConfigFiles:   []string{"pnpm-workspace.yaml", "turbo.json"},
+				WorkspaceManifestFiles: []string{"package.json"},
+				MultiPackageRoots:      []string{"apps", "packages"},
+			},
+		},
+	}
+	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
+
+	prompt := BuildIssuePrompt(target, issue, session)
+
+	for _, text := range []string{
+		"Use the `vigilante-issue-implementation-on-turborepo` skill",
+		"Detected repo shape: monorepo",
+		"Selected issue implementation skill: vigilante-issue-implementation-on-turborepo",
+		`"workspace_config_files":["pnpm-workspace.yaml","turbo.json"]`,
+		`"workspace_manifest_files":["package.json"]`,
+		`"multi_package_roots":["apps","packages"]`,
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q: %s", text, prompt)
+		}
+	}
+}
+
 func TestBuildIssuePreflightPrompt(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
@@ -418,6 +450,22 @@ func TestIssueImplementationSkillMapsKnownMonorepoStacks(t *testing.T) {
 		if got := IssueImplementationSkill(target); got != want {
 			t.Fatalf("stack %s: got %s want %s", stack, got, want)
 		}
+	}
+}
+
+func TestIssueImplementationSkillSelectsTurborepo(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape: repo.ShapeMonorepo,
+			ProcessHints: repo.ProcessHints{
+				WorkspaceConfigFiles:   []string{"pnpm-workspace.yaml", "turbo.json"},
+				WorkspaceManifestFiles: []string{"package.json"},
+			},
+		},
+	}
+
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnTurborepo {
+		t.Fatalf("unexpected turborepo issue skill: %s", got)
 	}
 }
 

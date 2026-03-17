@@ -197,24 +197,28 @@ func TestWatchUpdatesExistingTarget(t *testing.T) {
 	app.env.OS = "darwin"
 	launchAgentPath := filepath.Join(home, "Library", "LaunchAgents", "com.vigilante.agent.plist")
 	executablePath := environment.ExecutablePath()
+	resolvedExecutablePath, err := filepath.EvalSymlinks(executablePath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
 		Outputs: map[string]string{
 			"codex --version":                   "codex 0.114.0",
 			"gh auth status":                    "ok",
 			`/bin/zsh -lic printf "%s" "$PATH"`: "/usr/bin:/bin:/Users/test/.local/bin",
-			`/bin/sh -lc PATH="/usr/bin:/bin:/Users/test/.local/bin" command -v 'git'`:    "/usr/bin/git\n",
-			`/bin/sh -lc PATH="/usr/bin:/bin:/Users/test/.local/bin" command -v 'gh'`:     "/usr/bin/gh\n",
-			`/bin/sh -lc PATH="/usr/bin:/bin:/Users/test/.local/bin" command -v 'codex'`:  "/Users/test/.local/bin/codex\n",
-			`/bin/sh -lc PATH="/usr/bin:/bin:/Users/test/.local/bin" 'codex' --version`:   "codex 0.114.0\n",
-			testutil.Key("xattr", executablePath):                                         "",
-			testutil.Key("codesign", "--force", "--sign", "-", executablePath):            "",
-			testutil.Key("spctl", "--assess", "--type", "execute", "-vv", executablePath): "",
-			testutil.Key("launchctl", "unload", launchAgentPath):                          "",
-			testutil.Key("launchctl", "load", launchAgentPath):                            "",
-			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                     "true\n",
-			testutil.Key("git", "remote", "get-url", "origin"):                            "git@github.com:nicobistolfi/vigilante.git\n",
-			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"):    "origin/main\n",
+			`/bin/sh -lc PATH="/usr/bin:/bin:/Users/test/.local/bin" command -v 'git'`:            "/usr/bin/git\n",
+			`/bin/sh -lc PATH="/usr/bin:/bin:/Users/test/.local/bin" command -v 'gh'`:             "/usr/bin/gh\n",
+			`/bin/sh -lc PATH="/usr/bin:/bin:/Users/test/.local/bin" command -v 'codex'`:          "/Users/test/.local/bin/codex\n",
+			`/bin/sh -lc PATH="/usr/bin:/bin:/Users/test/.local/bin" 'codex' --version`:           "codex 0.114.0\n",
+			testutil.Key("xattr", resolvedExecutablePath):                                         "",
+			testutil.Key("codesign", "--force", "--sign", "-", resolvedExecutablePath):            "",
+			testutil.Key("spctl", "--assess", "--type", "execute", "-vv", resolvedExecutablePath): "",
+			testutil.Key("launchctl", "unload", launchAgentPath):                                  "",
+			testutil.Key("launchctl", "load", launchAgentPath):                                    "",
+			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                             "true\n",
+			testutil.Key("git", "remote", "get-url", "origin"):                                    "git@github.com:nicobistolfi/vigilante.git\n",
+			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"):            "origin/main\n",
 		},
 	}
 

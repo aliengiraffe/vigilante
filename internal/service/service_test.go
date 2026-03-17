@@ -221,6 +221,10 @@ func TestPrepareMacOSDaemonBinaryUsesResolvedPath(t *testing.T) {
 	if err := os.WriteFile(resolvedPath, []byte("binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	resolvedPath, err := filepath.EvalSymlinks(resolvedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	invokedPath := filepath.Join(dir, "bin", "vigilante")
 	if err := os.MkdirAll(filepath.Dir(invokedPath), 0o755); err != nil {
@@ -263,6 +267,10 @@ func TestPrepareMacOSDaemonBinarySkipsMissingKnownAttrs(t *testing.T) {
 	if err := os.WriteFile(path, []byte("binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	path, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	runner := &recordingRunner{
 		FakeRunner: testutil.FakeRunner{
@@ -297,6 +305,10 @@ func TestPrepareMacOSDaemonBinaryReportsSymlinkContextOnSpctlFailure(t *testing.
 	if err := os.WriteFile(resolvedPath, []byte("binary"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	resolvedPath, err := filepath.EvalSymlinks(resolvedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	invokedPath := filepath.Join(dir, "bin", "vigilante")
 	if err := os.MkdirAll(filepath.Dir(invokedPath), 0o755); err != nil {
@@ -318,7 +330,7 @@ func TestPrepareMacOSDaemonBinaryReportsSymlinkContextOnSpctlFailure(t *testing.
 		},
 	}
 
-	err := prepareMacOSDaemonBinary(context.Background(), runner, invokedPath)
+	err = prepareMacOSDaemonBinary(context.Background(), runner, invokedPath)
 	if err == nil {
 		t.Fatal("expected error")
 	}

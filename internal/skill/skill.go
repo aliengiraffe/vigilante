@@ -212,8 +212,34 @@ func IssueImplementationSkill(target state.WatchTarget) string {
 	case string(repo.MonorepoStackGradle):
 		return VigilanteIssueImplementationOnGradle
 	default:
+		if isTurborepoTarget(target) {
+			return VigilanteIssueImplementationOnTurborepo
+		}
 		return VigilanteIssueImplementationOnMonorepo
 	}
+}
+
+func isTurborepoTarget(target state.WatchTarget) bool {
+	if normalizedRepoShape(target) != string(repo.ShapeMonorepo) {
+		return false
+	}
+
+	hints := target.Classification.ProcessHints
+	hasTurboConfig := slicesContains(hints.WorkspaceConfigFiles, "turbo.json")
+	if !hasTurboConfig {
+		return false
+	}
+	return slicesContains(hints.WorkspaceConfigFiles, "pnpm-workspace.yaml") ||
+		slicesContains(hints.WorkspaceManifestFiles, "package.json")
+}
+
+func slicesContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizedRepoShape(target state.WatchTarget) string {
