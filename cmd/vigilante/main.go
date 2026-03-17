@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/nicobistolfi/vigilante/internal/app"
 	"github.com/nicobistolfi/vigilante/internal/build"
@@ -33,7 +32,7 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "warning: telemetry disabled:", err)
 		manager = &telemetry.Manager{}
 	}
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), telemetry.ShutdownTimeout())
 	defer cancel()
 	defer func() {
 		if err := manager.Shutdown(shutdownCtx); err != nil {

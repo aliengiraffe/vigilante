@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	otellog "go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
@@ -174,6 +175,20 @@ func TestTelemetryExporterSettingsUseEmbeddedURLPath(t *testing.T) {
 	}
 	if got, want := settings.Timeout, exportTimeout; got != want {
 		t.Fatalf("settings.Timeout = %v, want %v", got, want)
+	}
+}
+
+func TestShutdownTimeoutExceedsExportTimeout(t *testing.T) {
+	t.Parallel()
+
+	if got, want := exportTimeout, 2*time.Second; got != want {
+		t.Fatalf("exportTimeout = %v, want %v", got, want)
+	}
+	if got, want := ShutdownTimeout(), 3*time.Second; got != want {
+		t.Fatalf("ShutdownTimeout() = %v, want %v", got, want)
+	}
+	if ShutdownTimeout() <= exportTimeout {
+		t.Fatalf("ShutdownTimeout() = %v, want greater than exportTimeout %v", ShutdownTimeout(), exportTimeout)
 	}
 }
 
