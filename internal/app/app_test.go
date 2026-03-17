@@ -19,6 +19,130 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/testutil"
 )
 
+func TestRunSupportsTopLevelHelpFlags(t *testing.T) {
+	for _, arg := range []string{"--help", "-h"} {
+		t.Run(arg, func(t *testing.T) {
+			app := New()
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			app.stdout = &stdout
+			app.stderr = &stderr
+
+			exitCode := app.Run(context.Background(), []string{arg})
+			if exitCode != 0 {
+				t.Fatalf("expected success exit code, got %d", exitCode)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("expected empty stderr, got %q", stderr.String())
+			}
+			for _, want := range []string{
+				"usage:",
+				"vigilante watch",
+				"vigilante completion <bash|fish|zsh>",
+				`Use "vigilante <command> --help" for command-specific usage.`,
+			} {
+				if !strings.Contains(stdout.String(), want) {
+					t.Fatalf("expected help output to contain %q, got %q", want, stdout.String())
+				}
+			}
+		})
+	}
+}
+
+func TestRunSupportsSubcommandHelp(t *testing.T) {
+	app := New()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = &stderr
+
+	exitCode := app.Run(context.Background(), []string{"watch", "--help"})
+	if exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d", exitCode)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("expected empty stderr, got %q", stderr.String())
+	}
+	for _, want := range []string{
+		"usage: vigilante watch",
+		"Register a local repository for issue monitoring.",
+		"-assignee",
+		"-label",
+		"-max-parallel",
+		"-provider",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("expected help output to contain %q, got %q", want, stdout.String())
+		}
+	}
+}
+
+func TestRunSupportsDaemonHelp(t *testing.T) {
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+
+	exitCode := app.Run(context.Background(), []string{"daemon", "--help"})
+	if exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d", exitCode)
+	}
+	if !strings.Contains(stdout.String(), "usage:\n  vigilante daemon run [--once] [--interval duration]") {
+		t.Fatalf("unexpected output: %q", stdout.String())
+	}
+}
+
+func TestRunCompletionCommandOutputsScripts(t *testing.T) {
+	tests := []struct {
+		shell string
+		want  string
+	}{
+		{shell: "bash", want: "complete -F _vigilante vigilante"},
+		{shell: "fish", want: "complete -c vigilante -f"},
+		{shell: "zsh", want: "#compdef vigilante"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.shell, func(t *testing.T) {
+			app := New()
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			app.stdout = &stdout
+			app.stderr = &stderr
+
+			exitCode := app.Run(context.Background(), []string{"completion", tc.shell})
+			if exitCode != 0 {
+				t.Fatalf("expected success exit code, got %d", exitCode)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("expected empty stderr, got %q", stderr.String())
+			}
+			if !strings.Contains(stdout.String(), tc.want) {
+				t.Fatalf("expected completion output to contain %q, got %q", tc.want, stdout.String())
+			}
+		})
+	}
+}
+
+func TestRunCompletionCommandRejectsUnsupportedShell(t *testing.T) {
+	app := New()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = &stderr
+
+	exitCode := app.Run(context.Background(), []string{"completion", "tcsh"})
+	if exitCode != 1 {
+		t.Fatalf("expected failure exit code, got %d", exitCode)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected empty stdout, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), `unsupported shell "tcsh" (supported: bash, fish, zsh)`) {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
 func TestRunDaemonCommandUsesDefaultScanInterval(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
