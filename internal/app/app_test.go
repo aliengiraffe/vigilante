@@ -976,7 +976,7 @@ func TestRedispatchSessionRunningIssue(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"codex": "/usr/bin/codex"},
-		Outputs: map[string]string{
+		Outputs: mergeStringMaps(freshBaseBranchOutputs(repoPath, "main"), map[string]string{
 			"git worktree prune":            "ok",
 			"git worktree list --porcelain": "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/main\n",
 			"git show-ref --verify --quiet refs/heads/vigilante/issue-44-old-run":                                                                      "ok",
@@ -987,7 +987,7 @@ func TestRedispatchSessionRunningIssue(t *testing.T) {
 			preflightPromptCommand(worktreePath, "owner/repo", repoPath, 44, "force redispatch", "https://github.com/owner/repo/issues/44", branch):    "baseline ok",
 			issuePromptCommand(worktreePath, "owner/repo", repoPath, 44, "force redispatch", "https://github.com/owner/repo/issues/44", branch):        "done",
 			"gh issue comment --repo owner/repo 44 --body " + localRedispatchStartedComment(state.Session{Branch: branch, WorktreePath: worktreePath}): "ok",
-		},
+		}),
 		Errors: map[string]error{
 			"git show-ref --verify --quiet refs/heads/" + branch:          errors.New("exit status 1"),
 			"git show-ref --verify --quiet refs/heads/vigilante/issue-44": errors.New("exit status 1"),
@@ -3235,11 +3235,11 @@ func TestScanOnceBlocksIssueWhenBaseRefreshFails(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
-		Outputs: map[string]string{
+		Outputs: mergeStringMaps(freshBaseBranchOutputs(repoPath, "main"), map[string]string{
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
 			"git worktree prune": "ok",
-		},
+		}),
 		Errors: map[string]error{
 			"git fetch origin main": errors.New("exit status 1: fetch failed"),
 		},
@@ -3298,7 +3298,7 @@ func TestScanOnceCommentsOnProviderStartupFailure(t *testing.T) {
 	expectedSession.BlockedReason = classifyBlockedReason("issue_execution", "issue startup", errors.New(expectedSession.LastError))
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
-		Outputs: map[string]string{
+		Outputs: mergeStringMaps(freshBaseBranchOutputs(repoPath, "main"), map[string]string{
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
 			"git worktree prune": "ok",
@@ -3311,7 +3311,7 @@ func TestScanOnceCommentsOnProviderStartupFailure(t *testing.T) {
 				NextStep:     dispatchFailureNextStep(expectedSession, "issue_startup"),
 			}): "ok",
 			"codex --version": "codex 2.0.0",
-		},
+		}),
 	}
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
@@ -3323,6 +3323,8 @@ func TestScanOnceCommentsOnProviderStartupFailure(t *testing.T) {
 	if err := app.ScanOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	app.waitForSessions()
+
 	sessions, err := app.state.LoadSessions()
 	if err != nil {
 		t.Fatal(err)
@@ -3363,11 +3365,11 @@ func TestScanOnceSuppressesDuplicateDispatchFailureComment(t *testing.T) {
 
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh"},
-		Outputs: map[string]string{
+		Outputs: mergeStringMaps(freshBaseBranchOutputs(repoPath, "main"), map[string]string{
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
 			"git worktree prune": "ok",
-		},
+		}),
 		Errors: map[string]error{
 			"git worktree add -b vigilante/issue-1-first " + filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1") + " main": errors.New("worktree already exists for issue #1"),
 		},
