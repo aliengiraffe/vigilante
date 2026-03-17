@@ -284,6 +284,7 @@ Expected behavior:
   - `vigilante-issue-implementation-on-rush`
   - `vigilante-issue-implementation-on-bazel`
   - `vigilante-issue-implementation-on-gradle`
+  - `vigilante-issue-implementation-on-bazel-monorepo`
   - `vigilante-conflict-resolution`
   - `vigilante-create-issue`
   - `vigilante-local-service-dependencies`

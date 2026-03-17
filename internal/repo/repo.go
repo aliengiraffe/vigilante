@@ -38,6 +38,8 @@ type ProcessHints struct {
 	MultiPackageRoots      []string `json:"multi_package_roots,omitempty"`
 	GradleSettingsFiles    []string `json:"gradle_settings_files,omitempty"`
 	GradleRootBuildFiles   []string `json:"gradle_root_build_files,omitempty"`
+	BazelRepoMarkers       []string `json:"bazel_repo_markers,omitempty"`
+	BazelPackageRoots      []string `json:"bazel_package_roots,omitempty"`
 }
 
 type Classification struct {
@@ -119,9 +121,20 @@ func Classify(path string) Classification {
 			classification.ProcessHints.MultiPackageRoots = append(classification.ProcessHints.MultiPackageRoots, root)
 		}
 	}
+	for _, name := range []string{"MODULE.bazel", "WORKSPACE", "WORKSPACE.bazel"} {
+		if fileExists(filepath.Join(absPath, name)) {
+			classification.ProcessHints.BazelRepoMarkers = append(classification.ProcessHints.BazelRepoMarkers, name)
+		}
+	}
+	for _, root := range []string{"apps", "packages", "services", "libs", "modules"} {
+		if hasBazelPackageChildren(filepath.Join(absPath, root)) {
+			classification.ProcessHints.BazelPackageRoots = append(classification.ProcessHints.BazelPackageRoots, root)
+		}
+	}
 	if len(classification.ProcessHints.WorkspaceConfigFiles) > 0 ||
 		len(classification.ProcessHints.WorkspaceManifestFiles) > 0 ||
-		len(classification.ProcessHints.MultiPackageRoots) >= 2 {
+		len(classification.ProcessHints.MultiPackageRoots) >= 2 ||
+		(len(classification.ProcessHints.BazelRepoMarkers) > 0 && len(classification.ProcessHints.BazelPackageRoots) > 0) {
 		classification.Shape = ShapeMonorepo
 		classification.MonorepoStack = detectMonorepoStack(absPath)
 	}
@@ -133,6 +146,8 @@ func Classify(path string) Classification {
 	slices.Sort(classification.ProcessHints.WorkspaceConfigFiles)
 	slices.Sort(classification.ProcessHints.WorkspaceManifestFiles)
 	slices.Sort(classification.ProcessHints.MultiPackageRoots)
+	slices.Sort(classification.ProcessHints.BazelRepoMarkers)
+	slices.Sort(classification.ProcessHints.BazelPackageRoots)
 	return classification
 }
 
@@ -202,6 +217,23 @@ func hasChildDirectories(path string) bool {
 	}
 	for _, entry := range entries {
 		if entry.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+func hasBazelPackageChildren(path string) bool {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		child := filepath.Join(path, entry.Name())
+		if fileExists(filepath.Join(child, "BUILD")) || fileExists(filepath.Join(child, "BUILD.bazel")) {
 			return true
 		}
 	}
