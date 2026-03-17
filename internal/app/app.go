@@ -208,12 +208,19 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 			return errors.New("usage: vigilante list [--blocked | --running]")
 		}
 		return a.List(*blockedOnly, *runningOnly)
+	case "status":
+		if len(args) != 1 {
+			return errors.New("usage: vigilante status")
+		}
+		return a.Status(ctx)
 	case "cleanup":
 		return a.runCleanupCommand(ctx, args[1:])
 	case "redispatch":
 		return a.runRedispatchCommand(ctx, args[1:])
 	case "resume":
 		return a.runResumeCommand(ctx, args[1:])
+	case "service":
+		return a.runServiceCommand(ctx, args[1:])
 	case "daemon":
 		return a.runDaemonCommand(ctx, args[1:])
 	case "completion":
@@ -348,6 +355,17 @@ func (a *App) runDaemonCommand(ctx context.Context, args []string) error {
 	return a.DaemonRun(ctx, *interval, *once)
 }
 
+func (a *App) runServiceCommand(ctx context.Context, args []string) error {
+	if len(args) == 0 || isHelpToken(args[0]) {
+		a.printServiceUsage(a.stdout)
+		return nil
+	}
+	if len(args) != 1 || args[0] != "restart" {
+		return errors.New("usage: vigilante service restart")
+	}
+	return a.RestartService(ctx)
+}
+
 func (a *App) runCompletionCommand(args []string) error {
 	fs := flag.NewFlagSet("completion", flag.ContinueOnError)
 	configureFlagSet(fs, func(w io.Writer) {
@@ -374,6 +392,37 @@ func (a *App) runCompletionCommand(args []string) error {
 	}
 	_, err = fmt.Fprint(a.stdout, script)
 	return err
+}
+
+func (a *App) Status(ctx context.Context) error {
+	status, err := service.ServiceStatus(ctx, a.env)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(a.stdout, "state: %s\n", status.State)
+	fmt.Fprintf(a.stdout, "manager: %s\n", status.Manager)
+	fmt.Fprintf(a.stdout, "service: %s\n", status.Service)
+	fmt.Fprintf(a.stdout, "path: %s\n", status.FilePath)
+	if status.Installed {
+		fmt.Fprintln(a.stdout, "installed: yes")
+	} else {
+		fmt.Fprintln(a.stdout, "installed: no")
+	}
+	if status.Running {
+		fmt.Fprintln(a.stdout, "running: yes")
+	} else {
+		fmt.Fprintln(a.stdout, "running: no")
+	}
+	return nil
+}
+
+func (a *App) RestartService(ctx context.Context) error {
+	if err := service.Restart(ctx, a.env); err != nil {
+		return err
+	}
+	fmt.Fprintln(a.stdout, "service restart requested")
+	return nil
 }
 
 func (a *App) Setup(ctx context.Context, installDaemon bool) error {
@@ -2862,11 +2911,13 @@ func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] [--provider value] <path>")
 	fmt.Fprintln(w, "  vigilante unwatch <path>")
 	fmt.Fprintln(w, "  vigilante list [--blocked | --running]")
+	fmt.Fprintln(w, "  vigilante status")
 	fmt.Fprintln(w, "  vigilante cleanup --repo <owner/name> [--issue <n>]")
 	fmt.Fprintln(w, "  vigilante cleanup --all")
 	fmt.Fprintln(w, "  vigilante redispatch --repo <owner/name> --issue <n>")
 	fmt.Fprintln(w, "  vigilante resume --repo <owner/name> --issue <n>")
 	fmt.Fprintln(w, "  vigilante resume --all-blocked")
+	fmt.Fprintln(w, "  vigilante service restart")
 	fmt.Fprintln(w, "  vigilante daemon run [--once] [--interval duration]")
 	fmt.Fprintln(w, "  vigilante completion <bash|fish|zsh>")
 	fmt.Fprintln(w)
@@ -2878,6 +2929,13 @@ func (a *App) printDaemonUsage(w io.Writer) {
 	fmt.Fprintln(w, "  vigilante daemon run [--once] [--interval duration]")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Use \"vigilante daemon run --help\" for flags.")
+}
+
+func (a *App) printServiceUsage(w io.Writer) {
+	fmt.Fprintln(w, "usage:")
+	fmt.Fprintln(w, "  vigilante service restart")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Use \"vigilante status\" to inspect the installed service.")
 }
 
 func completionScript(shell string) (string, error) {
@@ -2900,7 +2958,7 @@ _vigilante()
     local cur prev words cword
     _init_completion || return
 
-    local commands="setup watch unwatch list cleanup redispatch resume daemon completion"
+    local commands="setup watch unwatch list status cleanup redispatch resume service daemon completion"
     local global_flags="-h --help"
 
     case "${words[1]}" in
@@ -2916,6 +2974,9 @@ _vigilante()
             COMPREPLY=( $(compgen -W "--blocked --running" -- "$cur") )
             return
             ;;
+        status)
+            return
+            ;;
         cleanup)
             COMPREPLY=( $(compgen -W "--repo --issue --all" -- "$cur") )
             return
@@ -2926,6 +2987,10 @@ _vigilante()
             ;;
         resume)
             COMPREPLY=( $(compgen -W "--repo --issue --all-blocked" -- "$cur") )
+            return
+            ;;
+        service)
+            COMPREPLY=( $(compgen -W "restart" -- "$cur") )
             return
             ;;
         daemon)
@@ -2955,9 +3020,11 @@ complete -c vigilante -f -n '__fish_use_subcommand' -a 'setup' -d 'Prepare the m
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'watch' -d 'Register a local repository for issue monitoring'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'unwatch' -d 'Remove a repository from the watchlist'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'list' -d 'Show watched repositories or sessions'
+complete -c vigilante -f -n '__fish_use_subcommand' -a 'status' -d 'Show installed service state'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'cleanup' -d 'Clean up running sessions'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'redispatch' -d 'Restart one watched issue in a fresh local worktree'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'resume' -d 'Resume blocked sessions'
+complete -c vigilante -f -n '__fish_use_subcommand' -a 'service' -d 'Run service commands'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'daemon' -d 'Run daemon commands'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'completion' -d 'Generate shell completion scripts'
 
@@ -2978,6 +3045,7 @@ complete -c vigilante -n '__fish_seen_subcommand_from redispatch' -l issue
 complete -c vigilante -n '__fish_seen_subcommand_from resume' -l repo
 complete -c vigilante -n '__fish_seen_subcommand_from resume' -l issue
 complete -c vigilante -n '__fish_seen_subcommand_from resume' -l all-blocked
+complete -c vigilante -n '__fish_seen_subcommand_from service' -a 'restart'
 complete -c vigilante -n '__fish_seen_subcommand_from daemon; and not __fish_seen_subcommand_from run' -a 'run'
 complete -c vigilante -n '__fish_seen_subcommand_from run' -l once
 complete -c vigilante -n '__fish_seen_subcommand_from run' -l interval
@@ -2995,9 +3063,11 @@ _vigilante() {
     'watch:Register a local repository for issue monitoring'
     'unwatch:Remove a repository from the watchlist'
     'list:Show watched repositories or sessions'
+    'status:Show installed service state'
     'cleanup:Clean up running sessions'
     'redispatch:Restart one watched issue in a fresh local worktree'
     'resume:Resume blocked sessions'
+    'service:Run service commands'
     'daemon:Run daemon commands'
     'completion:Generate shell completion scripts'
   )
@@ -3017,6 +3087,8 @@ _vigilante() {
     list)
       compadd -- --blocked --running
       ;;
+    status)
+      ;;
     cleanup)
       compadd -- --repo --issue --all
       ;;
@@ -3025,6 +3097,9 @@ _vigilante() {
       ;;
     resume)
       compadd -- --repo --issue --all-blocked
+      ;;
+    service)
+      compadd restart
       ;;
     daemon)
       if (( CURRENT == 3 )); then

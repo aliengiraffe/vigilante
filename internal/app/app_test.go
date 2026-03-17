@@ -38,6 +38,8 @@ func TestRunSupportsTopLevelHelpFlags(t *testing.T) {
 			for _, want := range []string{
 				"usage:",
 				"vigilante watch",
+				"vigilante status",
+				"vigilante service restart",
 				"vigilante completion <bash|fish|zsh>",
 				`Use "vigilante <command> --help" for command-specific usage.`,
 			} {
@@ -192,6 +194,138 @@ func TestRunSupportsDaemonHelp(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "usage:\n  vigilante daemon run [--once] [--interval duration]") {
 		t.Fatalf("unexpected output: %q", stdout.String())
+	}
+}
+
+func TestRunSupportsServiceHelp(t *testing.T) {
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+
+	exitCode := app.Run(context.Background(), []string{"service", "--help"})
+	if exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d", exitCode)
+	}
+	if !strings.Contains(stdout.String(), "usage:\n  vigilante service restart") {
+		t.Fatalf("unexpected output: %q", stdout.String())
+	}
+}
+
+func TestStatusCommandReportsServiceState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	unitPath := filepath.Join(home, ".config", "systemd", "user", "vigilante.service")
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unitPath, []byte("unit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.OS = "linux"
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"systemctl --user show --property=LoadState,ActiveState vigilante.service": "LoadState=loaded\nActiveState=active\n",
+		},
+	}
+
+	exitCode := app.Run(context.Background(), []string{"status"})
+	if exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d", exitCode)
+	}
+	for _, want := range []string{
+		"state: running",
+		"manager: systemd",
+		"service: vigilante.service",
+		"path: " + unitPath,
+		"installed: yes",
+		"running: yes",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("expected output to contain %q, got %q", want, stdout.String())
+		}
+	}
+}
+
+func TestStatusCommandFailsOnUnsupportedOS(t *testing.T) {
+	app := New()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = &stderr
+	app.env.OS = "windows"
+	app.env.Runner = testutil.FakeRunner{}
+
+	exitCode := app.Run(context.Background(), []string{"status"})
+	if exitCode != 1 {
+		t.Fatalf("expected failure exit code, got %d", exitCode)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected empty stdout, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), `error: unsupported OS "windows"`) {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
+func TestServiceRestartCommandRequestsRestart(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	unitPath := filepath.Join(home, ".config", "systemd", "user", "vigilante.service")
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unitPath, []byte("unit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.OS = "linux"
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"systemctl --user show --property=LoadState,ActiveState vigilante.service": "LoadState=loaded\nActiveState=active\n",
+			"systemctl --user restart vigilante.service":                               "",
+		},
+	}
+
+	exitCode := app.Run(context.Background(), []string{"service", "restart"})
+	if exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d", exitCode)
+	}
+	if !strings.Contains(stdout.String(), "service restart requested") {
+		t.Fatalf("unexpected stdout: %q", stdout.String())
+	}
+}
+
+func TestServiceRestartCommandFailsWhenServiceIsNotInstalled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	app := New()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = &stderr
+	app.env.OS = "linux"
+	app.env.Runner = testutil.FakeRunner{}
+
+	exitCode := app.Run(context.Background(), []string{"service", "restart"})
+	if exitCode != 1 {
+		t.Fatalf("expected failure exit code, got %d", exitCode)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("expected empty stdout, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "error: service is not installed") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
 	}
 }
 

@@ -20,6 +20,26 @@ type Config struct {
 	HomeDir    string
 }
 
+const (
+	launchdLabel    = "com.vigilante.agent"
+	systemdUnitName = "vigilante.service"
+)
+
+const (
+	StatusNotInstalled = "not-installed"
+	StatusStopped      = "stopped"
+	StatusRunning      = "running"
+)
+
+type Status struct {
+	Manager   string
+	Service   string
+	FilePath  string
+	State     string
+	Installed bool
+	Running   bool
+}
+
 func Install(ctx context.Context, env *environment.Environment, store *state.Store, selectedProvider provider.Provider) error {
 	cfg, err := BuildConfig(ctx, env, selectedProvider)
 	if err != nil {
@@ -44,7 +64,7 @@ func installLaunchdService(ctx context.Context, env *environment.Environment, st
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	path := filepath.Join(dir, "com.vigilante.agent.plist")
+	path := filepath.Join(dir, launchdLabel+".plist")
 	if err := os.WriteFile(path, []byte(RenderLaunchdPlist(store, cfg)), 0o644); err != nil {
 		return err
 	}
@@ -60,13 +80,13 @@ func installSystemdUserService(ctx context.Context, env *environment.Environment
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	path := filepath.Join(dir, "vigilante.service")
+	path := filepath.Join(dir, systemdUnitName)
 	if err := os.WriteFile(path, []byte(RenderSystemdUnit(store, cfg)), 0o644); err != nil {
 		return err
 	}
 	for _, args := range [][]string{
 		{"--user", "daemon-reload"},
-		{"--user", "enable", "--now", "vigilante.service"},
+		{"--user", "enable", "--now", systemdUnitName},
 	} {
 		if _, err := env.Runner.Run(ctx, "", "systemctl", args...); err != nil {
 			return err
@@ -83,7 +103,7 @@ func RenderLaunchdPlist(store *state.Store, cfg Config) string {
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.vigilante.agent</string>
+  <string>%s</string>
   <key>ProgramArguments</key>
   <array>
     <string>%s</string>
@@ -107,7 +127,7 @@ func RenderLaunchdPlist(store *state.Store, cfg Config) string {
   <string>%s/vigilante.err.log</string>
 </dict>
 </plist>
-`, args[0], args[1], args[2], cfg.HomeDir, cfg.PathEnv, store.LogsDir(), store.LogsDir())) + "\n"
+`, launchdLabel, args[0], args[1], args[2], cfg.HomeDir, cfg.PathEnv, store.LogsDir(), store.LogsDir())) + "\n"
 }
 
 func RenderSystemdUnit(store *state.Store, cfg Config) string {
@@ -136,11 +156,98 @@ func FilePath(goos string) (string, error) {
 	}
 	switch goos {
 	case "darwin":
-		return filepath.Join(home, "Library", "LaunchAgents", "com.vigilante.agent.plist"), nil
+		return filepath.Join(home, "Library", "LaunchAgents", launchdLabel+".plist"), nil
 	case "linux":
-		return filepath.Join(home, ".config", "systemd", "user", "vigilante.service"), nil
+		return filepath.Join(home, ".config", "systemd", "user", systemdUnitName), nil
 	default:
 		return "", errors.New("unsupported OS")
+	}
+}
+
+func ServiceStatus(ctx context.Context, env *environment.Environment) (Status, error) {
+	status, err := baseStatus(env.OS)
+	if err != nil {
+		return Status{}, fmt.Errorf("unsupported OS %q", env.OS)
+	}
+
+	if _, err := os.Stat(status.FilePath); err != nil {
+		if os.IsNotExist(err) {
+			return status, nil
+		}
+		return Status{}, err
+	}
+
+	status.Installed = true
+
+	switch env.OS {
+	case "darwin":
+		output, err := env.Runner.Run(ctx, "", "launchctl", "print", launchdTarget())
+		if err != nil {
+			if isLaunchdServiceMissing(output, err) {
+				status.State = StatusStopped
+				return status, nil
+			}
+			return Status{}, fmt.Errorf("query launchd service status: %w", err)
+		}
+		status.Running = launchdOutputIndicatesRunning(output)
+	case "linux":
+		output, err := env.Runner.Run(ctx, "", "systemctl", "--user", "show", "--property=LoadState,ActiveState", systemdUnitName)
+		if err != nil {
+			return Status{}, fmt.Errorf("query systemd user service status: %w", err)
+		}
+		loadState, activeState := parseSystemdShow(output)
+		if loadState == "not-found" {
+			status.Installed = false
+			status.State = StatusNotInstalled
+			return status, nil
+		}
+		status.Running = activeState == "active"
+	}
+
+	if status.Running {
+		status.State = StatusRunning
+	} else {
+		status.State = StatusStopped
+	}
+
+	return status, nil
+}
+
+func Restart(ctx context.Context, env *environment.Environment) error {
+	status, err := ServiceStatus(ctx, env)
+	if err != nil {
+		return err
+	}
+	if !status.Installed {
+		return fmt.Errorf("service is not installed at %s", status.FilePath)
+	}
+
+	switch env.OS {
+	case "darwin":
+		_, err = env.Runner.Run(ctx, "", "launchctl", "kickstart", "-k", launchdTarget())
+	case "linux":
+		_, err = env.Runner.Run(ctx, "", "systemctl", "--user", "restart", systemdUnitName)
+	default:
+		return fmt.Errorf("unsupported OS %q", env.OS)
+	}
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func baseStatus(goos string) (Status, error) {
+	path, err := FilePath(goos)
+	if err != nil {
+		return Status{}, err
+	}
+	switch goos {
+	case "darwin":
+		return Status{Manager: "launchd", Service: launchdLabel, FilePath: path, State: StatusNotInstalled}, nil
+	case "linux":
+		return Status{Manager: "systemd", Service: systemdUnitName, FilePath: path, State: StatusNotInstalled}, nil
+	default:
+		return Status{}, errors.New("unsupported OS")
 	}
 }
 
@@ -288,4 +395,33 @@ func macOSBinaryContext(executable string, resolvedPath string, removedAttrs []s
 		return context
 	}
 	return context + fmt.Sprintf(" removed_xattrs=%s", strings.Join(removedAttrs, ","))
+}
+
+func launchdTarget() string {
+	return fmt.Sprintf("gui/%d/%s", os.Getuid(), launchdLabel)
+}
+
+func isLaunchdServiceMissing(output string, err error) bool {
+	combined := strings.ToLower(strings.TrimSpace(output + "\n" + err.Error()))
+	return strings.Contains(combined, "could not find service") || strings.Contains(combined, "service not found")
+}
+
+func launchdOutputIndicatesRunning(output string) bool {
+	lower := strings.ToLower(output)
+	return strings.Contains(lower, "pid = ") || strings.Contains(lower, "\"pid\" =")
+}
+
+func parseSystemdShow(output string) (string, string) {
+	var loadState string
+	var activeState string
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "LoadState="):
+			loadState = strings.TrimPrefix(line, "LoadState=")
+		case strings.HasPrefix(line, "ActiveState="):
+			activeState = strings.TrimPrefix(line, "ActiveState=")
+		}
+	}
+	return loadState, activeState
 }
