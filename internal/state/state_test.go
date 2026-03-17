@@ -59,6 +59,58 @@ func TestAppendLogFileUsesLocalTimezone(t *testing.T) {
 	}
 }
 
+func TestSessionLogPathUsesRepositoryQualifiedFilename(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+
+	store := NewStore()
+
+	got := store.SessionLogPath("aliengiraffe/vigilante", 179)
+	want := filepath.Join(store.LogsDir(), "aliengiraffe-vigilante-issue-179.log")
+	if got != want {
+		t.Fatalf("expected repository-qualified session log path %q, got %q", want, got)
+	}
+}
+
+func TestSessionLogPathSanitizesRepositorySlug(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+
+	store := NewStore()
+
+	got := store.SessionLogPath("Org Name/repo.name:beta", 7)
+	want := filepath.Join(store.LogsDir(), "Org-Name-repo-name-beta-issue-7.log")
+	if got != want {
+		t.Fatalf("expected sanitized session log path %q, got %q", want, got)
+	}
+}
+
+func TestSessionLogPathDoesNotCollideAcrossRepositories(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+
+	store := NewStore()
+
+	first := store.SessionLogPath("owner-one/repo", 7)
+	second := store.SessionLogPath("owner-two/repo", 7)
+	if first == second {
+		t.Fatalf("expected distinct session log paths for shared issue number, got %q", first)
+	}
+}
+
+func TestSessionLogPathFallsBackWhenRepositorySlugMissing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+
+	store := NewStore()
+
+	got := store.SessionLogPath(" / ", 7)
+	want := filepath.Join(store.LogsDir(), "unknown-repo-issue-7.log")
+	if got != want {
+		t.Fatalf("expected fallback session log path %q, got %q", want, got)
+	}
+}
+
 func TestWatchTargetMaxParallelDefaultsToSharedValue(t *testing.T) {
 	if got := normalizeMaxParallelSessions(0); got != DefaultMaxParallelSessions {
 		t.Fatalf("expected zero max_parallel_sessions to normalize to shared default %d, got %d", DefaultMaxParallelSessions, got)
