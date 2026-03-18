@@ -4227,6 +4227,37 @@ func TestScanOnceAutomergeWaitsForPendingChecks(t *testing.T) {
 	}
 }
 
+func TestScanOnceWaitsWhenReplacementCheckRunIsStillInProgress(t *testing.T) {
+	app, _ := newPullRequestMaintenanceTestApp(t, map[string]string{
+		"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
+		"git fetch origin main":  "ok",
+		"git status --porcelain": "",
+		"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
+		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": `{"number":31,"title":"Test PR","body":"Test PR body","url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"CANCELLED"},{"context":"test","state":"IN_PROGRESS","conclusion":""}]}`,
+		"gh api user --jq .login": "nicobistolfi\n",
+		"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+	})
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.waitForSessions()
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].Status != state.SessionStatusSuccess {
+		t.Fatalf("expected maintenance session to remain active while checks rerun: %#v", sessions[0])
+	}
+	if sessions[0].LastMaintenanceError != "pr maintenance waiting for required checks on PR #31" {
+		t.Fatalf("expected rerunning checks to stay in wait state, got: %#v", sessions[0])
+	}
+	if sessions[0].BlockedStage != "" || sessions[0].BlockedReason.Kind != "" {
+		t.Fatalf("expected no blocked state while replacement checks are running: %#v", sessions[0])
+	}
+}
+
 func TestScanOnceFailingChecksTriggerCIRemediation(t *testing.T) {
 	app, _ := newPullRequestMaintenanceTestApp(t, map[string]string{
 		"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
@@ -4422,6 +4453,91 @@ func automergePRDetailsJSON(label string, mergeable string, mergeState string, r
 		labelJSON = fmt.Sprintf(`[{"name":"%s"}]`, label)
 	}
 	return fmt.Sprintf(`{"number":31,"title":"Test PR","body":"Test PR body","url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null,"labels":%s,"isDraft":false,"mergeable":"%s","mergeStateStatus":"%s","reviewDecision":"%s","statusCheckRollup":[{"context":"test","state":"%s","conclusion":"%s"}]}`, labelJSON, mergeable, mergeState, reviewDecision, checkState, conclusion)
+}
+
+func TestRequiredChecksState(t *testing.T) {
+	tests := []struct {
+		name   string
+		checks []ghcli.StatusCheckRoll
+		want   string
+	}{
+		{
+			name: "no checks defaults passing",
+			want: "passing",
+		},
+		{
+			name: "queued checks are pending",
+			checks: []ghcli.StatusCheckRoll{
+				{Context: "test", State: "QUEUED"},
+			},
+			want: "pending",
+		},
+		{
+			name: "pending checks are pending",
+			checks: []ghcli.StatusCheckRoll{
+				{Context: "test", State: "PENDING"},
+			},
+			want: "pending",
+		},
+		{
+			name: "in progress checks are pending",
+			checks: []ghcli.StatusCheckRoll{
+				{Context: "test", State: "IN_PROGRESS"},
+			},
+			want: "pending",
+		},
+		{
+			name: "successful completed checks pass",
+			checks: []ghcli.StatusCheckRoll{
+				{Context: "test", State: "COMPLETED", Conclusion: "SUCCESS"},
+			},
+			want: "passing",
+		},
+		{
+			name: "failed completed checks fail",
+			checks: []ghcli.StatusCheckRoll{
+				{Context: "test", State: "COMPLETED", Conclusion: "FAILURE"},
+			},
+			want: "failing",
+		},
+		{
+			name: "cancelled completed checks fail when nothing is still running",
+			checks: []ghcli.StatusCheckRoll{
+				{Context: "test", State: "COMPLETED", Conclusion: "CANCELLED"},
+			},
+			want: "failing",
+		},
+		{
+			name: "timed out completed checks fail when nothing is still running",
+			checks: []ghcli.StatusCheckRoll{
+				{Context: "test", State: "COMPLETED", Conclusion: "TIMED_OUT"},
+			},
+			want: "failing",
+		},
+		{
+			name: "action required completed checks fail when nothing is still running",
+			checks: []ghcli.StatusCheckRoll{
+				{Context: "test", State: "COMPLETED", Conclusion: "ACTION_REQUIRED"},
+			},
+			want: "failing",
+		},
+		{
+			name: "active rerun takes precedence over cancelled prior attempt",
+			checks: []ghcli.StatusCheckRoll{
+				{Context: "test", State: "COMPLETED", Conclusion: "CANCELLED"},
+				{Context: "test", State: "IN_PROGRESS"},
+			},
+			want: "pending",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := requiredChecksState(tt.checks); got != tt.want {
+				t.Fatalf("requiredChecksState() = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }
 
 func TestScanOnceSkipsWhenAnotherProcessHoldsScanLock(t *testing.T) {
