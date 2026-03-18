@@ -3,8 +3,12 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,8 +20,70 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/repo"
 	"github.com/nicobistolfi/vigilante/internal/skill"
 	"github.com/nicobistolfi/vigilante/internal/state"
+	"github.com/nicobistolfi/vigilante/internal/telemetry"
 	"github.com/nicobistolfi/vigilante/internal/testutil"
 )
+
+type analyticsBatchCapture struct {
+	events []capturedAnalyticsEvent
+}
+
+type capturedAnalyticsEvent struct {
+	Event      string         `json:"event"`
+	Properties map[string]any `json:"properties"`
+}
+
+func setupTelemetryCapture(t *testing.T) (*analyticsBatchCapture, func() error) {
+	t.Helper()
+
+	capture := &analyticsBatchCapture{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read telemetry request: %v", err)
+		}
+		var payload struct {
+			Messages []json.RawMessage `json:"batch"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("parse telemetry batch: %v", err)
+		}
+		capture.events = capture.events[:0]
+		for _, raw := range payload.Messages {
+			var event capturedAnalyticsEvent
+			if err := json.Unmarshal(raw, &event); err != nil {
+				t.Fatalf("parse telemetry event: %v", err)
+			}
+			capture.events = append(capture.events, event)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	manager, err := telemetry.Setup(context.Background(), telemetry.SetupConfig{
+		BuildInfo: telemetry.BuildInfo{
+			Version:           "1.2.3",
+			Distro:            "direct",
+			TelemetryEndpoint: server.URL,
+			TelemetryToken:    "token",
+		},
+		StateRoot: t.TempDir(),
+		EnvLookup: func(string) string { return "" },
+	})
+	if err != nil {
+		t.Fatalf("setup telemetry: %v", err)
+	}
+	telemetry.SetDefault(manager)
+	t.Cleanup(func() {
+		telemetry.SetDefault(nil)
+	})
+	return capture, func() error {
+		err := manager.Shutdown(context.Background())
+		telemetry.SetDefault(nil)
+		return err
+	}
+}
 
 func TestRunSupportsTopLevelHelpFlags(t *testing.T) {
 	for _, arg := range []string{"--help", "-h"} {
@@ -116,6 +182,7 @@ func TestDesiredSessionLabels(t *testing.T) {
 }
 
 func TestSyncIssueManagedLabelsQueued(t *testing.T) {
+	capture, shutdownTelemetry := setupTelemetryCapture(t)
 	app := New()
 	app.stdout = testutil.IODiscard{}
 	app.stderr = testutil.IODiscard{}
@@ -129,6 +196,103 @@ func TestSyncIssueManagedLabelsQueued(t *testing.T) {
 
 	if err := app.syncIssueManagedLabels(context.Background(), "owner/repo", 7, []string{labelQueued}); err != nil {
 		t.Fatal(err)
+	}
+	if err := shutdownTelemetry(); err != nil {
+		t.Fatal(err)
+	}
+	if len(capture.events) != 1 {
+		t.Fatalf("expected 1 telemetry event, got %d", len(capture.events))
+	}
+	if got, want := capture.events[0].Event, "github_issue_labels_synced"; got != want {
+		t.Fatalf("event = %q, want %q", got, want)
+	}
+	if got, want := capture.events[0].Properties["add_count"], float64(1); got != want {
+		t.Fatalf("add_count = %v, want %v", got, want)
+	}
+	if got, want := capture.events[0].Properties["remove_count"], float64(1); got != want {
+		t.Fatalf("remove_count = %v, want %v", got, want)
+	}
+}
+
+func TestSyncIssueManagedLabelsNoopDoesNotEmitTelemetry(t *testing.T) {
+	capture, shutdownTelemetry := setupTelemetryCapture(t)
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/issues/7":            `{"labels":[{"name":"vigilante:queued"}]}`,
+		},
+	}
+
+	if err := app.syncIssueManagedLabels(context.Background(), "owner/repo", 7, []string{labelQueued}); err != nil {
+		t.Fatal(err)
+	}
+	if err := shutdownTelemetry(); err != nil {
+		t.Fatal(err)
+	}
+	if len(capture.events) != 0 {
+		t.Fatalf("expected no telemetry events, got %#v", capture.events)
+	}
+}
+
+func TestCommentOnIssueEmitsTypedTelemetry(t *testing.T) {
+	capture, shutdownTelemetry := setupTelemetryCapture(t)
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh issue comment --repo owner/repo 7 --body body": "ok",
+		},
+	}
+
+	if err := app.commentOnIssue(context.Background(), "owner/repo", 7, "body", "dispatch_failure", "dispatch"); err != nil {
+		t.Fatal(err)
+	}
+	if err := shutdownTelemetry(); err != nil {
+		t.Fatal(err)
+	}
+	if len(capture.events) != 1 {
+		t.Fatalf("expected 1 telemetry event, got %d", len(capture.events))
+	}
+	if got, want := capture.events[0].Event, "github_issue_comment_emitted"; got != want {
+		t.Fatalf("event = %q, want %q", got, want)
+	}
+	if got, want := capture.events[0].Properties["comment_type"], "dispatch_failure"; got != want {
+		t.Fatalf("comment_type = %v, want %q", got, want)
+	}
+}
+
+func TestRecordSessionFailureEmitsSessionTransitionTelemetry(t *testing.T) {
+	capture, shutdownTelemetry := setupTelemetryCapture(t)
+	app := New()
+	session := &state.Session{
+		Repo:        "owner/repo",
+		IssueNumber: 7,
+		Provider:    "codex",
+		Status:      state.SessionStatusRunning,
+	}
+
+	app.recordSessionFailure(session, "issue_execution", "git worktree add", errors.New("boom"))
+	if err := shutdownTelemetry(); err != nil {
+		t.Fatal(err)
+	}
+	if len(capture.events) != 1 {
+		t.Fatalf("expected 1 telemetry event, got %d", len(capture.events))
+	}
+	if got, want := capture.events[0].Event, "issue_session_transition"; got != want {
+		t.Fatalf("event = %q, want %q", got, want)
+	}
+	if got, want := capture.events[0].Properties["previous_status"], "running"; got != want {
+		t.Fatalf("previous_status = %v, want %q", got, want)
+	}
+	if got, want := capture.events[0].Properties["status"], "blocked"; got != want {
+		t.Fatalf("status = %v, want %q", got, want)
+	}
+	if got, want := capture.events[0].Properties["transition"], "blocked"; got != want {
+		t.Fatalf("transition = %v, want %q", got, want)
 	}
 }
 
