@@ -193,6 +193,53 @@ func CleanupIssueArtifactsForBranches(ctx context.Context, runner environment.Ru
 	return nil
 }
 
+func RecreateBranchWorktree(ctx context.Context, runner environment.Runner, repoPath string, worktreePath string, branch string) error {
+	if err := Prune(ctx, runner, repoPath); err != nil {
+		return err
+	}
+
+	if _, err := os.Stat(worktreePath); err == nil {
+		if err := Remove(ctx, runner, repoPath, worktreePath); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+
+	if err := Prune(ctx, runner, repoPath); err != nil {
+		return err
+	}
+
+	remoteExists, err := remoteBranchExistsWithError(ctx, runner, repoPath, branch)
+	if err != nil {
+		return err
+	}
+	if remoteExists {
+		if _, err := runner.Run(ctx, repoPath, "git", "fetch", "origin", branch+":"+branch); err != nil {
+			return fmt.Errorf("prepare remote branch %q: %w", branch, err)
+		}
+	} else {
+		exists, err := branchExistsWithError(ctx, runner, repoPath, branch)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf("branch %q not found locally or on origin", branch)
+		}
+	}
+
+	attached, err := branchAttachedToWorktree(ctx, runner, repoPath, branch)
+	if err != nil {
+		return err
+	}
+	if attached {
+		return fmt.Errorf("branch %q is already attached to another worktree", branch)
+	}
+
+	_, err = runner.Run(ctx, repoPath, "git", "worktree", "add", worktreePath, branch)
+	return err
+}
+
 func branchExists(ctx context.Context, runner environment.Runner, repoPath string, branch string) bool {
 	_, err := runner.Run(ctx, repoPath, "git", "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
 	return err == nil

@@ -132,6 +132,12 @@ func TestDesiredSessionLabels(t *testing.T) {
 			wantIntervention: "",
 		},
 		{
+			name:             "auto recovering",
+			session:          state.Session{Status: state.SessionStatusResuming, LastResumeSource: autoRecoverySource},
+			wantState:        labelRecovering,
+			wantIntervention: "",
+		},
+		{
 			name:             "blocked provider",
 			session:          state.Session{Status: state.SessionStatusBlocked, BlockedReason: state.BlockedReason{Kind: "provider_auth"}},
 			wantState:        labelBlocked,
@@ -188,7 +194,7 @@ func TestSyncIssueManagedLabelsQueued(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/labels?per_page=100":                                                     `[{"name":"bug"},{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/labels?per_page=100":                                                     `[{"name":"bug"},{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 			"gh api repos/owner/repo/issues/7":                                                                `{"labels":[{"name":"bug"},{"name":"vigilante:running"}]}`,
 			"gh issue edit --repo owner/repo 7 --add-label vigilante:queued --remove-label vigilante:running": "ok",
 		},
@@ -221,7 +227,7 @@ func TestSyncIssueManagedLabelsNoopDoesNotEmitTelemetry(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 			"gh api repos/owner/repo/issues/7":            `{"labels":[{"name":"vigilante:queued"}]}`,
 		},
 	}
@@ -302,7 +308,7 @@ func TestSyncSessionIssueLabelsUsesPullRequestReviewState(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 			"gh pr view --repo owner/repo 17 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": `{"number":17,"title":"Demo PR","body":"PR body","url":"https://github.com/owner/repo/pull/17","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}]}`,
 			"gh api repos/owner/repo/issues/7": `{"labels":[{"name":"vigilante:ready-for-review"},{"name":"vigilante:needs-review"}]}`,
 			"gh issue edit --repo owner/repo 7 --add-label vigilante:awaiting-user-validation --remove-label vigilante:needs-review --remove-label vigilante:ready-for-review": "ok",
@@ -330,6 +336,7 @@ func TestSyncIssueManagedLabelsProvisionMissingRepositoryLabels(t *testing.T) {
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:queued -f color=BFDADC -f description=The issue is eligible for dispatch and waiting for a worker slot.":                                           "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:running -f color=0E8A16 -f description=A coding-agent session is currently executing for the issue.":                                               "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:blocked -f color=D93F0B -f description=Execution cannot continue until a blocker is resolved.":                                                     "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=vigilante:recovering -f color=FBCA04 -f description=An automatic stale-session recovery attempt is actively rebuilding local execution state.":               "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:ready-for-review -f color=FBCA04 -f description=Implementation is complete enough for a human to review the resulting PR or branch.":               "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:awaiting-user-validation -f color=F9D0C4 -f description=Changes are ready for product or operator validation before the issue is considered done.": "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:done -f color=5319E7 -f description=Vigilante completed its work on the issue and no further automation is expected.":                              "ok",
@@ -2738,6 +2745,55 @@ func TestBlockedSessionExceededInactivityTimeoutTreatsRecentWorktreeChangeAsActi
 	}
 }
 
+func TestShouldAutoRecoverBlockedSession(t *testing.T) {
+	tests := []struct {
+		name    string
+		session state.Session
+		want    bool
+	}{
+		{
+			name: "maintenance dirty worktree",
+			session: state.Session{
+				BlockedStage:  "pr_maintenance",
+				BlockedReason: state.BlockedReason{Kind: "dirty_worktree"},
+			},
+			want: true,
+		},
+		{
+			name: "conflict resolution dirty worktree detail",
+			session: state.Session{
+				BlockedStage:  "conflict_resolution",
+				BlockedReason: state.BlockedReason{Summary: "worktree is not clean before PR maintenance"},
+			},
+			want: true,
+		},
+		{
+			name: "maintenance provider auth",
+			session: state.Session{
+				BlockedStage:  "ci_remediation",
+				BlockedReason: state.BlockedReason{Kind: "provider_auth"},
+			},
+			want: false,
+		},
+		{
+			name: "non maintenance dirty worktree",
+			session: state.Session{
+				BlockedStage:  "issue_execution",
+				BlockedReason: state.BlockedReason{Kind: "dirty_worktree"},
+			},
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldAutoRecoverBlockedSession(tc.session); got != tc.want {
+				t.Fatalf("unexpected result: got %v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestScanOnceCleansUpBlockedSessionAfterDefaultInactivityTimeout(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
@@ -2975,6 +3031,125 @@ func TestScanOnceLeavesBlockedSessionVisibleWhenInactivityCleanupFails(t *testin
 	}
 	if sessions[0].Status != state.SessionStatusBlocked || sessions[0].CleanupError == "" || sessions[0].LastCleanupSource != "blocked_inactivity_timeout" {
 		t.Fatalf("expected failed inactivity cleanup to leave a visible blocked state: %#v", sessions[0])
+	}
+}
+
+func TestScanOnceAutoRecoversStaleBlockedMaintenanceSession(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 3, 12, 18, 0, 0, 0, time.UTC)
+	old := now.Add(-15 * time.Minute)
+	if err := os.Chtimes(worktreePath, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	startComment := ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Auto-Recovery In Progress",
+		Emoji:      "♻️",
+		Percent:    88,
+		ETAMinutes: 8,
+		Items: []string{
+			"The blocked `pr_maintenance` session on `vigilante/issue-1` stayed inactive longer than `10m0s`.",
+			"Vigilante is rebuilding the local worktree from the latest committed state of PR #31 on `vigilante/issue-1`.",
+			"Next step: resume maintenance on the existing PR branch without opening a replacement PR.",
+		},
+		Tagline: "Reset the footing, keep the climb.",
+	})
+	successComment := ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Recovered",
+		Emoji:      "🫡",
+		Percent:    95,
+		ETAMinutes: 3,
+		Items: []string{
+			"Vigilante auto-recovered the stale `dirty_worktree` block on `vigilante/issue-1` after `10m0s` of inactivity.",
+			"The local worktree was rebuilt from the latest committed state of PR #31 on the existing branch `vigilante/issue-1`.",
+			"Next step: `pr_maintenance` resumed without creating a replacement PR.",
+		},
+		Tagline: "Same branch, cleaner footing.",
+	})
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.clock = func() time.Time { return now }
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1/comments":                                                          "[]",
+			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
+			"gh issue comment --repo owner/repo 1 --body " + startComment:                                        "ok",
+			"git worktree prune":                                         "ok",
+			"git worktree remove --force " + worktreePath:                "ok",
+			"git ls-remote --exit-code --heads origin vigilante/issue-1": "abc123\trefs/heads/vigilante/issue-1",
+			"git fetch origin vigilante/issue-1:vigilante/issue-1":       "ok",
+			"git worktree list --porcelain":                              "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/main\n",
+			"git worktree add " + worktreePath + " vigilante/issue-1":    "ok",
+			"git fetch origin main":                                      "ok",
+			"git status --porcelain":                                     "",
+			"git rebase origin/main":                                     "Current branch vigilante/issue-1 is up to date.\n",
+			"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": `{"number":31,"title":"Test PR","body":"body","url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}]}`,
+			"gh issue comment --repo owner/repo 1 --body " + successComment:                                                                                          "ok",
+			"gh api repos/owner/repo/labels?per_page=100":                                                                                                            `[{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:queued"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/issues/1":                                                                                                                       `{"labels":[{"name":"vigilante:blocked"},{"name":"vigilante:needs-git-fix"}]}`,
+			"gh issue edit --repo owner/repo 1 --add-label vigilante:recovering --remove-label vigilante:blocked --remove-label vigilante:needs-git-fix":             "ok",
+			"gh issue edit --repo owner/repo 1 --add-label vigilante:awaiting-user-validation --remove-label vigilante:recovering":                                   "ok",
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:          repoPath,
+		Repo:              "owner/repo",
+		IssueNumber:       1,
+		IssueTitle:        "first",
+		IssueURL:          "https://github.com/owner/repo/issues/1",
+		Branch:            "vigilante/issue-1",
+		WorktreePath:      worktreePath,
+		Status:            state.SessionStatusBlocked,
+		PullRequestNumber: 31,
+		BlockedAt:         old.Format(time.RFC3339),
+		BlockedStage:      "pr_maintenance",
+		BlockedReason: state.BlockedReason{
+			Kind:      "dirty_worktree",
+			Operation: "git status --porcelain",
+			Summary:   "worktree is not clean before PR maintenance",
+			Detail:    "worktree is not clean before PR maintenance",
+		},
+		LastMaintenanceError: "worktree is not clean before PR maintenance",
+		UpdatedAt:            old.Format(time.RFC3339),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].Status != state.SessionStatusSuccess {
+		t.Fatalf("expected session to recover successfully: %#v", sessions[0])
+	}
+	if sessions[0].RecoveredAt == "" || sessions[0].BlockedStage != "" || sessions[0].BlockedReason.Kind != "" {
+		t.Fatalf("expected blocked state to be cleared after auto recovery: %#v", sessions[0])
+	}
+	if sessions[0].LastResumeSource != autoRecoverySource {
+		t.Fatalf("expected auto recovery source to be recorded: %#v", sessions[0])
 	}
 }
 

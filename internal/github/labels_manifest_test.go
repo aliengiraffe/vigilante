@@ -102,6 +102,7 @@ func TestIssueLabelManifestIncludesHumanReviewStates(t *testing.T) {
 	}
 
 	for _, name := range []string{
+		"vigilante:recovering",
 		"vigilante:ready-for-review",
 		"vigilante:awaiting-user-validation",
 		"vigilante:needs-human-input",
