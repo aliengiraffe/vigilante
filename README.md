@@ -91,6 +91,26 @@ Once a folder is registered, `vigilante` should:
 
 In the current implementation, that worker loop already covers repository onboarding, issue intake, isolated worktrees, provider orchestration, repo-aware execution skills, local session recovery, and part of the pull request maintenance path. CI/CD promotion and richer deployment control are planned next-stage capabilities.
 
+## Managed Repository Workflow
+
+The intended end-to-end workflow for a fully managed repository looks like this:
+
+```mermaid
+flowchart TD
+    A[Executable GitHub issue<br/>with clear behavioral detail]
+    B[Vigilante detects issue<br/>and checks eligibility]
+    C[Vigilante selects provider,<br/>skill set, branch, and worktree]
+    D[Coding agent executes in the<br/>assigned worktree and reports progress]
+    E[Agent pushes branch<br/>and opens pull request]
+    F[Vigilante monitors PR health,<br/>rebases, conflicts, and reruns validation]
+    G[CI and deployment workflows<br/>report status in GitHub]
+    H[Vigilante coordinates staging and<br/>production promotion by repo policy]
+    I[Merge completes, promotion succeeds,<br/>artifacts are cleaned up, audit trail remains]
+
+    A --> B --> C --> D --> E --> F --> G --> H --> I
+    G --> F
+```
+
 ## Telemetry
 
 Vigilante emits anonymous telemetry with two different purposes:
