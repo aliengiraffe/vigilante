@@ -81,7 +81,7 @@ func TestDesiredSessionLabels(t *testing.T) {
 			name:             "success ready for review",
 			session:          state.Session{Status: state.SessionStatusSuccess},
 			wantState:        labelReadyForReview,
-			wantIntervention: labelNeedsReview,
+			wantIntervention: "",
 		},
 		{
 			name:    "success awaiting validation",
@@ -169,7 +169,6 @@ func TestSyncIssueManagedLabelsProvisionMissingRepositoryLabels(t *testing.T) {
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:ready-for-review -f color=FBCA04 -f description=Implementation is complete enough for a human to review the resulting PR or branch.":               "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:awaiting-user-validation -f color=F9D0C4 -f description=Changes are ready for product or operator validation before the issue is considered done.": "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:done -f color=5319E7 -f description=Vigilante completed its work on the issue and no further automation is expected.":                              "ok",
-			"gh api --method POST repos/owner/repo/labels -f name=vigilante:needs-review -f color=D4C5F9 -f description=A human should review the implementation output before Vigilante continues or closes the loop.":        "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:needs-human-input -f color=F7C6C7 -f description=The agent is waiting on product, operator, or repository-owner guidance.":                         "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:needs-provider-fix -f color=E99695 -f description=Execution is blocked by provider auth, quota, or runtime setup issues.":                          "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:needs-git-fix -f color=C2E0C6 -f description=Execution is blocked by repository or git state that requires human repair.":                          "ok",

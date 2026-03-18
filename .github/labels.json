@@ -75,17 +75,6 @@
       ]
     },
     {
-      "name": "vigilante:needs-review",
-      "color": "D4C5F9",
-      "group": "intervention",
-      "behavior": "informational",
-      "applied_by": "vigilante",
-      "description": "A human should review the implementation output before Vigilante continues or closes the loop.",
-      "notes": [
-        "Can coexist with vigilante:ready-for-review or vigilante:blocked depending on the workflow stage."
-      ]
-    },
-    {
       "name": "vigilante:needs-human-input",
       "color": "F7C6C7",
       "group": "intervention",

@@ -104,7 +104,6 @@ func TestIssueLabelManifestIncludesHumanReviewStates(t *testing.T) {
 	for _, name := range []string{
 		"vigilante:ready-for-review",
 		"vigilante:awaiting-user-validation",
-		"vigilante:needs-review",
 		"vigilante:needs-human-input",
 	} {
 		label, ok := labels[name]
@@ -114,6 +113,10 @@ func TestIssueLabelManifestIncludesHumanReviewStates(t *testing.T) {
 		if label.Behavior != "informational" {
 			t.Fatalf("expected %q to stay informational, got %#v", name, label)
 		}
+	}
+
+	if _, ok := labels["vigilante:needs-review"]; ok {
+		t.Fatal("expected vigilante:needs-review to be absent from the canonical label manifest")
 	}
 }
 

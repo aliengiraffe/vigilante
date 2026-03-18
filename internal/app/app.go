@@ -2645,7 +2645,7 @@ func desiredSessionLabels(session state.Session, pr *ghcli.PullRequest) (string,
 		if pr != nil && shouldAwaitUserValidation(*pr) {
 			return labelAwaitingUserValidation, ""
 		}
-		return labelReadyForReview, labelNeedsReview
+		return labelReadyForReview, ""
 	default:
 		return "", ""
 	}
