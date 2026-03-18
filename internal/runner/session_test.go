@@ -296,7 +296,7 @@ func TestRunIssueSessionSuccessWithGeminiProvider(t *testing.T) {
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gemini --version": "gemini 1.7.0",
+			"gemini --version": "gemini 0.34.0",
 			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
 				Stage:      "Vigilante Session Start",
 				Emoji:      "🧢",

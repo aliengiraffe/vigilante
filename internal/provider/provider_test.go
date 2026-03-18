@@ -180,7 +180,7 @@ func TestValidateVersionOutputAcceptsSupportedVersions(t *testing.T) {
 		{name: "codex current supported 0.x", provider: DefaultID, output: "codex 0.114.0"},
 		{name: "codex", provider: DefaultID, output: "codex 1.2.3"},
 		{name: "claude 2.x", provider: ClaudeID, output: "Claude Code v2.1.3"},
-		{name: "gemini", provider: GeminiID, output: "gemini-cli 1.9.9"},
+		{name: "gemini current supported 0.x", provider: GeminiID, output: "gemini-cli 0.34.0"},
 	}
 
 	for _, tc := range cases {
@@ -253,7 +253,24 @@ func TestValidateVersionOutputRejectsMalformedVersionOutput(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected parse error")
 	}
-	for _, want := range []string{"could not parse gemini CLI version", "supported: >=1.0.0, <2.0.0"} {
+	for _, want := range []string{"could not parse gemini CLI version", "supported: >=0.34.0, <1.0.0"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected error to contain %q, got %q", want, err.Error())
+		}
+	}
+}
+
+func TestValidateVersionOutputRejectsTooOldGemini0Contract(t *testing.T) {
+	selectedProvider, err := Resolve(GeminiID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = ValidateVersionOutput(selectedProvider, "gemini-cli 0.33.1")
+	if err == nil {
+		t.Fatal("expected compatibility error")
+	}
+	for _, want := range []string{"gemini CLI version 0.33.1 is incompatible", "supported: >=0.34.0, <1.0.0"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("expected error to contain %q, got %q", want, err.Error())
 		}

@@ -510,7 +510,7 @@ func TestSetupWithGeminiCreatesGeminiSkillAssets(t *testing.T) {
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "gemini": "/usr/bin/gemini"},
 		Outputs: map[string]string{
-			"gemini --version": "gemini 1.7.0",
+			"gemini --version": "gemini 0.34.0",
 			"gh auth status":   "ok",
 		},
 	}
