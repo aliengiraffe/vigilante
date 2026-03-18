@@ -4,6 +4,12 @@
 
 # vigilante
 
+[![Release](https://img.shields.io/github/v/release/aliengiraffe/vigilante?display_name=tag)](https://github.com/aliengiraffe/vigilante/releases/latest)
+[![Go Report Card](https://goreportcard.com/badge/github.com/nicobistolfi/vigilante)](https://goreportcard.com/report/github.com/nicobistolfi/vigilante)
+[![Go Package Search](https://img.shields.io/badge/go-package%20search-00ADD8?logo=go&logoColor=white)](https://pkg.go.dev/search?q=github.com%2Fnicobistolfi%2Fvigilante)
+[![License](https://img.shields.io/github/license/aliengiraffe/vigilante)](https://github.com/aliengiraffe/vigilante/blob/main/LICENSE)
+[![Release Workflow](https://img.shields.io/github/actions/workflow/status/aliengiraffe/vigilante/release.yml?branch=main&label=release)](https://github.com/aliengiraffe/vigilante/actions/workflows/release.yml)
+
 `vigilante` is a GitHub-native control plane for autonomous software delivery. It watches repositories, selects executable issues, prepares isolated implementation environments, dispatches headless coding agents, keeps GitHub updated with progress, and maintains the delivery loop around pull requests.
 
 It is a Go CLI and background service that runs locally on top of the tools teams already use: `git`, `gh`, and a supported coding-agent CLI such as `codex`, `claude`, or `gemini`. The current target platforms are macOS and Ubuntu.
