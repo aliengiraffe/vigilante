@@ -308,7 +308,6 @@ func repoClassificationJSON(target state.WatchTarget) string {
 		len(classification.ProcessHints.WorkspaceManifestFiles) > 0 ||
 		len(classification.ProcessHints.MultiPackageRoots) > 0 ||
 		len(classification.ProcessHints.GradleSettingsFiles) > 0 ||
-		len(classification.ProcessHints.GradleSettingsFiles) > 0 ||
 		len(classification.ProcessHints.GradleRootBuildFiles) > 0 ||
 		len(classification.ProcessHints.BazelRepoMarkers) > 0 ||
 		len(classification.ProcessHints.BazelPackageRoots) > 0 {
