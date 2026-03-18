@@ -444,10 +444,10 @@ func TestBuildIssuePreflightPromptForReusedRemoteBranch(t *testing.T) {
 
 func TestBuildConflictResolutionPrompt(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
-	session := state.Session{IssueNumber: 12, IssueTitle: "Fix bug", IssueURL: "https://example.com/issues/12", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12"}
-	pr := ghcli.PullRequest{Number: 88, URL: "https://example.com/pull/88"}
+	session := state.Session{IssueNumber: 12, IssueTitle: "Fix bug", IssueBody: "Preserve the original validation behavior.", IssueURL: "https://example.com/issues/12", BaseBranch: "main", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", BranchDiffSummary: "Keep the error-state form inputs intact."}
+	pr := ghcli.PullRequest{Number: 88, URL: "https://example.com/pull/88", Title: "Fix bug", Body: "This PR keeps the original UX behavior.", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"}
 	prompt := BuildConflictResolutionPrompt(target, session, pr)
-	for _, text := range []string{"Use the `vigilante-conflict-resolution` skill", "Pull Request: #88", "Base branch: origin/main", "go test ./...", "merge-ready state"} {
+	for _, text := range []string{"Use the `vigilante-conflict-resolution` skill", "Issue specification: Preserve the original validation behavior.", "Pull Request title: Fix bug", "GitHub mergeability: mergeable=CONFLICTING mergeStateStatus=DIRTY", "Work through the rebase commit by commit.", "go test ./...", "Existing branch summary: Keep the error-state form inputs intact."} {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q: %s", text, prompt)
 		}

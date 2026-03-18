@@ -183,7 +183,7 @@ func TestRunConflictResolutionSessionFailureCommentsOnIssue(t *testing.T) {
 			}): "ok",
 		},
 		Errors: map[string]error{
-			"codex exec --cd /tmp/worktree --dangerously-bypass-approvals-and-sandbox Use the `vigilante-conflict-resolution` skill for this task.\nRepository: owner/repo\nLocal repository path: /tmp/repo\nIssue: #7 - Demo\nIssue URL: https://github.com/owner/repo/issues/7\nPull Request: #17\nPull Request URL: https://github.com/owner/repo/pull/17\nWorktree path: /tmp/worktree\nBranch: vigilante/issue-7\nBase branch: origin/main\nResolve the current rebase conflicts in the assigned worktree, use `gh issue comment` for progress and failures, rerun `go test ./...` after conflict resolution if the rebase succeeds, and push the updated branch when finished.\nKeep the changes minimal and focused on getting the PR back to a merge-ready state.": errors.New("codex exec [--cd /tmp/worktree --dangerously-bypass-approvals-and-sandbox prompt]: exit status 1"),
+			conflictResolutionPromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, IssueTitle: "Demo", IssueBody: "Preserve the requested behavior.", IssueURL: "https://github.com/owner/repo/issues/7", BaseBranch: "main", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7"}, ghcli.PullRequest{Number: 17, Title: "Demo PR", Body: "PR body", URL: "https://github.com/owner/repo/pull/17", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"}): errors.New("codex exec [--cd /tmp/worktree --dangerously-bypass-approvals-and-sandbox prompt]: exit status 1"),
 		},
 	}
 	env := &environment.Environment{OS: "darwin", Runner: runner}
@@ -196,9 +196,9 @@ func TestRunConflictResolutionSessionFailureCommentsOnIssue(t *testing.T) {
 		context.Background(),
 		env,
 		store,
-		state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"},
-		state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, IssueTitle: "Demo", IssueURL: "https://github.com/owner/repo/issues/7", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7"},
-		ghcli.PullRequest{Number: 17, URL: "https://github.com/owner/repo/pull/17"},
+		state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"},
+		state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, IssueTitle: "Demo", IssueBody: "Preserve the requested behavior.", IssueURL: "https://github.com/owner/repo/issues/7", BaseBranch: "main", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7"},
+		ghcli.PullRequest{Number: 17, Title: "Demo PR", Body: "PR body", URL: "https://github.com/owner/repo/pull/17", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"},
 	)
 	if err == nil {
 		t.Fatal("expected error")
@@ -668,6 +668,14 @@ func issuePromptCommandForSession(worktreePath string, repo string, repoPath str
 		state.WatchTarget{Path: repoPath, Repo: repo},
 		ghcli.Issue{Number: issueNumber, Title: title, URL: issueURL},
 		session,
+	))
+}
+
+func conflictResolutionPromptCommand(worktreePath string, repo string, repoPath string, session state.Session, pr ghcli.PullRequest) string {
+	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildConflictResolutionPrompt(
+		state.WatchTarget{Path: repoPath, Repo: repo, Branch: session.BaseBranch},
+		session,
+		pr,
 	))
 }
 
