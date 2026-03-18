@@ -26,7 +26,7 @@ type compatibilityContract struct {
 var compatibilityContracts = map[string]compatibilityContract{
 	DefaultID: {minInclusive: "0.114.0", maxExclusive: "2.0.0"},
 	ClaudeID:  {minInclusive: "2.0.0", maxExclusive: "3.0.0"},
-	GeminiID:  {minInclusive: "1.0.0", maxExclusive: "2.0.0"},
+	GeminiID:  {minInclusive: "0.34.0", maxExclusive: "1.0.0"},
 }
 
 func ValidateRuntimeCompatibility(ctx context.Context, runner environment.Runner, selectedProvider Provider) error {
