@@ -14,6 +14,8 @@
 
 It is a Go CLI and background service that runs locally on top of the tools teams already use: `git`, `gh`, and a supported coding-agent CLI such as `codex`, `claude`, or `gemini`. The current target platforms are macOS and Ubuntu.
 
+Want to see that workflow on this repository? Browse [Vigilante's closed issues](https://github.com/aliengiraffe/vigilante/issues?q=is%3Aissue%20state%3Aclosed) for concrete examples of the project operating on its own codebase and improving itself over time.
+
 ## What Vigilante Is
 
 `vigilante` is the orchestration layer around coding agents. It is responsible for:
