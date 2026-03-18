@@ -121,7 +121,7 @@ func TestSyncIssueManagedLabelsQueued(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/labels?per_page=100":                                                     `[{"name":"bug"},{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/labels?per_page=100":                                                     `[{"name":"bug"},{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 			"gh api repos/owner/repo/issues/7":                                                                `{"labels":[{"name":"bug"},{"name":"vigilante:running"}]}`,
 			"gh issue edit --repo owner/repo 7 --add-label vigilante:queued --remove-label vigilante:running": "ok",
 		},
@@ -138,7 +138,7 @@ func TestSyncSessionIssueLabelsUsesPullRequestReviewState(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 			"gh pr view --repo owner/repo 17 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": `{"number":17,"title":"Demo PR","body":"PR body","url":"https://github.com/owner/repo/pull/17","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}]}`,
 			"gh api repos/owner/repo/issues/7": `{"labels":[{"name":"vigilante:ready-for-review"},{"name":"vigilante:needs-review"}]}`,
 			"gh issue edit --repo owner/repo 7 --add-label vigilante:awaiting-user-validation --remove-label vigilante:needs-review --remove-label vigilante:ready-for-review": "ok",
@@ -177,6 +177,7 @@ func TestSyncIssueManagedLabelsProvisionMissingRepositoryLabels(t *testing.T) {
 			"gh api --method POST repos/owner/repo/labels -f name=claude -f color=0052CC -f description=Routes the issue to the Claude provider for execution.":                                                                "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=gemini -f color=006B75 -f description=Routes the issue to the Gemini provider for execution.":                                                                "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:resume -f color=C5DEF5 -f description=Requests that Vigilante resume a blocked session.":                                                           "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=vigilante:automerge -f color=0E8A16 -f description=Requests automatic squash merge once required checks and merge requirements are satisfied.":               "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=resume -f color=C5DEF5 -f description=Legacy compatibility alias for vigilante:resume.":                                                                      "ok",
 			"gh api repos/owner/repo/issues/7":                               `{"labels":[{"name":"bug"}]}`,
 			"gh issue edit --repo owner/repo 7 --add-label vigilante:queued": "ok",
@@ -3973,6 +3974,59 @@ func TestScanOnceAutoSquashMergesLabeledPullRequestAfterChecksPass(t *testing.T)
 	}
 	if got := stdout.String(); !strings.Contains(got, "repo: owner/repo no eligible issues (0 open)") {
 		t.Fatalf("unexpected output: %s", got)
+	}
+}
+
+func TestScanOnceAutoSquashMergesPullRequestWithVigilanteAutomergeLabel(t *testing.T) {
+	app, _ := newPullRequestMaintenanceTestApp(t, map[string]string{
+		"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
+		"git fetch origin main":  "ok",
+		"git status --porcelain": "",
+		"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
+		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": automergePRDetailsJSON("vigilante:automerge", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
+		"gh pr merge --repo owner/repo 31 --squash --delete-branch": "ok",
+		"gh api user --jq .login":                                   "nicobistolfi\n",
+		"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+	})
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.waitForSessions()
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].LastMaintenanceError != "" {
+		t.Fatalf("unexpected maintenance wait state: %#v", sessions[0])
+	}
+}
+
+func TestScanOnceAutoSquashMergesWhenIssueHasVigilanteAutomergeLabel(t *testing.T) {
+	app, _ := newPullRequestMaintenanceTestApp(t, map[string]string{
+		"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
+		"git fetch origin main":  "ok",
+		"git status --porcelain": "",
+		"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
+		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": automergePRDetailsJSON("", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
+		"gh api repos/owner/repo/issues/1":                          `{"title":"first","body":"Keep the original form state behavior intact.","html_url":"https://github.com/owner/repo/issues/1","labels":[{"name":"vigilante:automerge"}]}`,
+		"gh pr merge --repo owner/repo 31 --squash --delete-branch": "ok",
+		"gh api user --jq .login":                                   "nicobistolfi\n",
+		"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+	})
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.waitForSessions()
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].LastMaintenanceError != "" {
+		t.Fatalf("unexpected maintenance wait state: %#v", sessions[0])
 	}
 }
 
