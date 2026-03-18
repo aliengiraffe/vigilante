@@ -646,8 +646,27 @@ func TestVigilanteCreateIssueSkillCoversIssueTypeClassification(t *testing.T) {
 	for _, snippet := range []string{
 		"classified as a `feature`, `bug`, or `task` before the draft is finalized",
 		"Decide whether the request is best treated as a `feature`, `bug`, or `task`.",
-		"If the request is ambiguous, infer the most likely type and state briefly that the type was inferred.",
-		"Issue Type: <feature | bug | task>[ (inferred)]",
+		"Map Vigilante's internal classifications explicitly to GitHub's native issue types: `feature` -> `Feature`, `bug` -> `Bug`, `task` -> `Task`.",
+		"Treat the native GitHub issue type as the source of truth whenever the repository supports it.",
+	} {
+		if !strings.Contains(text, snippet) {
+			t.Fatalf("skill missing %q", snippet)
+		}
+	}
+}
+
+func TestVigilanteCreateIssueSkillDocumentsNativeIssueTypeFallback(t *testing.T) {
+	body, err := os.ReadFile(repoSkillPath(VigilanteCreateIssue))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := string(body)
+	for _, snippet := range []string{
+		"If the repository rejects the native `type` field because issue types are unavailable or unsupported, retry issue creation without the native type and make the fallback explicit in the final response.",
+		"Do not use labels or issue-body text as the primary type representation when the native issue type is set successfully.",
+		"Only include an `Issue Type: ...` line in the issue body when returning a draft without creating the issue, or when native issue types are unavailable and the fallback needs to preserve the classification explicitly.",
+		"the native GitHub issue type is used when the issue is created in a repository that supports it",
 	} {
 		if !strings.Contains(text, snippet) {
 			t.Fatalf("skill missing %q", snippet)
