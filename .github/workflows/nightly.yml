@@ -43,7 +43,7 @@ jobs:
       - name: Validate GoReleaser config
         env:
           GORELEASER_KEY: ${{ secrets.GORELEASER_KEY }}
-        run: goreleaser check
+        run: goreleaser check --config .goreleaser.nightly.yml
 
       - name: Build and publish rolling nightly release
         env:
@@ -52,4 +52,4 @@ jobs:
           OTEL_ENDPOINT: ${{ secrets.OTEL_ENDPOINT }}
           OTEL_TOKEN: ${{ secrets.OTEL_TOKEN }}
           OTEL_URL_PATH: ${{ secrets.OTEL_URL_PATH }}
-        run: goreleaser release --nightly --clean
+        run: goreleaser release --config .goreleaser.nightly.yml --nightly --clean
