@@ -442,6 +442,14 @@ The release workflow requires a GitHub App that can write to the tap repository:
 
 During a tagged release, GitHub Actions exchanges those secrets for a short-lived token scoped to `aliengiraffe/homebrew-spaceship` and passes it to GoReleaser as `HOMEBREW_GITHUB_API_TOKEN`.
 
+Pushes to `main` also run a separate nightly workflow that uses `goreleaser release --nightly` to publish a single rolling pre-release tagged `nightly`. Nightly artifacts use the version pattern `<next-patch>-nightly-<shortsha>` so each merge produces a distinguishable build while keeping a stable release identity.
+
+Nightly publication requires GoReleaser Pro to be configured in the `main` GitHub Actions environment:
+
+- `GORELEASER_KEY`: the GoReleaser Pro license key, or an exported offline license blob
+
+The nightly workflow fails immediately with a clear prerequisite error when `GORELEASER_KEY` is missing. GoReleaser also skips Homebrew cask publication when `--nightly` is used, so nightly builds do not update `aliengiraffe/homebrew-spaceship` and the Homebrew channel remains tied to tagged stable releases.
+
 Recommended release flow:
 
 ```sh
