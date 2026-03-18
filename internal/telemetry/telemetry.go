@@ -243,6 +243,13 @@ func CommandName(args []string) string {
 	if isHelpToken(args[0]) || strings.HasPrefix(args[0], "-") {
 		return "help"
 	}
+	if isProxyTool(args[0]) {
+		commandPath := proxyCommandPath(args[0], args[1:])
+		if commandPath == "" {
+			return args[0]
+		}
+		return args[0] + " " + commandPath
+	}
 
 	command := args[0]
 	if len(args) > 1 && expandsCommandGroup(command) && !strings.HasPrefix(args[1], "-") && !isHelpToken(args[1]) {
@@ -525,11 +532,115 @@ func commandFeatureArea(commandGroup string) string {
 		return "cleanup"
 	case "resume", "redispatch":
 		return "issue_session"
+	case "gh", "git", "docker":
+		return "tool_proxy"
 	case "completion", "help", "root":
 		return "operator_cli"
 	default:
 		return "operator_cli"
 	}
+}
+
+func isProxyTool(command string) bool {
+	switch strings.TrimSpace(command) {
+	case "gh", "git", "docker":
+		return true
+	default:
+		return false
+	}
+}
+
+func proxyCommandPath(tool string, args []string) string {
+	command, rest := firstProxyCommandToken(tool, args)
+	if command == "" {
+		return ""
+	}
+	if command == "help" {
+		return command
+	}
+	if subcommand, ok := nextProxySubcommand(tool, command, rest); ok {
+		return command + " " + subcommand
+	}
+	return command
+}
+
+func firstProxyCommandToken(tool string, args []string) (string, []string) {
+	for i := 0; i < len(args); i++ {
+		token := strings.TrimSpace(args[i])
+		if token == "" {
+			continue
+		}
+		if isHelpToken(token) {
+			return "help", nil
+		}
+		if strings.HasPrefix(token, "-") {
+			if proxyFlagTakesValue(tool, token) && i+1 < len(args) && !strings.HasPrefix(strings.TrimSpace(args[i+1]), "-") {
+				i++
+			}
+			continue
+		}
+		return token, args[i+1:]
+	}
+	return "", nil
+}
+
+func nextProxySubcommand(tool string, command string, args []string) (string, bool) {
+	if !proxyCommandExpands(tool, command) {
+		return "", false
+	}
+	for _, raw := range args {
+		token := strings.TrimSpace(raw)
+		if token == "" || strings.HasPrefix(token, "-") {
+			continue
+		}
+		if isHelpToken(token) {
+			return "help", true
+		}
+		return token, true
+	}
+	return "", false
+}
+
+func proxyCommandExpands(tool string, command string) bool {
+	switch tool {
+	case "gh":
+		switch command {
+		case "alias", "auth", "cache", "codespace", "config", "extension", "gist", "gpg-key", "issue", "label", "org", "pr", "project", "release", "repo", "ruleset", "run", "search", "secret", "ssh-key", "variable", "workflow":
+			return true
+		}
+	case "git":
+		switch command {
+		case "remote", "stash", "submodule", "worktree":
+			return true
+		}
+	case "docker":
+		return command == "compose"
+	}
+	return false
+}
+
+func proxyFlagTakesValue(tool string, flag string) bool {
+	if strings.Contains(flag, "=") {
+		return false
+	}
+	switch tool {
+	case "gh":
+		switch flag {
+		case "-R", "--repo", "--hostname":
+			return true
+		}
+	case "git":
+		switch flag {
+		case "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--super-prefix", "--exec-path", "--config-env":
+			return true
+		}
+	case "docker":
+		switch flag {
+		case "-c", "--config", "-H", "--host", "--context", "--log-level":
+			return true
+		}
+	}
+	return false
 }
 
 func commandResult(exitCode int) string {

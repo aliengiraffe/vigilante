@@ -142,6 +142,10 @@ func TestCommandName(t *testing.T) {
 		{name: "simple", args: []string{"watch", "/tmp/repo"}, want: "watch"},
 		{name: "grouped", args: []string{"daemon", "run", "--once"}, want: "daemon run"},
 		{name: "grouped with flag", args: []string{"service", "--help"}, want: "service"},
+		{name: "gh proxy sanitizes positional args", args: []string{"gh", "repo", "view", "owner/repo"}, want: "gh repo view"},
+		{name: "gh proxy keeps api path bounded", args: []string{"gh", "api", "repos/owner/repo/issues/1"}, want: "gh api"},
+		{name: "git proxy skips global flag values", args: []string{"git", "-C", "/tmp/repo", "status", "--short"}, want: "git status"},
+		{name: "docker proxy records compose path", args: []string{"docker", "--context", "prod", "compose", "up", "-d"}, want: "docker compose up"},
 	}
 
 	for _, tc := range cases {
@@ -152,6 +156,14 @@ func TestCommandName(t *testing.T) {
 				t.Fatalf("CommandName(%v) = %q, want %q", tc.args, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestCommandFeatureAreaUsesToolProxyForSupportedProxyCommands(t *testing.T) {
+	t.Parallel()
+
+	if got, want := commandFeatureArea(commandGroup(CommandName([]string{"gh", "repo", "view", "owner/repo"}))), "tool_proxy"; got != want {
+		t.Fatalf("feature area = %q, want %q", got, want)
 	}
 }
 

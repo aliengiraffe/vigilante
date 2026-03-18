@@ -107,6 +107,7 @@ func TestRunSupportsTopLevelHelpFlags(t *testing.T) {
 				"vigilante status",
 				"vigilante service restart",
 				"vigilante completion <bash|fish|zsh>",
+				"vigilante <gh|git|docker> ...",
 				`Use "vigilante <command> --help" for command-specific usage.`,
 			} {
 				if !strings.Contains(stdout.String(), want) {
@@ -114,6 +115,53 @@ func TestRunSupportsTopLevelHelpFlags(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRunProxiesSupportedToolCommands(t *testing.T) {
+	app := New()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = &stderr
+	var gotName string
+	var gotArgs []string
+	app.proxyExec = func(_ context.Context, _ io.Reader, out io.Writer, errOut io.Writer, name string, args ...string) (int, error) {
+		gotName = name
+		gotArgs = append([]string(nil), args...)
+		fmt.Fprint(out, "proxied stdout")
+		fmt.Fprint(errOut, "proxied stderr")
+		return 0, nil
+	}
+
+	exitCode := app.Run(context.Background(), []string{"gh", "repo", "view", "owner/repo"})
+	if exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d", exitCode)
+	}
+	if gotName != "gh" {
+		t.Fatalf("proxy tool = %q, want %q", gotName, "gh")
+	}
+	if got, want := strings.Join(gotArgs, " "), "repo view owner/repo"; got != want {
+		t.Fatalf("proxy args = %q, want %q", got, want)
+	}
+	if got, want := stdout.String(), "proxied stdout"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if got, want := stderr.String(), "proxied stderr"; got != want {
+		t.Fatalf("stderr = %q, want %q", got, want)
+	}
+}
+
+func TestRunReturnsUnderlyingProxyExitCode(t *testing.T) {
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.proxyExec = func(context.Context, io.Reader, io.Writer, io.Writer, string, ...string) (int, error) {
+		return 17, nil
+	}
+
+	if got := app.Run(context.Background(), []string{"git", "status"}); got != 17 {
+		t.Fatalf("Run() = %d, want %d", got, 17)
 	}
 }
 

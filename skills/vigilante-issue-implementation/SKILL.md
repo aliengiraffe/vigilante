@@ -28,11 +28,11 @@ Require these inputs from Vigilante:
 - If repository instructions conflict, follow the more specific instruction.
 
 2. Announce session start on GitHub
-- Post a comment on the issue as soon as work begins using `gh issue comment`.
+- Post a comment on the issue as soon as work begins using `vigilante gh issue comment`.
 - Include that Vigilante launched the session, the working branch, and that implementation is in progress.
 
 3. Post an implementation plan early
-- After inspecting the issue and repository constraints, post a concise implementation plan to the issue using `gh issue comment`.
+- After inspecting the issue and repository constraints, post a concise implementation plan to the issue using `vigilante gh issue comment`.
 - The plan comment should describe the intended development steps before substantial code changes begin.
 - Keep the plan concrete and short so readers can understand what will happen next.
 
@@ -54,7 +54,7 @@ Service dependencies:
 
 6. Commit and push the branch
 - Commit only issue-relevant changes in the assigned branch.
-- Push the assigned branch to the remote.
+- Push the assigned branch to the remote with `vigilante git push`.
 - Do not leave completed implementation work only in the local worktree.
 
 7. Open a pull request
@@ -64,7 +64,7 @@ Service dependencies:
 - Include concise validation notes in the PR description.
 
 8. Post progress comments at meaningful milestones
-- Use `gh issue comment` for progress updates.
+- Use `vigilante gh issue comment` for progress updates.
 - Comment when investigation is complete and implementation starts.
 - Comment when major milestones are reached, such as a core fix landing or tests passing.
 - Comment when the branch has been pushed and the PR has been opened.
@@ -72,7 +72,7 @@ Service dependencies:
 - Do not spam the issue with low-signal updates.
 
 9. Handle failures and blockers explicitly
-- If tool setup fails, validation fails, or the issue is blocked, comment on the issue with the concrete problem using `gh issue comment`.
+- If tool setup fails, validation fails, or the issue is blocked, comment on the issue with the concrete problem using `vigilante gh issue comment`.
 - Include enough detail for a human maintainer to understand the current state and next step.
 - If work cannot proceed safely, stop and report the blocker instead of guessing.
 
@@ -83,7 +83,7 @@ Service dependencies:
 - If the task failed, summarize the failure clearly in the issue comment.
 
 ## GitHub Commenting Rules
-- Use `gh issue comment` for all issue updates.
+- Use `vigilante gh issue comment` for all issue updates.
 - Always comment when the session starts.
 - For the coding-agent start comment, use a distinct launch title such as `## 🕹️ Coding Agent Launched: Codex` instead of a generic `Session Start` header.
 - Always add a short implementation plan comment before substantial coding work begins.
@@ -117,5 +117,5 @@ When using this skill, the agent should leave:
 - code changes in the assigned worktree
 - a pushed branch containing those changes
 - an opened pull request for those changes
-- a clear issue comment trail produced through `gh issue comment`
+- a clear issue comment trail produced through `vigilante gh issue comment`
 - accurate success or failure reporting

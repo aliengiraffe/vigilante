@@ -54,8 +54,8 @@ Produce a GitHub issue that is:
 - Mention the key regressions or failure modes that must be prevented.
 
 7. Create the GitHub issue by default
-- When the repository is known and the user did not explicitly ask for draft-only output, use `gh issue create` to open the issue.
-- Prefer `gh api repos/{owner}/{repo}/issues` over `gh issue create` when opening the final issue so Vigilante can set GitHub's native issue type with the request body `type` field.
+- When the repository is known and the user did not explicitly ask for draft-only output, use `vigilante gh issue create` to open the issue.
+- Prefer `vigilante gh api repos/{owner}/{repo}/issues` over `vigilante gh issue create` when opening the final issue so Vigilante can set GitHub's native issue type with the request body `type` field.
 - Map Vigilante's internal classifications explicitly to GitHub's native issue types: `feature` -> `Feature`, `bug` -> `Bug`, `task` -> `Task`.
 - Treat the native GitHub issue type as the source of truth whenever the repository supports it.
 - Use the polished Markdown body as the issue content instead of stopping at the draft.

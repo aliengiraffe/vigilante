@@ -26,11 +26,11 @@ Require or infer these inputs before acting:
 ## Detection Order
 1. Search the repository for native service-management workflows first.
 - Check `README*`, `docs/`, `AGENTS.md`, `Taskfile*`, `Makefile*`, package scripts, and repo scripts for setup or startup commands.
-- Check for repository-owned `docker compose` or `docker-compose` files before generating anything new.
+- Check for repository-owned `vigilante docker compose` or `docker-compose` flows before generating anything new.
 - Prefer commands the repository already documents for development or test setup.
 
 2. Validate the native option before using it.
-- Confirm required tools exist, such as `docker`, `docker compose`, `make`, `task`, `npm`, `pnpm`, `yarn`, or project scripts.
+- Confirm required tools exist, such as `vigilante docker`, `vigilante docker compose`, `make`, `task`, `npm`, `pnpm`, `yarn`, or project scripts.
 - If a documented path is incomplete or obviously stale, say so and continue to the next viable option.
 
 3. Fall back only when necessary.

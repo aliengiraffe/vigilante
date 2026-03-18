@@ -25,11 +25,11 @@ Implement one GitHub issue from Vigilante dispatch through validated code change
 - If repository instructions conflict, follow the more specific instruction.
 
 2. Announce session start on GitHub
-- Post a comment on the issue as soon as work begins using `gh issue comment`.
+- Post a comment on the issue as soon as work begins using `vigilante gh issue comment`.
 - Include that Vigilante launched the session, the working branch, and that implementation is in progress.
 
 3. Post an implementation plan early
-- After inspecting the issue and repository constraints, post a concise implementation plan to the issue using `gh issue comment`.
+- After inspecting the issue and repository constraints, post a concise implementation plan to the issue using `vigilante gh issue comment`.
 - The plan comment should name the likely Rush package or app scope when it is already clear, or state that scope detection is the next step.
 
 4. Implement inside the assigned worktree only
@@ -50,5 +50,5 @@ Implement one GitHub issue from Vigilante dispatch through validated code change
 - Open a pull request targeting the repository default branch unless repository instructions say otherwise.
 
 7. Report progress and failures clearly
-- Use `gh issue comment` for progress updates, milestone updates, PR creation, and execution failures.
+- Use `vigilante gh issue comment` for progress updates, milestone updates, PR creation, and execution failures.
 - Keep comments concise, factual, and tied to real progress.

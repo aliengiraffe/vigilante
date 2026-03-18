@@ -175,7 +175,7 @@ func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue 
 		fmt.Sprintf("Issue URL: %s", issue.URL),
 		fmt.Sprintf("Worktree path: %s", session.WorktreePath),
 		fmt.Sprintf("Branch: %s", session.Branch),
-		"Use `gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch, open a pull request, and report any execution failure back to the issue.",
+		"Use `vigilante gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch with `vigilante git push`, open a pull request with `vigilante gh pr create`, and report any execution failure back to the issue.",
 		fmt.Sprintf("When you open the pull request, the final PR body must include `Closes #%d` even if you write a custom summary or the summary is otherwise minimal.", issue.Number),
 		fmt.Sprintf("For the coding-agent start comment, use `## 🕹️ Coding Agent Launched: %s` instead of a generic session-start title.", displayProviderName(session.Provider)),
 		"Use the same GitHub comment structure for every non-terminal milestone comment: a short header with the current stage and optional emoji, a 10-cell progress bar with percentage, an `ETA: ~N minutes` line, 1-3 concise bullets covering what just happened and what is next, and an optional short playful quote or tagline.",
@@ -197,7 +197,7 @@ func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue 
 		lines = append(lines,
 			fmt.Sprintf("Detected monorepo stack: %s", normalizedMonorepoStack(target)),
 			fmt.Sprintf("Monorepo execution context JSON: %s", monorepoExecutionContextJSON(target, selectedSkill)),
-			fmt.Sprintf("When local services are required, use the `%s` skill instead of inventing ad hoc compose logic.", DockerComposeLaunch),
+			fmt.Sprintf("When local services are required, use the `%s` skill instead of inventing ad hoc `vigilante docker compose` logic.", DockerComposeLaunch),
 		)
 	}
 	return strings.Join(lines, "\n")
@@ -450,7 +450,7 @@ func BuildConflictResolutionPromptForRuntime(runtime string, target state.WatchT
 		"Conflict-resolution workflow: rebase the branch onto the latest base branch if that has not already started; if a rebase is already in progress, continue it from the current stopped commit.",
 		"Work through the rebase commit by commit. Preserve the meaning of each existing issue-branch commit and keep the original issue specification authoritative.",
 		"Do not silently discard commits or issue-specific behavior just to get a clean merge. Prefer the smallest safe conflict fix.",
-		"Use `gh issue comment` for progress and failures, rerun `go test ./...` after conflict resolution succeeds, and push the updated branch when finished.",
+		"Use `vigilante gh issue comment` for progress and failures, rerun `go test ./...` after conflict resolution succeeds, and push the updated branch with `vigilante git push` when finished.",
 		"If you cannot preserve the issue intent safely, leave a concise GitHub blocker comment and exit with a non-zero status.",
 	)
 	if strings.TrimSpace(session.BranchDiffSummary) != "" {
@@ -493,7 +493,7 @@ func BuildCIRemediationPromptForRuntime(runtime string, target state.WatchTarget
 	}
 	lines = append(lines,
 		"Investigate the failing CI checks, reproduce the problem locally when practical, and make the minimal code or configuration fix needed to get the PR green again.",
-		"Use `gh issue comment` for progress updates and blockers, push any successful fix to the existing PR branch, and do not open a new pull request.",
+		"Use `vigilante gh issue comment` for progress updates and blockers, push any successful fix to the existing PR branch with `vigilante git push`, and do not open a new pull request.",
 		"If GitHub exposes a failing check summary or log URL during your investigation, use it. At minimum, work from the failing check identifiers listed above.",
 		"If you cannot fix the failure safely, leave a concise GitHub comment explaining the blocker and exit with a non-zero status so Vigilante can stop and hand off to a human.",
 		"Keep the changes minimal and focused on restoring CI for the existing pull request.",
