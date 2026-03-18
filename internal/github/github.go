@@ -319,6 +319,23 @@ func CreateRepositoryLabel(ctx context.Context, runner environment.Runner, repo 
 }
 
 func SyncIssueLabels(ctx context.Context, runner environment.Runner, repo string, number int, current []Label, desired []string, managed []string) error {
+	toAdd, toRemove := PlanIssueLabelSync(current, desired, managed)
+	if len(toAdd) == 0 && len(toRemove) == 0 {
+		return nil
+	}
+
+	args := []string{"issue", "edit", "--repo", repo, fmt.Sprintf("%d", number)}
+	for _, label := range toAdd {
+		args = append(args, "--add-label", label)
+	}
+	for _, label := range toRemove {
+		args = append(args, "--remove-label", label)
+	}
+	_, err := runner.Run(ctx, "", "gh", args...)
+	return err
+}
+
+func PlanIssueLabelSync(current []Label, desired []string, managed []string) ([]string, []string) {
 	managedSet := make(map[string]struct{}, len(managed))
 	for _, label := range managed {
 		label = strings.TrimSpace(label)
@@ -346,7 +363,7 @@ func SyncIssueLabels(ctx context.Context, runner environment.Runner, repo string
 		desiredSet[label] = struct{}{}
 	}
 
-	var toAdd []string
+	toAdd := make([]string, 0, len(desiredSet))
 	for label := range desiredSet {
 		if _, ok := currentSet[label]; ok {
 			continue
@@ -354,7 +371,7 @@ func SyncIssueLabels(ctx context.Context, runner environment.Runner, repo string
 		toAdd = append(toAdd, label)
 	}
 
-	var toRemove []string
+	toRemove := make([]string, 0, len(managedSet))
 	for label := range managedSet {
 		if _, ok := currentSet[label]; !ok {
 			continue
@@ -367,19 +384,7 @@ func SyncIssueLabels(ctx context.Context, runner environment.Runner, repo string
 
 	sort.Strings(toAdd)
 	sort.Strings(toRemove)
-	if len(toAdd) == 0 && len(toRemove) == 0 {
-		return nil
-	}
-
-	args := []string{"issue", "edit", "--repo", repo, fmt.Sprintf("%d", number)}
-	for _, label := range toAdd {
-		args = append(args, "--add-label", label)
-	}
-	for _, label := range toRemove {
-		args = append(args, "--remove-label", label)
-	}
-	_, err := runner.Run(ctx, "", "gh", args...)
-	return err
+	return toAdd, toRemove
 }
 
 func HasAnyLabel(labels []Label, wanted ...string) bool {

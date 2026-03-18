@@ -48,6 +48,9 @@ func run() int {
 	if err != nil || manager == nil {
 		manager = &telemetry.Manager{}
 	}
+	if telemetryManager, ok := manager.(*telemetry.Manager); ok {
+		telemetry.SetDefault(telemetryManager)
+	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), telemetry.ShutdownTimeout())
 	defer cancel()
 	defer func() {

@@ -58,6 +58,11 @@ type Manager struct {
 	anonID    string
 }
 
+var (
+	defaultManagerMu sync.RWMutex
+	defaultManager   *Manager
+)
+
 type localState struct {
 	AnonymousID string `json:"anonymous_id"`
 }
@@ -395,6 +400,12 @@ func disabledManager() *Manager {
 	return &Manager{}
 }
 
+func SetDefault(manager *Manager) {
+	defaultManagerMu.Lock()
+	defer defaultManagerMu.Unlock()
+	defaultManager = manager
+}
+
 func ShutdownTimeout() time.Duration {
 	return shutdownTimeout
 }
@@ -422,6 +433,32 @@ func (m *Manager) enqueueAnalytics(event analyticsEvent) {
 	m.events = append(m.events, event)
 }
 
+func CaptureWorkflowEvent(event string, properties map[string]any) {
+	defaultManagerMu.RLock()
+	manager := defaultManager
+	defaultManagerMu.RUnlock()
+	if manager == nil {
+		return
+	}
+	manager.CaptureWorkflowEvent(event, properties)
+}
+
+func (m *Manager) CaptureWorkflowEvent(event string, properties map[string]any) {
+	if m == nil || strings.TrimSpace(event) == "" {
+		return
+	}
+
+	startedAt := time.Now().UTC()
+	m.enqueueAnalytics(analyticsEvent{
+		Type:       "capture",
+		UUID:       uuid.NewString(),
+		Timestamp:  startedAt,
+		DistinctID: m.anonID,
+		Event:      strings.TrimSpace(event),
+		Properties: m.workflowProperties(properties),
+	})
+}
+
 func (m *Manager) commandProperties(commandName string) map[string]any {
 	commandGroup := commandGroup(commandName)
 	return map[string]any{
@@ -445,6 +482,25 @@ func (m *Manager) commandCompletedProperties(commandName string, exitCode int, d
 	properties["result"] = commandResult(exitCode)
 	properties["success"] = exitCode == 0
 	return properties
+}
+
+func (m *Manager) workflowProperties(properties map[string]any) map[string]any {
+	out := map[string]any{
+		"$lib":          "vigilante-cli",
+		"$lib_version":  m.version,
+		"app_version":   m.version,
+		"distro":        m.distro,
+		"platform_arch": runtime.GOARCH,
+		"platform_os":   runtime.GOOS,
+	}
+	for key, value := range properties {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		out[key] = value
+	}
+	return out
 }
 
 func commandGroup(commandName string) string {

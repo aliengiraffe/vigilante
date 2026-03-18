@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -347,6 +348,53 @@ func TestStartCommandAnalyticsTaxonomyForGroupedCommands(t *testing.T) {
 	}
 	if got, want := events[1].Properties["result"], "success"; got != want {
 		t.Fatalf("result = %v, want %q", got, want)
+	}
+}
+
+func TestCaptureWorkflowEventUsesDefaultManagerAndBoundedProperties(t *testing.T) {
+	t.Parallel()
+
+	analytics := &captureAnalyticsExporter{}
+	manager := &Manager{
+		analytics: analytics,
+		version:   "1.2.3",
+		distro:    "direct",
+		anonID:    "anon-123",
+	}
+
+	SetDefault(manager)
+	t.Cleanup(func() {
+		SetDefault(nil)
+	})
+
+	CaptureWorkflowEvent("issue_session_transition", map[string]any{
+		"feature_area": "issue_session",
+		"status":       "blocked",
+		"source":       "dispatch",
+	})
+
+	if err := manager.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+
+	events := analytics.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 analytics event, got %d", len(events))
+	}
+	if got, want := events[0].Event, "issue_session_transition"; got != want {
+		t.Fatalf("event = %q, want %q", got, want)
+	}
+	if got, want := events[0].Properties["feature_area"], "issue_session"; got != want {
+		t.Fatalf("feature_area = %v, want %q", got, want)
+	}
+	if got, want := events[0].Properties["status"], "blocked"; got != want {
+		t.Fatalf("status = %v, want %q", got, want)
+	}
+	if got, want := events[0].Properties["app_version"], "1.2.3"; got != want {
+		t.Fatalf("app_version = %v, want %q", got, want)
+	}
+	if got, want := events[0].Properties["platform_os"], runtime.GOOS; got != want {
+		t.Fatalf("platform_os = %v, want %q", got, want)
 	}
 }
 
