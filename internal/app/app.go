@@ -861,12 +861,7 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 			session.Status = state.SessionStatusSuccess
 			session.ProcessID = 0
 			session.LastHeartbeatAt = ""
-			session.PullRequestNumber = pr.Number
-			session.PullRequestURL = pr.URL
-			session.PullRequestState = pr.State
-			if pr.MergedAt != nil {
-				session.PullRequestMergedAt = pr.MergedAt.UTC().Format(time.RFC3339)
-			}
+			updatePullRequestTrackingFromLookup(session, *pr)
 			session.LastError = ""
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 			a.state.AppendDaemonLog("stalled session recovered to pr maintenance repo=%s issue=%d branch=%s reason=%q pr=%d", session.Repo, session.IssueNumber, session.Branch, reason, pr.Number)
@@ -967,9 +962,7 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 			continue
 		}
 
-		session.PullRequestNumber = pr.Number
-		session.PullRequestURL = pr.URL
-		session.PullRequestState = pr.State
+		updatePullRequestTrackingFromLookup(session, *pr)
 		if pr.MergedAt == nil {
 			if pr.State != "OPEN" {
 				session.MonitoringStoppedAt = a.clock().Format(time.RFC3339)
@@ -1085,6 +1078,7 @@ func (a *App) waitForSessions() {
 }
 
 func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Session, pr ghcli.PullRequest) error {
+	previousMaintenanceError := session.LastMaintenanceError
 	session.LastMaintenanceError = ""
 
 	if _, err := a.env.Runner.Run(ctx, session.WorktreePath, "git", "fetch", "origin", "main"); err != nil {
@@ -1103,7 +1097,16 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 	if err != nil {
 		return err
 	}
+	previousFingerprint := strings.TrimSpace(session.PullRequestStatusFingerprint)
+	currentFingerprint := updatePullRequestMaintenanceSnapshot(session, *details)
 	if pullRequestNeedsConflictResolution(*details) {
+		if shouldSkipConflictResolutionDispatch(pr.Number, previousMaintenanceError, previousFingerprint, currentFingerprint) {
+			now := a.clock().Format(time.RFC3339)
+			session.LastMaintainedAt = now
+			session.UpdatedAt = now
+			session.LastMaintenanceError = previousMaintenanceError
+			return nil
+		}
 		return a.dispatchConflictResolution(ctx, session, *details)
 	}
 
@@ -1120,6 +1123,14 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 		}
 		details.MergeStateStatus = fallbackText(details.MergeStateStatus, "DIRTY")
 		details.Mergeable = fallbackText(details.Mergeable, "CONFLICTING")
+		currentFingerprint = updatePullRequestMaintenanceSnapshot(session, *details)
+		if shouldSkipConflictResolutionDispatch(pr.Number, previousMaintenanceError, previousFingerprint, currentFingerprint) {
+			now := a.clock().Format(time.RFC3339)
+			session.LastMaintainedAt = now
+			session.UpdatedAt = now
+			session.LastMaintenanceError = previousMaintenanceError
+			return nil
+		}
 		return a.dispatchConflictResolution(ctx, session, *details)
 	}
 
@@ -1201,6 +1212,7 @@ func (a *App) maintainPullRequestChecks(ctx context.Context, session *state.Sess
 	if err != nil {
 		return err
 	}
+	updatePullRequestMaintenanceSnapshot(session, *details)
 	if err := a.handleFailingPullRequestChecks(ctx, session, *details); err != nil {
 		return err
 	}
@@ -1836,6 +1848,13 @@ func (a *App) resetSessionForRedispatch(ctx context.Context, session *state.Sess
 	session.PullRequestURL = ""
 	session.PullRequestState = ""
 	session.PullRequestMergedAt = ""
+	session.PullRequestHeadBranch = ""
+	session.PullRequestBaseBranch = ""
+	session.PullRequestMergeable = ""
+	session.PullRequestMergeStateStatus = ""
+	session.PullRequestReviewDecision = ""
+	session.PullRequestChecksState = ""
+	session.PullRequestStatusFingerprint = ""
 	session.LastMaintainedAt = ""
 	session.LastMaintenanceError = ""
 	session.LastCIRemediationFingerprint = ""
@@ -1965,9 +1984,7 @@ func (a *App) resumeBlockedMaintenance(ctx context.Context, session *state.Sessi
 	if pr == nil {
 		return errors.New("no pull request found for blocked maintenance session")
 	}
-	session.PullRequestNumber = pr.Number
-	session.PullRequestURL = pr.URL
-	session.PullRequestState = pr.State
+	updatePullRequestTrackingFromLookup(session, *pr)
 	if pr.State != "OPEN" {
 		return fmt.Errorf("pull request #%d is not open", pr.Number)
 	}
@@ -2285,6 +2302,83 @@ func pullRequestNeedsConflictResolution(pr ghcli.PullRequest) bool {
 		return true
 	}
 	return strings.EqualFold(strings.TrimSpace(pr.MergeStateStatus), "DIRTY")
+}
+
+func updatePullRequestTrackingFromLookup(session *state.Session, pr ghcli.PullRequest) {
+	session.PullRequestNumber = pr.Number
+	session.PullRequestURL = strings.TrimSpace(pr.URL)
+	session.PullRequestState = strings.TrimSpace(pr.State)
+	session.PullRequestHeadBranch = strings.TrimSpace(session.Branch)
+	session.PullRequestBaseBranch = pullRequestBaseBranch(*session)
+	if pr.MergedAt != nil {
+		session.PullRequestMergedAt = pr.MergedAt.UTC().Format(time.RFC3339)
+	}
+}
+
+func updatePullRequestMaintenanceSnapshot(session *state.Session, pr ghcli.PullRequest) string {
+	updatePullRequestTrackingFromLookup(session, pr)
+	if pr.MergedAt == nil {
+		session.PullRequestMergedAt = ""
+	}
+	session.PullRequestMergeable = strings.TrimSpace(pr.Mergeable)
+	session.PullRequestMergeStateStatus = strings.TrimSpace(pr.MergeStateStatus)
+	session.PullRequestReviewDecision = strings.TrimSpace(pr.ReviewDecision)
+	session.PullRequestChecksState = requiredChecksState(pr.StatusCheckRollup)
+	session.PullRequestStatusFingerprint = pullRequestStatusFingerprint(*session, pr)
+	return session.PullRequestStatusFingerprint
+}
+
+func pullRequestBaseBranch(session state.Session) string {
+	baseBranch := strings.TrimSpace(session.BaseBranch)
+	if baseBranch == "" {
+		return "main"
+	}
+	return baseBranch
+}
+
+func pullRequestStatusFingerprint(session state.Session, pr ghcli.PullRequest) string {
+	failingChecks := formatFailingChecksSummary(failingStatusChecks(pr.StatusCheckRollup))
+	labels := pullRequestLabelNames(pr.Labels)
+	parts := []string{
+		fmt.Sprintf("pr:%d", pr.Number),
+		"state:" + fallbackText(strings.TrimSpace(pr.State), "UNKNOWN"),
+		"head:" + fallbackText(strings.TrimSpace(session.Branch), "UNKNOWN"),
+		"base:" + pullRequestBaseBranch(session),
+		"mergeable:" + fallbackText(strings.TrimSpace(pr.Mergeable), "UNKNOWN"),
+		"merge_state:" + fallbackText(strings.TrimSpace(pr.MergeStateStatus), "UNKNOWN"),
+		"review:" + fallbackText(strings.TrimSpace(pr.ReviewDecision), "UNKNOWN"),
+		"checks:" + requiredChecksState(pr.StatusCheckRollup),
+		"draft:" + fmt.Sprintf("%t", pr.IsDraft),
+		"labels:" + strings.Join(labels, ","),
+		"failing:" + failingChecks,
+	}
+	if pr.MergedAt != nil {
+		parts = append(parts, "merged_at:"+pr.MergedAt.UTC().Format(time.RFC3339))
+	}
+	return strings.Join(parts, "|")
+}
+
+func pullRequestLabelNames(labels []ghcli.Label) []string {
+	names := make([]string, 0, len(labels))
+	for _, label := range labels {
+		name := strings.TrimSpace(label.Name)
+		if name == "" {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func shouldSkipConflictResolutionDispatch(prNumber int, previousMaintenanceError string, previousFingerprint string, currentFingerprint string) bool {
+	if strings.TrimSpace(previousFingerprint) == "" || strings.TrimSpace(currentFingerprint) == "" {
+		return false
+	}
+	if strings.TrimSpace(previousFingerprint) != strings.TrimSpace(currentFingerprint) {
+		return false
+	}
+	return strings.TrimSpace(previousMaintenanceError) == fmt.Sprintf("conflict resolution dispatched for PR #%d; waiting for updated branch state", prNumber)
 }
 
 func requiredChecksState(checks []ghcli.StatusCheckRoll) string {

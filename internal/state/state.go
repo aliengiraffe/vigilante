@@ -71,6 +71,13 @@ type Session struct {
 	PullRequestURL                 string        `json:"pull_request_url,omitempty"`
 	PullRequestState               string        `json:"pull_request_state,omitempty"`
 	PullRequestMergedAt            string        `json:"pull_request_merged_at,omitempty"`
+	PullRequestHeadBranch          string        `json:"pull_request_head_branch,omitempty"`
+	PullRequestBaseBranch          string        `json:"pull_request_base_branch,omitempty"`
+	PullRequestMergeable           string        `json:"pull_request_mergeable,omitempty"`
+	PullRequestMergeStateStatus    string        `json:"pull_request_merge_state_status,omitempty"`
+	PullRequestReviewDecision      string        `json:"pull_request_review_decision,omitempty"`
+	PullRequestChecksState         string        `json:"pull_request_checks_state,omitempty"`
+	PullRequestStatusFingerprint   string        `json:"pull_request_status_fingerprint,omitempty"`
 	LastMaintainedAt               string        `json:"last_maintained_at,omitempty"`
 	LastMaintenanceError           string        `json:"last_maintenance_error,omitempty"`
 	LastCIRemediationFingerprint   string        `json:"last_ci_remediation_fingerprint,omitempty"`
