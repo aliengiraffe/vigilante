@@ -55,18 +55,25 @@ Produce a GitHub issue that is:
 
 7. Create the GitHub issue by default
 - When the repository is known and the user did not explicitly ask for draft-only output, use `gh issue create` to open the issue.
+- Prefer `gh api repos/{owner}/{repo}/issues` over `gh issue create` when opening the final issue so Vigilante can set GitHub's native issue type with the request body `type` field.
+- Map Vigilante's internal classifications explicitly to GitHub's native issue types: `feature` -> `Feature`, `bug` -> `Bug`, `task` -> `Task`.
+- Treat the native GitHub issue type as the source of truth whenever the repository supports it.
 - Use the polished Markdown body as the issue content instead of stopping at the draft.
 - In the final response, include the created issue URL or issue number and keep the body available if useful.
 
 8. Fall back cleanly when issue creation is blocked
 - If issue creation cannot be completed because repository context is missing, `gh` auth is unavailable, network access is blocked, or sandbox restrictions prevent GitHub access, say so briefly and return the ready-to-file Markdown issue instead.
+- If the repository rejects the native `type` field because issue types are unavailable or unsupported, retry issue creation without the native type and make the fallback explicit in the final response.
 - If the environment supports requesting escalation for GitHub/network access, do that before giving up.
 - If the user explicitly asks for a draft only, honor that request and do not create the issue.
 - Keep failure messaging short, specific, and factual.
 
 ## Issue Type Guidance
-- Always make the selected issue type explicit in the generated issue body using a consistent line such as `Issue Type: feature`, `Issue Type: bug`, or `Issue Type: task`.
-- When the type was inferred from an ambiguous request, note that clearly, for example `Issue Type: task (inferred)`.
+- Always classify the request as `feature`, `bug`, or `task` before finalizing the issue.
+- When creating the issue on GitHub, write that classification into GitHub's native issue type field whenever the repository supports it.
+- Do not use labels or issue-body text as the primary type representation when the native issue type is set successfully.
+- Only include an `Issue Type: ...` line in the issue body when returning a draft without creating the issue, or when native issue types are unavailable and the fallback needs to preserve the classification explicitly.
+- When the type was inferred from an ambiguous request, note that clearly, for example `Issue Type: task (inferred)`, but only in the draft/fallback body when that line is needed.
 - For `bug` issues, prioritize current behavior, expected behavior, impact, reproduction clues, and regression risk.
 - For `feature` issues, prioritize the desired user-facing outcome, scope boundaries, and non-goals.
 - For `task` issues, prioritize the concrete deliverable, operational context, constraints, and completion conditions.
@@ -131,7 +138,7 @@ Use this structure for the issue body:
 ## Summary
 <One short paragraph describing the problem and desired change.>
 
-Issue Type: <feature | bug | task>[ (inferred)]
+Issue Type: <feature | bug | task>[ (inferred)]  <!-- include only for draft-only or documented fallback output -->
 
 ## Problem
 - <What is wrong, missing, or desired>
@@ -173,12 +180,14 @@ Type-specific reminders:
 Before creating the issue or returning the fallback draft, verify that:
 
 - the problem is understandable without extra oral context
-- the selected issue type is `feature`, `bug`, or `task` and is stated explicitly in the issue body
+- the selected issue type is `feature`, `bug`, or `task`
+- the native GitHub issue type is used when the issue is created in a repository that supports it
+- any `Issue Type:` line in the body is reserved for draft-only or explicit fallback output
 - the desired outcome is observable
 - the acceptance criteria are testable
 - the testing section names the expected validation
 - the body includes the type-specific details that matter for the selected class instead of only a label
 - the issue gives Vigilante enough direction to implement without guessing the basics
-- the target repository is known before attempting `gh issue create`
+- the target repository is known before attempting issue creation
 - the final response includes the created issue URL or number when creation succeeds
 - the fallback response states briefly why issue creation was not completed when it fails
