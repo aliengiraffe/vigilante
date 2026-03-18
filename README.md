@@ -546,7 +546,7 @@ Label ownership rules:
 Proposed groups:
 
 - Execution state: `vigilante:queued`, `vigilante:running`, `vigilante:blocked`, `vigilante:ready-for-review`, `vigilante:awaiting-user-validation`, `vigilante:done`
-- Human-intervention state: `vigilante:needs-review`, `vigilante:needs-human-input`, `vigilante:needs-provider-fix`, `vigilante:needs-git-fix`
+- Human-intervention state: `vigilante:needs-human-input`, `vigilante:needs-provider-fix`, `vigilante:needs-git-fix`
 - Provider routing controls: `codex`, `claude`, `gemini`
 - Explicit control labels: `vigilante:resume` and legacy `resume`
 
@@ -555,7 +555,7 @@ Recommended lifecycle:
 1. When an issue becomes eligible but has not started, add `vigilante:queued`.
 2. When execution starts, replace `vigilante:queued` with `vigilante:running`.
 3. If execution stalls on a known blocker, replace `vigilante:running` with `vigilante:blocked` and add exactly one matching `vigilante:needs-*` label when possible.
-4. When implementation is ready for a human to inspect, replace blocked or running state with `vigilante:ready-for-review`, keeping `vigilante:needs-review` when a human handoff is still pending.
+4. When implementation is ready for a human to inspect, replace blocked or running state with `vigilante:ready-for-review` as the single review-handoff label.
 5. When code review is complete but a product or operator check is still required, use `vigilante:awaiting-user-validation`.
 6. When the issue reaches a terminal successful state, clear transient labels and leave `vigilante:done`.
 
