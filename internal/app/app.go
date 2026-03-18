@@ -2506,13 +2506,14 @@ func requiredChecksState(checks []ghcli.StatusCheckRoll) string {
 	}
 
 	pending := false
+	failing := false
 	for _, check := range checks {
 		state := strings.ToUpper(strings.TrimSpace(check.State))
 		conclusion := strings.ToUpper(strings.TrimSpace(check.Conclusion))
 
 		switch conclusion {
 		case "ACTION_REQUIRED", "CANCELLED", "FAILURE", "STALE", "STARTUP_FAILURE", "TIMED_OUT":
-			return "failing"
+			failing = true
 		}
 
 		switch state {
@@ -2528,6 +2529,9 @@ func requiredChecksState(checks []ghcli.StatusCheckRoll) string {
 
 	if pending {
 		return "pending"
+	}
+	if failing {
+		return "failing"
 	}
 	return "passing"
 }
