@@ -60,7 +60,7 @@ Service dependencies:
 7. Open a pull request
 - Always create a pull request for the completed change set.
 - Target the repository default branch unless repository instructions say otherwise.
-- Reference the issue in the PR body when appropriate.
+- Include `Closes #<issue-number>` in the PR body as a required invariant.
 - Include concise validation notes in the PR description.
 
 8. Post progress comments at meaningful milestones
