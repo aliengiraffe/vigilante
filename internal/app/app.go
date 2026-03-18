@@ -59,6 +59,8 @@ var managedIssueLabels = []string{
 	labelNeedsGitFix,
 }
 
+var automergeLabels = []string{"vigilante:automerge", "automerge"}
+
 var supportedCompletionShells = []string{"bash", "fish", "zsh"}
 var errHelpHandled = errors.New("help handled")
 
@@ -1210,7 +1212,11 @@ func (a *App) maintainPullRequestChecks(ctx context.Context, session *state.Sess
 
 func (a *App) tryAutoSquashMerge(ctx context.Context, session *state.Session, pr ghcli.PullRequest) error {
 	checkState := requiredChecksState(pr.StatusCheckRollup)
-	if !ghcli.HasAnyLabel(pr.Labels, "automerge") {
+	enabled, err := a.automergeEnabled(ctx, session, pr)
+	if err != nil {
+		return err
+	}
+	if !enabled {
 		if checkState == "pending" {
 			session.LastMaintenanceError = fmt.Sprintf("pr maintenance waiting for required checks on PR #%d", pr.Number)
 		} else if checkState == "passing" {
@@ -1233,6 +1239,22 @@ func (a *App) tryAutoSquashMerge(ctx context.Context, session *state.Session, pr
 
 	a.state.AppendDaemonLog("automerge merged repo=%s issue=%d pr=%d branch=%s strategy=squash", session.Repo, session.IssueNumber, pr.Number, session.Branch)
 	return nil
+}
+
+func (a *App) automergeEnabled(ctx context.Context, session *state.Session, pr ghcli.PullRequest) (bool, error) {
+	if ghcli.HasAnyLabel(pr.Labels, automergeLabels...) {
+		return true, nil
+	}
+	if strings.TrimSpace(session.Repo) == "" || session.IssueNumber <= 0 {
+		return false, nil
+	}
+
+	issue, err := ghcli.GetIssueDetails(ctx, a.env.Runner, session.Repo, session.IssueNumber)
+	if err != nil {
+		a.state.AppendDaemonLog("issue automerge label lookup failed repo=%s issue=%d pr=%d err=%v", session.Repo, session.IssueNumber, pr.Number, err)
+		return false, nil
+	}
+	return ghcli.HasAnyLabel(issue.Labels, automergeLabels...), nil
 }
 
 func (a *App) handleFailingPullRequestChecks(ctx context.Context, session *state.Session, pr ghcli.PullRequest) error {
@@ -2549,7 +2571,7 @@ func blockedInterventionLabel(reason state.BlockedReason) string {
 }
 
 func shouldAwaitUserValidation(pr ghcli.PullRequest) bool {
-	if ghcli.HasAnyLabel(pr.Labels, "automerge") {
+	if ghcli.HasAnyLabel(pr.Labels, automergeLabels...) {
 		return false
 	}
 	if pr.IsDraft {

@@ -528,7 +528,8 @@ Future policy can expand to richer label filters, assignment rules, and priority
 For pull requests tied to an active Vigilante session:
 
 - keep the branch updated against `origin/main` through the existing maintenance loop
-- if the PR has an `automerge` label, attempt a GitHub squash merge only after required checks pass and GitHub reports the PR is mergeable
+- if either the source issue or the PR has `vigilante:automerge`, attempt a GitHub squash merge only after required checks pass and GitHub reports the PR is mergeable
+- keep the legacy plain `automerge` PR label working as a compatibility alias during migration to the namespaced label
 - never force through branch protection, required reviews, or failing checks
 
 ## Issue Labeling System

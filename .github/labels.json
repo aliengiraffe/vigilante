@@ -164,6 +164,18 @@
       ]
     },
     {
+      "name": "vigilante:automerge",
+      "color": "0E8A16",
+      "group": "control",
+      "behavior": "control",
+      "applied_by": "human",
+      "description": "Requests automatic squash merge once required checks and merge requirements are satisfied.",
+      "notes": [
+        "May be applied to the issue before the PR exists or directly to the PR later.",
+        "Does not bypass branch protection, required reviews, failing checks, or merge conflicts."
+      ]
+    },
+    {
       "name": "resume",
       "color": "C5DEF5",
       "group": "control",
