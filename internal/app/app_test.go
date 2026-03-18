@@ -3940,6 +3940,15 @@ func TestScanOnceMaintainsOpenPullRequest(t *testing.T) {
 	if sessions[0].PullRequestNumber != 31 || sessions[0].PullRequestState != "OPEN" {
 		t.Fatalf("expected open pull request tracking: %#v", sessions[0])
 	}
+	if sessions[0].PullRequestHeadBranch != "vigilante/issue-1" || sessions[0].PullRequestBaseBranch != "main" {
+		t.Fatalf("expected tracked pull request branches: %#v", sessions[0])
+	}
+	if sessions[0].PullRequestMergeable != "MERGEABLE" || sessions[0].PullRequestMergeStateStatus != "CLEAN" || sessions[0].PullRequestReviewDecision != "APPROVED" {
+		t.Fatalf("expected tracked pull request maintenance details: %#v", sessions[0])
+	}
+	if sessions[0].PullRequestChecksState != "passing" || sessions[0].PullRequestStatusFingerprint == "" {
+		t.Fatalf("expected tracked pull request fingerprint: %#v", sessions[0])
+	}
 	if sessions[0].LastMaintainedAt == "" {
 		t.Fatalf("expected maintenance timestamp: %#v", sessions[0])
 	}
@@ -4573,6 +4582,59 @@ func TestScanOnceRoutesDirtyPullRequestToConflictResolution(t *testing.T) {
 	}
 	if sessions[0].LastMaintainedAt == "" {
 		t.Fatalf("expected maintenance timestamp after conflict dispatch: %#v", sessions[0])
+	}
+	if sessions[0].PullRequestStatusFingerprint == "" || sessions[0].PullRequestMergeable != "CONFLICTING" || sessions[0].PullRequestMergeStateStatus != "DIRTY" {
+		t.Fatalf("expected tracked conflict fingerprint: %#v", sessions[0])
+	}
+}
+
+func TestScanOnceSkipsDuplicateConflictResolutionDispatchWhenPRFingerprintIsUnchanged(t *testing.T) {
+	app, _ := newPullRequestMaintenanceTestApp(t, map[string]string{
+		"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
+		"git fetch origin main":  "ok",
+		"git status --porcelain": "",
+		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": automergePRDetailsJSON("", "CONFLICTING", "DIRTY", "APPROVED", "COMPLETED", "SUCCESS"),
+		"gh api user --jq .login": "nicobistolfi\n",
+		"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+	})
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	updatePullRequestMaintenanceSnapshot(&sessions[0], ghcli.PullRequest{
+		Number:            31,
+		Title:             "Test PR",
+		Body:              "Test PR body",
+		URL:               "https://github.com/owner/repo/pull/31",
+		State:             "OPEN",
+		Mergeable:         "CONFLICTING",
+		MergeStateStatus:  "DIRTY",
+		ReviewDecision:    "APPROVED",
+		StatusCheckRollup: []ghcli.StatusCheckRoll{{Context: "test", State: "COMPLETED", Conclusion: "SUCCESS"}},
+	})
+	sessions[0].LastMaintenanceError = "conflict resolution dispatched for PR #31; waiting for updated branch state"
+	if err := app.state.SaveSessions(sessions); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.waitForSessions()
+
+	sessions, err = app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].Status != state.SessionStatusSuccess {
+		t.Fatalf("expected maintenance session to stay active, got: %#v", sessions[0])
+	}
+	if sessions[0].LastMaintenanceError != "conflict resolution dispatched for PR #31; waiting for updated branch state" {
+		t.Fatalf("expected prior conflict-resolution wait state to be preserved, got: %#v", sessions[0])
+	}
+	if sessions[0].PullRequestStatusFingerprint == "" {
+		t.Fatalf("expected persisted fingerprint after duplicate-scan suppression: %#v", sessions[0])
 	}
 }
 
