@@ -59,6 +59,7 @@ type Session struct {
 	Provider                       string        `json:"provider,omitempty"`
 	IssueNumber                    int           `json:"issue_number"`
 	IssueTitle                     string        `json:"issue_title,omitempty"`
+	IssueBody                      string        `json:"issue_body,omitempty"`
 	IssueURL                       string        `json:"issue_url,omitempty"`
 	BaseBranch                     string        `json:"base_branch,omitempty"`
 	Branch                         string        `json:"branch"`

@@ -426,19 +426,37 @@ func BuildConflictResolutionPromptForRuntime(runtime string, target state.WatchT
 	} else {
 		lines = append(lines, fmt.Sprintf("Use the `%s` skill for this task.", VigilanteConflictResolution))
 	}
+	baseBranch := strings.TrimSpace(session.BaseBranch)
+	if baseBranch == "" {
+		baseBranch = strings.TrimSpace(target.Branch)
+	}
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+	baseRef := "origin/" + baseBranch
 	lines = append(lines,
 		fmt.Sprintf("Repository: %s", target.Repo),
 		fmt.Sprintf("Local repository path: %s", target.Path),
 		fmt.Sprintf("Issue: #%d - %s", session.IssueNumber, session.IssueTitle),
 		fmt.Sprintf("Issue URL: %s", session.IssueURL),
+		fmt.Sprintf("Issue specification: %s", fallbackPromptText(session.IssueBody, "(issue body unavailable; preserve the stated issue title and existing branch intent)")),
 		fmt.Sprintf("Pull Request: #%d", pr.Number),
 		fmt.Sprintf("Pull Request URL: %s", pr.URL),
+		fmt.Sprintf("Pull Request title: %s", fallbackPromptText(pr.Title, "(pull request title unavailable)")),
+		fmt.Sprintf("Pull Request body: %s", fallbackPromptText(pr.Body, "(pull request body unavailable)")),
 		fmt.Sprintf("Worktree path: %s", session.WorktreePath),
 		fmt.Sprintf("Branch: %s", session.Branch),
-		"Base branch: origin/main",
-		"Resolve the current rebase conflicts in the assigned worktree, use `gh issue comment` for progress and failures, rerun `go test ./...` after conflict resolution if the rebase succeeds, and push the updated branch when finished.",
-		"Keep the changes minimal and focused on getting the PR back to a merge-ready state.",
+		fmt.Sprintf("Base branch: %s", baseRef),
+		fmt.Sprintf("GitHub mergeability: mergeable=%s mergeStateStatus=%s", fallbackPromptText(pr.Mergeable, "UNKNOWN"), fallbackPromptText(pr.MergeStateStatus, "UNKNOWN")),
+		"Conflict-resolution workflow: rebase the branch onto the latest base branch if that has not already started; if a rebase is already in progress, continue it from the current stopped commit.",
+		"Work through the rebase commit by commit. Preserve the meaning of each existing issue-branch commit and keep the original issue specification authoritative.",
+		"Do not silently discard commits or issue-specific behavior just to get a clean merge. Prefer the smallest safe conflict fix.",
+		"Use `gh issue comment` for progress and failures, rerun `go test ./...` after conflict resolution succeeds, and push the updated branch when finished.",
+		"If you cannot preserve the issue intent safely, leave a concise GitHub blocker comment and exit with a non-zero status.",
 	)
+	if strings.TrimSpace(session.BranchDiffSummary) != "" {
+		lines = append(lines, fmt.Sprintf("Existing branch summary: %s", session.BranchDiffSummary))
+	}
 	return strings.Join(lines, "\n")
 }
 

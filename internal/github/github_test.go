@@ -315,7 +315,7 @@ func TestFindPullRequestForBranch(t *testing.T) {
 func TestGetPullRequestDetails(t *testing.T) {
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh pr view --repo owner/repo 17 --json number,url,state,mergedAt,labels,isDraft,mergeStateStatus,reviewDecision,statusCheckRollup": `{"number":17,"url":"https://github.com/owner/repo/pull/17","state":"OPEN","mergedAt":null,"labels":[{"name":"automerge"}],"isDraft":false,"mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}]}`,
+			"gh pr view --repo owner/repo 17 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": `{"number":17,"title":"Feature","body":"PR body","url":"https://github.com/owner/repo/pull/17","state":"OPEN","mergedAt":null,"labels":[{"name":"automerge"}],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}]}`,
 		},
 	}
 
@@ -323,7 +323,7 @@ func TestGetPullRequestDetails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if pr.Number != 17 || pr.MergeStateStatus != "CLEAN" || pr.ReviewDecision != "APPROVED" {
+	if pr.Number != 17 || pr.Title != "Feature" || pr.Mergeable != "MERGEABLE" || pr.MergeStateStatus != "CLEAN" || pr.ReviewDecision != "APPROVED" {
 		t.Fatalf("unexpected pull request details: %#v", pr)
 	}
 	if len(pr.Labels) != 1 || pr.Labels[0].Name != "automerge" {

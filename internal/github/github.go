@@ -26,11 +26,14 @@ type Label struct {
 
 type PullRequest struct {
 	Number            int               `json:"number"`
+	Title             string            `json:"title"`
+	Body              string            `json:"body"`
 	URL               string            `json:"url"`
 	State             string            `json:"state"`
 	MergedAt          *time.Time        `json:"mergedAt"`
 	Labels            []Label           `json:"labels"`
 	IsDraft           bool              `json:"isDraft"`
+	Mergeable         string            `json:"mergeable"`
 	MergeStateStatus  string            `json:"mergeStateStatus"`
 	ReviewDecision    string            `json:"reviewDecision"`
 	StatusCheckRollup []StatusCheckRoll `json:"statusCheckRollup"`
@@ -53,6 +56,9 @@ type IssueComment struct {
 }
 
 type IssueDetails struct {
+	Title  string  `json:"title"`
+	Body   string  `json:"body"`
+	URL    string  `json:"html_url"`
 	Labels []Label `json:"labels"`
 }
 
@@ -456,7 +462,7 @@ func GetPullRequestDetails(ctx context.Context, runner environment.Runner, repo 
 		repo,
 		fmt.Sprintf("%d", number),
 		"--json",
-		"number,url,state,mergedAt,labels,isDraft,mergeStateStatus,reviewDecision,statusCheckRollup",
+		"number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup",
 	)
 	if err != nil {
 		return nil, err

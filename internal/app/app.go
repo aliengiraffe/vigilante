@@ -1097,32 +1097,28 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 		return errors.New("worktree is not clean before PR maintenance")
 	}
 
-	rebaseOutput, err := a.env.Runner.Run(ctx, session.WorktreePath, "git", "rebase", "origin/main")
+	details, err := ghcli.GetPullRequestDetails(ctx, a.env.Runner, session.Repo, pr.Number)
+	if err != nil {
+		return err
+	}
+	if pullRequestNeedsConflictResolution(*details) {
+		return a.dispatchConflictResolution(ctx, session, *details)
+	}
+
+	baseBranch := strings.TrimSpace(session.BaseBranch)
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+	baseRef := "origin/" + baseBranch
+	rebaseOutput, err := a.env.Runner.Run(ctx, session.WorktreePath, "git", "rebase", baseRef)
 	rebased := rebaseChangedHistory(rebaseOutput)
 	if err != nil {
 		if !isRebaseConflict(rebaseOutput, err) {
 			return err
 		}
-		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
-			Stage:      "Implementation In Progress",
-			Emoji:      "⚔️",
-			Percent:    75,
-			ETAMinutes: 12,
-			Items: []string{
-				fmt.Sprintf("Rebase conflicts appeared while updating PR #%d onto the latest `origin/main`.", pr.Number),
-				fmt.Sprintf("Worktree: `%s`.", session.WorktreePath),
-				"Next step: launch the dedicated conflict-resolution skill and continue from the rebased branch.",
-			},
-			Tagline: "Smooth roads never make skillful drivers.",
-		})
-		if commentErr := ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body); commentErr != nil {
-			a.state.AppendDaemonLog("pr conflict comment failed repo=%s issue=%d pr=%d err=%v", session.Repo, session.IssueNumber, pr.Number, commentErr)
-		}
-		target := state.WatchTarget{Path: session.RepoPath, Repo: session.Repo, Branch: "main"}
-		if conflictErr := issuerunner.RunConflictResolutionSession(ctx, a.env, a.state, target, *session, pr); conflictErr != nil {
-			return conflictErr
-		}
-		rebased = true
+		details.MergeStateStatus = fallbackText(details.MergeStateStatus, "DIRTY")
+		details.Mergeable = fallbackText(details.Mergeable, "CONFLICTING")
+		return a.dispatchConflictResolution(ctx, session, *details)
 	}
 
 	session.LastMaintainedAt = a.clock().Format(time.RFC3339)
@@ -1151,6 +1147,51 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 		Tagline: "Success is where preparation and opportunity meet.",
 	})
 	return ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body)
+}
+
+func (a *App) dispatchConflictResolution(ctx context.Context, session *state.Session, pr ghcli.PullRequest) error {
+	issueDetails, err := ghcli.GetIssueDetails(ctx, a.env.Runner, session.Repo, session.IssueNumber)
+	if err != nil {
+		return err
+	}
+	session.IssueBody = strings.TrimSpace(issueDetails.Body)
+	if strings.TrimSpace(issueDetails.Title) != "" {
+		session.IssueTitle = issueDetails.Title
+	}
+	if strings.TrimSpace(issueDetails.URL) != "" {
+		session.IssueURL = issueDetails.URL
+	}
+
+	baseBranch := strings.TrimSpace(session.BaseBranch)
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+	body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Conflict Resolution Started",
+		Emoji:      "⚔️",
+		Percent:    78,
+		ETAMinutes: 12,
+		Items: []string{
+			fmt.Sprintf("Vigilante routed PR #%d into the dedicated conflict-resolution workflow.", pr.Number),
+			fmt.Sprintf("GitHub state: mergeable=%s, mergeStateStatus=%s. Base branch: `origin/%s`.", fallbackText(pr.Mergeable, "UNKNOWN"), fallbackText(pr.MergeStateStatus, "UNKNOWN"), baseBranch),
+			"Next step: resolve the rebase commit by commit while preserving the original issue specification and branch intent.",
+		},
+		Tagline: "Keep the spec intact while the history moves.",
+	})
+	if commentErr := ghcli.CommentOnIssue(ctx, a.env.Runner, session.Repo, session.IssueNumber, body); commentErr != nil {
+		a.state.AppendDaemonLog("pr conflict comment failed repo=%s issue=%d pr=%d err=%v", session.Repo, session.IssueNumber, pr.Number, commentErr)
+	}
+
+	target := state.WatchTarget{Path: session.RepoPath, Repo: session.Repo, Branch: baseBranch}
+	if conflictErr := issuerunner.RunConflictResolutionSession(ctx, a.env, a.state, target, *session, pr); conflictErr != nil {
+		return conflictErr
+	}
+
+	now := a.clock().Format(time.RFC3339)
+	session.LastMaintainedAt = now
+	session.UpdatedAt = now
+	session.LastMaintenanceError = fmt.Sprintf("conflict resolution dispatched for PR #%d; waiting for updated branch state", pr.Number)
+	return nil
 }
 
 func (a *App) maintainPullRequestChecks(ctx context.Context, session *state.Session, pr ghcli.PullRequest) error {
@@ -2215,6 +2256,13 @@ func automergeWaitReason(pr ghcli.PullRequest) string {
 	default:
 		return fmt.Sprintf("automerge waiting for GitHub mergeability on PR #%d: state %s", pr.Number, strings.ToLower(pr.MergeStateStatus))
 	}
+}
+
+func pullRequestNeedsConflictResolution(pr ghcli.PullRequest) bool {
+	if strings.EqualFold(strings.TrimSpace(pr.Mergeable), "CONFLICTING") {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(pr.MergeStateStatus), "DIRTY")
 }
 
 func requiredChecksState(checks []ghcli.StatusCheckRoll) string {
