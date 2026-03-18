@@ -2,6 +2,10 @@ version: 2
 
 project_name: vigilante
 
+git:
+  ignore_tags:
+    - nightly
+
 builds:
   - id: vigilante
     main: ./cmd/vigilante
@@ -39,6 +43,13 @@ archives:
 
 checksum:
   name_template: checksums.txt
+
+nightly:
+  version_template: "{{ incpatch .Version }}-nightly-{{ .ShortCommit }}"
+  tag_name: nightly
+  publish_release: true
+  keep_single_release: true
+  draft: false
 
 release:
   github:
