@@ -42,6 +42,18 @@
       ]
     },
     {
+      "name": "vigilante:recovering",
+      "color": "FBCA04",
+      "group": "execution-state",
+      "behavior": "informational",
+      "applied_by": "vigilante",
+      "description": "An automatic stale-session recovery attempt is actively rebuilding local execution state.",
+      "notes": [
+        "Use only while Vigilante is auto-recovering a stale maintenance session.",
+        "Clear when recovery succeeds, is skipped, or returns to a different stable state."
+      ]
+    },
+    {
       "name": "vigilante:ready-for-review",
       "color": "FBCA04",
       "group": "execution-state",

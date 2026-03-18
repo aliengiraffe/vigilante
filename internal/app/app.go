@@ -32,12 +32,15 @@ import (
 const defaultScanInterval = 1 * time.Minute
 const defaultAssigneeFilter = "me"
 const defaultStalledSessionThreshold = 10 * time.Minute
+const defaultMaintenanceAutoRecoveryTimeout = 10 * time.Minute
 const unsetMaxParallel = -2147483648
+const autoRecoverySource = "auto_recovery"
 
 const (
 	labelQueued                 = "vigilante:queued"
 	labelRunning                = "vigilante:running"
 	labelBlocked                = "vigilante:blocked"
+	labelRecovering             = "vigilante:recovering"
 	labelReadyForReview         = "vigilante:ready-for-review"
 	labelAwaitingUserValidation = "vigilante:awaiting-user-validation"
 	labelDone                   = "vigilante:done"
@@ -51,6 +54,7 @@ var managedIssueLabels = []string{
 	labelQueued,
 	labelRunning,
 	labelBlocked,
+	labelRecovering,
 	labelReadyForReview,
 	labelAwaitingUserValidation,
 	labelDone,
@@ -2183,6 +2187,7 @@ func (a *App) cleanupInactiveBlockedSessions(ctx context.Context, sessions []sta
 	if parsed, err := time.ParseDuration(config.BlockedSessionInactivityTimeout); err == nil && parsed > 0 {
 		timeout = parsed
 	}
+	autoRecoveryTimeout := maintenanceAutoRecoveryTimeout(config)
 
 	for i := range sessions {
 		session := &sessions[i]
@@ -2190,7 +2195,12 @@ func (a *App) cleanupInactiveBlockedSessions(ctx context.Context, sessions []sta
 			continue
 		}
 
-		inactive, err := a.blockedSessionExceededInactivityTimeout(ctx, *session, timeout)
+		evaluationTimeout := timeout
+		if shouldAutoRecoverBlockedSession(*session) {
+			evaluationTimeout = autoRecoveryTimeout
+		}
+
+		inactive, err := a.blockedSessionExceededInactivityTimeout(ctx, *session, evaluationTimeout)
 		if err != nil {
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
@@ -2198,6 +2208,20 @@ func (a *App) cleanupInactiveBlockedSessions(ctx context.Context, sessions []sta
 			continue
 		}
 		if !inactive {
+			if shouldAutoRecoverBlockedSession(*session) {
+				a.state.AppendDaemonLog("blocked session auto recovery skipped repo=%s issue=%d branch=%s reason=recent_activity timeout=%s", session.Repo, session.IssueNumber, session.Branch, evaluationTimeout)
+			}
+			continue
+		}
+
+		if shouldAutoRecoverBlockedSession(*session) {
+			a.state.AppendDaemonLog("blocked session auto recovery starting repo=%s issue=%d branch=%s stage=%s timeout=%s", session.Repo, session.IssueNumber, session.Branch, session.BlockedStage, evaluationTimeout)
+			if err := a.autoRecoverBlockedMaintenanceSession(ctx, session, evaluationTimeout); err != nil {
+				session.LastError = err.Error()
+				session.UpdatedAt = a.clock().Format(time.RFC3339)
+				a.state.AppendDaemonLog("blocked session auto recovery failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
+			}
+			a.syncSessionIssueLabelsBestEffort(ctx, *session, nil)
 			continue
 		}
 
@@ -2213,6 +2237,21 @@ func (a *App) cleanupInactiveBlockedSessions(ctx context.Context, sessions []sta
 	}
 
 	return sessions, nil
+}
+
+func maintenanceAutoRecoveryTimeout(config state.ServiceConfig) time.Duration {
+	if raw := strings.TrimSpace(os.Getenv("VIGILANTE_MAINTENANCE_AUTO_RECOVERY_TIMEOUT")); raw != "" {
+		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	raw := strings.TrimSpace(config.BlockedSessionInactivityTimeout)
+	if raw != "" && raw != state.DefaultBlockedSessionInactivityTimeout.String() {
+		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return defaultMaintenanceAutoRecoveryTimeout
 }
 
 func (a *App) blockedSessionExceededInactivityTimeout(ctx context.Context, session state.Session, timeout time.Duration) (bool, error) {
@@ -2267,6 +2306,132 @@ func (a *App) cleanupBlockedSessionForInactivity(ctx context.Context, session *s
 	session.LastError = fmt.Sprintf("blocked session cleaned up after %s of inactivity", timeout)
 	a.emitSessionTransition(previousStatus, *session, "blocked_inactivity_timeout")
 	a.state.AppendDaemonLog("blocked session inactivity cleanup complete repo=%s issue=%d branch=%s timeout=%s", session.Repo, session.IssueNumber, session.Branch, timeout)
+	return nil
+}
+
+func shouldAutoRecoverBlockedSession(session state.Session) bool {
+	switch session.BlockedStage {
+	case "pr_maintenance", "ci_remediation", "conflict_resolution":
+	default:
+		return false
+	}
+
+	if strings.TrimSpace(session.BlockedReason.Kind) == "dirty_worktree" {
+		return true
+	}
+
+	text := strings.ToLower(strings.TrimSpace(session.BlockedReason.Summary + " " + session.BlockedReason.Detail))
+	return strings.Contains(text, "worktree is not clean")
+}
+
+func (a *App) autoRecoverBlockedMaintenanceSession(ctx context.Context, session *state.Session, timeout time.Duration) error {
+	pr, err := ghcli.FindPullRequestForBranch(ctx, a.env.Runner, session.Repo, session.Branch)
+	if err != nil {
+		return err
+	}
+	if pr == nil {
+		return errors.New("no pull request found for blocked maintenance session")
+	}
+	if pr.State != "OPEN" {
+		return fmt.Errorf("pull request #%d is not open", pr.Number)
+	}
+	updatePullRequestTrackingFromLookup(session, *pr)
+
+	previousStage := session.BlockedStage
+	previousKind := session.BlockedReason.Kind
+	previousOperation := session.BlockedReason.Operation
+	previousStatus := session.Status
+	now := a.clock()
+	session.Status = state.SessionStatusResuming
+	session.LastResumeSource = autoRecoverySource
+	session.UpdatedAt = now.Format(time.RFC3339)
+	a.emitSessionTransition(previousStatus, *session, autoRecoverySource)
+	a.syncSessionIssueLabelsBestEffort(ctx, *session, pr)
+
+	startBody := ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Auto-Recovery In Progress",
+		Emoji:      "♻️",
+		Percent:    88,
+		ETAMinutes: 8,
+		Items: []string{
+			fmt.Sprintf("The blocked `%s` session on `%s` stayed inactive longer than `%s`.", fallbackText(previousStage, "pr_maintenance"), session.Branch, timeout),
+			fmt.Sprintf("Vigilante is rebuilding the local worktree from the latest committed state of PR #%d on `%s`.", pr.Number, session.Branch),
+			"Next step: resume maintenance on the existing PR branch without opening a replacement PR.",
+		},
+		Tagline: "Reset the footing, keep the climb.",
+	})
+	if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, startBody, "progress", autoRecoverySource); err != nil {
+		return err
+	}
+
+	if err := worktree.RecreateBranchWorktree(ctx, a.env.Runner, session.RepoPath, session.WorktreePath, session.Branch); err != nil {
+		blocked := classifyBlockedReason(previousStage, previousOperation, err)
+		markSessionBlocked(session, fallbackText(previousStage, "pr_maintenance"), blocked, a.clock())
+		session.LastError = fmt.Sprintf("automatic recovery failed: %s", err)
+		failureBody := ghcli.FormatProgressComment(ghcli.ProgressComment{
+			Stage:      "Blocked",
+			Emoji:      "🧱",
+			Percent:    90,
+			ETAMinutes: 10,
+			Items: []string{
+				fmt.Sprintf("Vigilante tried to auto-recover `%s` on `%s` after `%s` of inactivity.", fallbackText(previousStage, "pr_maintenance"), session.Branch, timeout),
+				fmt.Sprintf("Automatic worktree reset failed: `%s`.", summarizeMaintenanceError(err)),
+				"Next step: inspect the local git state, then retry the maintenance flow manually if needed.",
+			},
+			Tagline: "The retry stopped at the gate.",
+		})
+		if commentErr := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, failureBody, "blocked", autoRecoverySource); commentErr != nil {
+			a.state.AppendDaemonLog("auto recovery failure comment failed repo=%s issue=%d pr=%d err=%v", session.Repo, session.IssueNumber, pr.Number, commentErr)
+		}
+		return err
+	}
+
+	var resumeErr error
+	switch previousStage {
+	case "conflict_resolution":
+		resumeErr = a.resumeBlockedConflictResolution(ctx, session)
+	default:
+		resumeErr = a.resumeBlockedMaintenance(ctx, session)
+	}
+	if resumeErr != nil {
+		blocked := classifyBlockedReason(previousStage, previousOperation, resumeErr)
+		markSessionBlocked(session, fallbackText(previousStage, "pr_maintenance"), blocked, a.clock())
+		session.LastError = fmt.Sprintf("automatic recovery failed: %s", resumeErr)
+		failureBody := ghcli.FormatProgressComment(ghcli.ProgressComment{
+			Stage:      "Blocked",
+			Emoji:      "🧱",
+			Percent:    92,
+			ETAMinutes: 10,
+			Items: []string{
+				fmt.Sprintf("Vigilante rebuilt the local worktree for PR #%d on `%s`.", pr.Number, session.Branch),
+				fmt.Sprintf("Automatic resume still hit `%s` while continuing `%s`.", fallbackText(session.BlockedReason.Kind, "unknown_operator_action_required"), fallbackText(previousStage, "pr_maintenance")),
+				"Next step: inspect the new blocker and use manual resume only after it is actually resolved.",
+			},
+			Tagline: "Clean slate, real blocker.",
+		})
+		if commentErr := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, failureBody, "blocked", autoRecoverySource); commentErr != nil {
+			a.state.AppendDaemonLog("auto recovery blocked comment failed repo=%s issue=%d pr=%d err=%v", session.Repo, session.IssueNumber, pr.Number, commentErr)
+		}
+		return resumeErr
+	}
+
+	clearBlockedState(session, a.clock(), autoRecoverySource)
+	body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Recovered",
+		Emoji:      "🫡",
+		Percent:    95,
+		ETAMinutes: 3,
+		Items: []string{
+			fmt.Sprintf("Vigilante auto-recovered the stale `%s` block on `%s` after `%s` of inactivity.", fallbackText(previousKind, "dirty_worktree"), session.Branch, timeout),
+			fmt.Sprintf("The local worktree was rebuilt from the latest committed state of PR #%d on the existing branch `%s`.", pr.Number, session.Branch),
+			fmt.Sprintf("Next step: `%s` resumed without creating a replacement PR.", fallbackText(previousStage, "pr_maintenance")),
+		},
+		Tagline: "Same branch, cleaner footing.",
+	})
+	if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "resume", autoRecoverySource); err != nil {
+		return err
+	}
+	a.state.AppendDaemonLog("blocked session auto recovery complete repo=%s issue=%d branch=%s pr=%d stage=%s", session.Repo, session.IssueNumber, session.Branch, pr.Number, previousStage)
 	return nil
 }
 
@@ -2762,6 +2927,9 @@ func sessionManagedLabels(session state.Session, pr *ghcli.PullRequest) []string
 func desiredSessionLabels(session state.Session, pr *ghcli.PullRequest) (string, string) {
 	switch session.Status {
 	case state.SessionStatusRunning, state.SessionStatusResuming:
+		if session.Status == state.SessionStatusResuming && strings.TrimSpace(session.LastResumeSource) == autoRecoverySource {
+			return labelRecovering, ""
+		}
 		return labelRunning, ""
 	case state.SessionStatusBlocked:
 		return labelBlocked, blockedInterventionLabel(session.BlockedReason)
