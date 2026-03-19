@@ -1,0 +1,118 @@
+name: Nightly Release
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  prerelease:
+    runs-on: ubuntu-latest
+    environment: main
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          install-only: true
+
+      - name: Compute nightly version
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          short_sha="$(git rev-parse --short=12 "$GITHUB_SHA")"
+          timestamp="$(date -u +%Y%m%d%H%M%S)"
+          nightly_version="0.0.0-nightly.${timestamp}.${short_sha}"
+
+          {
+            printf 'NIGHTLY_TAG=%s\n' "main-nightly"
+            printf 'NIGHTLY_VERSION=%s\n' "$nightly_version"
+          } >> "$GITHUB_ENV"
+
+      - name: Validate GoReleaser config
+        env:
+          NIGHTLY_VERSION: ${{ env.NIGHTLY_VERSION }}
+        run: goreleaser check
+
+      - name: Get token for Homebrew tap
+        uses: actions/create-github-app-token@v3
+        id: tap_token
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: homebrew-spaceship
+
+      - name: Build nightly snapshot artifacts
+        env:
+          NIGHTLY_VERSION: ${{ env.NIGHTLY_VERSION }}
+          OTEL_ENDPOINT: ${{ secrets.OTEL_ENDPOINT }}
+          OTEL_TOKEN: ${{ secrets.OTEL_TOKEN }}
+          OTEL_URL_PATH: ${{ secrets.OTEL_URL_PATH }}
+        run: goreleaser release --snapshot --clean
+
+      - name: Publish rolling prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NIGHTLY_TAG: ${{ env.NIGHTLY_TAG }}
+          NIGHTLY_VERSION: ${{ env.NIGHTLY_VERSION }}
+        run: |
+          if gh release view "$NIGHTLY_TAG" >/dev/null 2>&1; then
+            gh release delete "$NIGHTLY_TAG" --cleanup-tag --yes
+          fi
+
+          gh release create "$NIGHTLY_TAG" \
+            dist/*.tar.gz \
+            dist/checksums.txt \
+            --target "$GITHUB_SHA" \
+            --title "Vigilante Nightly" \
+            --notes "Rolling prerelease from \`main\` for commit \`$GITHUB_SHA\`.
+
+Version: \`$NIGHTLY_VERSION\`
+
+Install with:
+\`brew tap aliengiraffe/spaceship\`
+\`brew install --cask vigilante-nightly\`" \
+            --prerelease
+
+      - name: Check out Homebrew tap
+        env:
+          TAP_TOKEN: ${{ steps.tap_token.outputs.token }}
+        run: |
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/aliengiraffe/homebrew-spaceship.git" "$RUNNER_TEMP/homebrew-spaceship"
+
+      - name: Update nightly Homebrew cask
+        env:
+          CHECKSUMS_FILE: dist/checksums.txt
+          NIGHTLY_TAG: ${{ env.NIGHTLY_TAG }}
+          NIGHTLY_VERSION: ${{ env.NIGHTLY_VERSION }}
+          OUTPUT_FILE: ${{ runner.temp }}/homebrew-spaceship/Casks/vigilante-nightly.rb
+        run: ./scripts/update-nightly-cask.sh
+
+      - name: Push nightly Homebrew cask
+        working-directory: ${{ runner.temp }}/homebrew-spaceship
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/vigilante-nightly.rb
+
+          if git diff --cached --quiet; then
+            echo "Nightly cask already up to date."
+            exit 0
+          fi
+
+          git commit -m "Update vigilante-nightly to ${NIGHTLY_VERSION}"
+          git push origin HEAD:main

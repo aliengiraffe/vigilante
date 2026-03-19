@@ -40,6 +40,9 @@ archives:
 checksum:
   name_template: checksums.txt
 
+snapshot:
+  version_template: "{{ .Env.NIGHTLY_VERSION }}"
+
 release:
   github:
     owner: aliengiraffe

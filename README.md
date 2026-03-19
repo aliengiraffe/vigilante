@@ -444,6 +444,22 @@ The release workflow requires a GitHub App that can write to the tap repository:
 
 During a tagged release, GitHub Actions exchanges those secrets for a short-lived token scoped to `aliengiraffe/homebrew-spaceship` and passes it to GoReleaser as `HOMEBREW_GITHUB_API_TOKEN`.
 
+Pushes to `main` also publish a rolling prerelease channel without requiring GoReleaser Pro. The nightly workflow builds OSS snapshot archives, recreates the `main-nightly` GitHub prerelease with fresh assets, and updates a separate Homebrew cask in `aliengiraffe/homebrew-spaceship`.
+
+Nightly install path:
+
+```sh
+brew tap aliengiraffe/spaceship
+brew install --cask vigilante-nightly
+```
+
+Stable installs remain on the tagged release path:
+
+```sh
+brew tap aliengiraffe/spaceship
+brew install --cask vigilante
+```
+
 Recommended release flow:
 
 ```sh
