@@ -52,6 +52,18 @@ cask "vigilante-nightly" do
       url "https://github.com/aliengiraffe/vigilante/releases/download/${NIGHTLY_TAG}/${macos_arm64_archive}"
       sha256 "${macos_arm64_sha}"
     end
+
+    postflight do
+      system_command "/usr/bin/xattr",
+                     args:         ["-dr", "com.apple.provenance", staged_path.to_s],
+                     must_succeed: false
+      system_command "/usr/bin/xattr",
+                     args:         ["-dr", "com.apple.quarantine", staged_path.to_s],
+                     must_succeed: false
+      system_command "/usr/bin/codesign",
+                     args:         ["--force", "--sign", "-", "#{staged_path}/vigilante"],
+                     must_succeed: false
+    end
   end
 
   on_linux do
