@@ -3,6 +3,7 @@ package telemetry
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nicobistolfi/vigilante/internal/state"
 	otellog "go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 )
@@ -407,6 +409,156 @@ func TestCaptureWorkflowEventUsesDefaultManagerAndBoundedProperties(t *testing.T
 	}
 	if got, want := events[0].Properties["platform_os"], runtime.GOOS; got != want {
 		t.Fatalf("platform_os = %v, want %q", got, want)
+	}
+}
+
+func TestCaptureDownstreamRateLimitEmitsBoundedProviderQuotaSignal(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	exporter := &captureExporter{}
+	analytics := &captureAnalyticsExporter{}
+	manager, err := Setup(context.Background(), SetupConfig{
+		BuildInfo: BuildInfo{
+			Version:           "1.2.3",
+			Distro:            "direct",
+			TelemetryEndpoint: "otel.example.test",
+			TelemetryToken:    "token",
+			TelemetryURLPath:  "/i/v1/logs",
+		},
+		StateRoot: root,
+		EnvLookup: func(string) string { return "" },
+		NewExporter: func(context.Context, BuildInfo) (sdklog.Exporter, error) {
+			return exporter, nil
+		},
+		NewAnalyticsExporter: func(BuildInfo, string) (analyticsExporter, error) {
+			return analytics, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Setup() error = %v", err)
+	}
+
+	SetDefault(manager)
+	t.Cleanup(func() {
+		SetDefault(nil)
+	})
+
+	CaptureDownstreamRateLimit("issue_execution", "codex exec", state.BlockedReason{Kind: "provider_quota"}, "You've hit your usage limit. Purchase more credits with token sk-live-secret.")
+	if err := manager.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+
+	records := exporter.Records()
+	if len(records) != 1 {
+		t.Fatalf("expected 1 exported record, got %d", len(records))
+	}
+
+	record := records[0]
+	if got, want := record.EventName(), "downstream.rate_limit"; got != want {
+		t.Fatalf("record.EventName() = %q, want %q", got, want)
+	}
+	if got, want := record.Severity(), otellog.SeverityError; got != want {
+		t.Fatalf("record.Severity() = %v, want %v", got, want)
+	}
+	if got, want := record.Body().AsString(), "downstream service rate limited"; got != want {
+		t.Fatalf("record.Body() = %q, want %q", got, want)
+	}
+
+	attrs := map[string]otellog.Value{}
+	record.WalkAttributes(func(kv otellog.KeyValue) bool {
+		attrs[kv.Key] = kv.Value
+		return true
+	})
+	if got, want := attrs["downstream.service"].AsString(), "provider"; got != want {
+		t.Fatalf("downstream.service = %q, want %q", got, want)
+	}
+	if got, want := attrs["downstream.operation"].AsString(), "codex exec"; got != want {
+		t.Fatalf("downstream.operation = %q, want %q", got, want)
+	}
+	if got, want := attrs["downstream.classification"].AsString(), "quota"; got != want {
+		t.Fatalf("downstream.classification = %q, want %q", got, want)
+	}
+	if got, want := attrs["downstream.retryable"].AsBool(), false; got != want {
+		t.Fatalf("downstream.retryable = %v, want %v", got, want)
+	}
+
+	events := analytics.Events()
+	if len(events) != 1 {
+		t.Fatalf("expected 1 analytics event, got %d", len(events))
+	}
+	if got, want := events[0].Event, "downstream_service_rate_limited"; got != want {
+		t.Fatalf("events[0].Event = %q, want %q", got, want)
+	}
+	if got, want := events[0].Properties["service"], "provider"; got != want {
+		t.Fatalf("service = %v, want %q", got, want)
+	}
+	if got, want := events[0].Properties["classification"], "quota"; got != want {
+		t.Fatalf("classification = %v, want %q", got, want)
+	}
+	encoded, err := json.Marshal(events[0])
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if strings.Contains(string(encoded), "sk-live-secret") {
+		t.Fatalf("expected telemetry payload to omit raw diagnostic details, got %s", encoded)
+	}
+}
+
+func TestCaptureDownstreamRateLimitDetectsGitHubRateLimit(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	exporter := &captureExporter{}
+	manager, err := Setup(context.Background(), SetupConfig{
+		BuildInfo: BuildInfo{
+			Version:           "1.2.3",
+			Distro:            "direct",
+			TelemetryEndpoint: "otel.example.test",
+			TelemetryToken:    "token",
+			TelemetryURLPath:  "/i/v1/logs",
+		},
+		StateRoot: root,
+		EnvLookup: func(string) string { return "" },
+		NewExporter: func(context.Context, BuildInfo) (sdklog.Exporter, error) {
+			return exporter, nil
+		},
+		NewAnalyticsExporter: func(BuildInfo, string) (analyticsExporter, error) {
+			return &captureAnalyticsExporter{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Setup() error = %v", err)
+	}
+
+	SetDefault(manager)
+	t.Cleanup(func() {
+		SetDefault(nil)
+	})
+
+	CaptureDownstreamRateLimit("dispatch", "gh api", state.BlockedReason{Kind: "provider_runtime_error"}, "API rate limit exceeded for github user 12345.")
+	if err := manager.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+
+	records := exporter.Records()
+	if len(records) != 1 {
+		t.Fatalf("expected 1 exported record, got %d", len(records))
+	}
+
+	attrs := map[string]otellog.Value{}
+	records[0].WalkAttributes(func(kv otellog.KeyValue) bool {
+		attrs[kv.Key] = kv.Value
+		return true
+	})
+	if got, want := attrs["downstream.service"].AsString(), "github"; got != want {
+		t.Fatalf("downstream.service = %q, want %q", got, want)
+	}
+	if got, want := attrs["downstream.classification"].AsString(), "rate_limit"; got != want {
+		t.Fatalf("downstream.classification = %q, want %q", got, want)
+	}
+	if got, want := attrs["downstream.retryable"].AsBool(), true; got != want {
+		t.Fatalf("downstream.retryable = %v, want %v", got, want)
 	}
 }
 

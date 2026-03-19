@@ -14,6 +14,7 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/logtime"
 	"github.com/nicobistolfi/vigilante/internal/provider"
 	"github.com/nicobistolfi/vigilante/internal/state"
+	"github.com/nicobistolfi/vigilante/internal/telemetry"
 )
 
 func RunIssueSession(ctx context.Context, env *environment.Environment, store *state.Store, target state.WatchTarget, issue ghcli.Issue, session state.Session) state.Session {
@@ -300,7 +301,10 @@ func buildResumeHint(session state.Session) string {
 }
 
 func classifyBlockedFailure(stage string, operation string, output string, err error) state.BlockedReason {
-	return blocking.Classify(stage, operation, strings.TrimSpace(output+"\n"+err.Error()), summarizeError(err))
+	diagnostic := strings.TrimSpace(output + "\n" + err.Error())
+	blocked := blocking.Classify(stage, operation, diagnostic, summarizeError(err))
+	telemetry.CaptureDownstreamRateLimit(stage, operation, blocked, diagnostic)
+	return blocked
 }
 
 func blockedPreflightMessage(blocked state.BlockedReason, providerID string) string {

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nicobistolfi/vigilante/internal/state"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	otellog "go.opentelemetry.io/otel/log"
@@ -466,6 +467,75 @@ func (m *Manager) CaptureWorkflowEvent(event string, properties map[string]any) 
 	})
 }
 
+func CaptureDownstreamRateLimit(stage string, operation string, blocked state.BlockedReason, diagnostic string) {
+	defaultManagerMu.RLock()
+	manager := defaultManager
+	defaultManagerMu.RUnlock()
+	if manager == nil {
+		return
+	}
+	manager.CaptureDownstreamRateLimit(stage, operation, blocked, diagnostic)
+}
+
+func (m *Manager) CaptureDownstreamRateLimit(stage string, operation string, blocked state.BlockedReason, diagnostic string) {
+	if m == nil {
+		return
+	}
+
+	classification, retryable, ok := classifyDownstreamRateLimit(blocked, diagnostic)
+	if !ok {
+		return
+	}
+
+	service := downstreamServiceCategory(operation, blocked, diagnostic)
+	properties := map[string]any{
+		"feature_area":     "downstream_service",
+		"invocation":       "daemon",
+		"stage":            strings.TrimSpace(stage),
+		"operation":        boundedOperation(operation),
+		"service":          service,
+		"classification":   classification,
+		"retryable":        retryable,
+		"blocked_kind":     strings.TrimSpace(blocked.Kind),
+		"blocked_stage":    strings.TrimSpace(stage),
+		"result":           "failure",
+		"telemetry_signal": "downstream_rate_limit",
+	}
+
+	if m.provider != nil {
+		record := otellog.Record{}
+		now := time.Now().UTC()
+		record.SetEventName("downstream.rate_limit")
+		record.SetTimestamp(now)
+		record.SetObservedTimestamp(now)
+		record.SetBody(otellog.StringValue("downstream service rate limited"))
+		record.SetSeverity(otellog.SeverityError)
+		record.SetSeverityText("ERROR")
+		record.AddAttributes(
+			otellog.KeyValueFromAttribute(attribute.String("downstream.service", service)),
+			otellog.KeyValueFromAttribute(attribute.String("downstream.operation", boundedOperation(operation))),
+			otellog.KeyValueFromAttribute(attribute.String("downstream.classification", classification)),
+			otellog.KeyValueFromAttribute(attribute.Bool("downstream.retryable", retryable)),
+			otellog.KeyValueFromAttribute(attribute.String("session.blocked_kind", strings.TrimSpace(blocked.Kind))),
+			otellog.KeyValueFromAttribute(attribute.String("session.blocked_stage", strings.TrimSpace(stage))),
+			otellog.KeyValueFromAttribute(attribute.String("platform.os", runtime.GOOS)),
+			otellog.KeyValueFromAttribute(attribute.String("platform.arch", runtime.GOARCH)),
+			otellog.KeyValueFromAttribute(attribute.String("app.version", m.version)),
+			otellog.KeyValueFromAttribute(attribute.String("distro", m.distro)),
+		)
+		m.logger.Emit(context.Background(), record)
+	}
+
+	m.enqueueAnalytics(analyticsEvent{
+		Type:       "capture",
+		UUID:       uuid.NewString(),
+		Timestamp:  time.Now().UTC(),
+		DistinctID: m.anonID,
+		Event:      "downstream_service_rate_limited",
+		Properties: m.workflowProperties(properties),
+	})
+}
+
 func (m *Manager) commandProperties(commandName string) map[string]any {
 	commandGroup := commandGroup(commandName)
 	return map[string]any{
@@ -516,6 +586,55 @@ func commandGroup(commandName string) string {
 		return "root"
 	}
 	return parts[0]
+}
+
+func classifyDownstreamRateLimit(blocked state.BlockedReason, diagnostic string) (classification string, retryable bool, ok bool) {
+	if strings.TrimSpace(blocked.Kind) == "provider_quota" {
+		return "quota", false, true
+	}
+
+	lower := strings.ToLower(strings.TrimSpace(diagnostic))
+	switch {
+	case strings.Contains(lower, "secondary rate limit"),
+		strings.Contains(lower, "api rate limit exceeded"),
+		strings.Contains(lower, "rate limit exceeded"),
+		strings.Contains(lower, "rate limit reached"),
+		strings.Contains(lower, "too many requests"),
+		strings.Contains(lower, "http 429"),
+		strings.Contains(lower, "status 429"):
+		return "rate_limit", true, true
+	case strings.Contains(lower, "usage limit"),
+		strings.Contains(lower, "quota exceeded"),
+		(strings.Contains(lower, "credits") && strings.Contains(lower, "purchase more")):
+		return "quota", false, true
+	default:
+		return "", false, false
+	}
+}
+
+func downstreamServiceCategory(operation string, blocked state.BlockedReason, diagnostic string) string {
+	joined := strings.ToLower(strings.Join([]string{operation, blocked.Kind, diagnostic}, "\n"))
+	switch {
+	case strings.Contains(joined, "gh "), strings.Contains(joined, "github"), strings.Contains(joined, "graphql"), strings.Contains(joined, "api rate limit exceeded"):
+		return "github"
+	case strings.Contains(joined, "codex"), strings.Contains(joined, "claude"), strings.Contains(joined, "gemini"), strings.Contains(joined, "provider_"):
+		return "provider"
+	case strings.Contains(joined, "otlp"), strings.Contains(joined, "telemetry"):
+		return "telemetry_export"
+	default:
+		return "unknown"
+	}
+}
+
+func boundedOperation(operation string) string {
+	operation = strings.TrimSpace(operation)
+	if operation == "" {
+		return "unknown"
+	}
+	if len(operation) > 80 {
+		return strings.TrimSpace(operation[:80])
+	}
+	return operation
 }
 
 func commandFeatureArea(commandGroup string) string {

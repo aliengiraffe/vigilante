@@ -1549,6 +1549,28 @@ func TestClassifyBlockedReasonDetectsProviderQuota(t *testing.T) {
 	}
 }
 
+func TestClassifyBlockedReasonEmitsGitHubRateLimitTelemetry(t *testing.T) {
+	capture, shutdownTelemetry := setupTelemetryCapture(t)
+
+	_ = classifyBlockedReason("dispatch", "gh api", errors.New("API rate limit exceeded for user ID 12345"))
+	if err := shutdownTelemetry(); err != nil {
+		t.Fatalf("shutdown telemetry: %v", err)
+	}
+
+	if len(capture.events) != 1 {
+		t.Fatalf("expected 1 telemetry event, got %d", len(capture.events))
+	}
+	if got, want := capture.events[0].Event, "downstream_service_rate_limited"; got != want {
+		t.Fatalf("event = %q, want %q", got, want)
+	}
+	if got, want := capture.events[0].Properties["service"], "github"; got != want {
+		t.Fatalf("service = %v, want %q", got, want)
+	}
+	if got, want := capture.events[0].Properties["classification"], "rate_limit"; got != want {
+		t.Fatalf("classification = %v, want %q", got, want)
+	}
+}
+
 func TestListRunningSessions(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
