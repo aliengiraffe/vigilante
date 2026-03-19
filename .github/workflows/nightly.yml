@@ -70,6 +70,15 @@ jobs:
           NIGHTLY_TAG: ${{ env.NIGHTLY_TAG }}
           NIGHTLY_VERSION: ${{ env.NIGHTLY_VERSION }}
         run: |
+          release_notes="$(printf '%s\n' \
+            "Rolling prerelease from \`main\` for commit \`$GITHUB_SHA\`." \
+            "" \
+            "Version: \`$NIGHTLY_VERSION\`" \
+            "" \
+            "Install with:" \
+            "\`brew tap aliengiraffe/spaceship\`" \
+            "\`brew install --cask vigilante-nightly\`")"
+
           if gh release view "$NIGHTLY_TAG" >/dev/null 2>&1; then
             gh release delete "$NIGHTLY_TAG" --cleanup-tag --yes
           fi
@@ -79,13 +88,7 @@ jobs:
             dist/checksums.txt \
             --target "$GITHUB_SHA" \
             --title "Vigilante Nightly" \
-            --notes "Rolling prerelease from \`main\` for commit \`$GITHUB_SHA\`.
-
-Version: \`$NIGHTLY_VERSION\`
-
-Install with:
-\`brew tap aliengiraffe/spaceship\`
-\`brew install --cask vigilante-nightly\`" \
+            --notes "$release_notes" \
             --prerelease
 
       - name: Check out Homebrew tap
