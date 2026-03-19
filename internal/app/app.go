@@ -569,7 +569,7 @@ func (a *App) SetupWithProvider(ctx context.Context, installDaemon bool, provide
 	if err := a.ensureTooling(ctx, selectedProvider); err != nil {
 		return err
 	}
-	if err := selectedProvider.EnsureRuntimeInstalled(a.state); err != nil {
+	if err := a.installBundledSkills(); err != nil {
 		return err
 	}
 	if installDaemon {
@@ -579,6 +579,22 @@ func (a *App) SetupWithProvider(ctx context.Context, installDaemon bool, provide
 	}
 	a.state.AppendDaemonLog("setup complete install_daemon=%t", installDaemon)
 	fmt.Fprintln(a.stdout, "setup complete")
+	return nil
+}
+
+func (a *App) installBundledSkills() error {
+	for _, runtimeHome := range []struct {
+		runtime string
+		home    string
+	}{
+		{runtime: skill.RuntimeCodex, home: a.state.CodexHome()},
+		{runtime: skill.RuntimeClaude, home: a.state.ClaudeHome()},
+		{runtime: skill.RuntimeGemini, home: a.state.GeminiHome()},
+	} {
+		if err := skill.EnsureInstalled(runtimeHome.runtime, runtimeHome.home); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
