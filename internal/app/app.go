@@ -848,6 +848,10 @@ func (a *App) ScanOnce(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		sessions, err = a.cleanupClosedIssueSessions(ctx, sessions)
+		if err != nil {
+			return err
+		}
 		sessions, err = a.maintainPullRequests(ctx, sessions)
 		if err != nil {
 			return err
@@ -1135,10 +1139,11 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 		updatePullRequestTrackingFromLookup(session, *pr)
 		if pr.MergedAt == nil {
 			if pr.State != "OPEN" {
-				session.MonitoringStoppedAt = a.clock().Format(time.RFC3339)
-				session.LastMaintenanceError = ""
-				session.UpdatedAt = session.MonitoringStoppedAt
-				a.state.AppendDaemonLog("monitoring stopped repo=%s issue=%d pr=%d branch=%s state=%s", session.Repo, session.IssueNumber, pr.Number, session.Branch, pr.State)
+				if err := a.cleanupSessionArtifacts(ctx, session, "pull_request_closed"); err != nil {
+					a.state.AppendDaemonLog("cleanup failed repo=%s issue=%d pr=%d branch=%s worktree=%s source=pull_request_closed state=%s err=%v", session.Repo, session.IssueNumber, pr.Number, session.Branch, session.WorktreePath, pr.State, err)
+					continue
+				}
+				a.state.AppendDaemonLog("cleanup complete repo=%s issue=%d pr=%d branch=%s worktree=%s source=pull_request_closed state=%s", session.Repo, session.IssueNumber, pr.Number, session.Branch, session.WorktreePath, pr.State)
 				a.syncSessionIssueLabelsBestEffort(ctx, *session, pr)
 				continue
 			}
@@ -1175,18 +1180,13 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 		}
 
 		session.PullRequestMergedAt = pr.MergedAt.UTC().Format(time.RFC3339)
-		if err := worktree.CleanupIssueArtifacts(ctx, a.env.Runner, session.RepoPath, session.WorktreePath, session.Branch); err != nil {
-			session.CleanupError = err.Error()
-			session.UpdatedAt = a.clock().Format(time.RFC3339)
-			a.state.AppendDaemonLog("cleanup failed repo=%s issue=%d branch=%s worktree=%s err=%v", session.Repo, session.IssueNumber, session.Branch, session.WorktreePath, err)
+		if err := a.cleanupSessionArtifacts(ctx, session, "pull_request_merged"); err != nil {
+			a.state.AppendDaemonLog("cleanup failed repo=%s issue=%d pr=%d branch=%s worktree=%s source=pull_request_merged merged_at=%s err=%v", session.Repo, session.IssueNumber, session.PullRequestNumber, session.Branch, session.WorktreePath, session.PullRequestMergedAt, err)
 			continue
 		}
 
-		session.CleanupCompletedAt = a.clock().Format(time.RFC3339)
-		session.CleanupError = ""
-		session.UpdatedAt = session.CleanupCompletedAt
 		a.state.AppendDaemonLog(
-			"cleanup complete repo=%s issue=%d pr=%d branch=%s worktree=%s merged_at=%s",
+			"cleanup complete repo=%s issue=%d pr=%d branch=%s worktree=%s source=pull_request_merged merged_at=%s",
 			session.Repo,
 			session.IssueNumber,
 			session.PullRequestNumber,
@@ -1198,6 +1198,52 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 	}
 
 	return sessions, nil
+}
+
+func (a *App) cleanupClosedIssueSessions(ctx context.Context, sessions []state.Session) ([]state.Session, error) {
+	for i := range sessions {
+		session := &sessions[i]
+		if session.Status != state.SessionStatusSuccess || session.CleanupCompletedAt != "" || session.MonitoringStoppedAt != "" {
+			continue
+		}
+
+		issue, err := ghcli.GetIssueDetails(ctx, a.env.Runner, session.Repo, session.IssueNumber)
+		if err != nil {
+			session.LastMaintenanceError = err.Error()
+			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			a.state.AppendDaemonLog("issue lookup failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(issue.State), "closed") {
+			continue
+		}
+
+		if err := a.cleanupSessionArtifacts(ctx, session, "issue_closed"); err != nil {
+			a.state.AppendDaemonLog("cleanup failed repo=%s issue=%d branch=%s worktree=%s source=issue_closed err=%v", session.Repo, session.IssueNumber, session.Branch, session.WorktreePath, err)
+			continue
+		}
+
+		a.state.AppendDaemonLog("cleanup complete repo=%s issue=%d branch=%s worktree=%s source=issue_closed", session.Repo, session.IssueNumber, session.Branch, session.WorktreePath)
+		a.syncSessionIssueLabelsBestEffort(ctx, *session, nil)
+	}
+
+	return sessions, nil
+}
+
+func (a *App) cleanupSessionArtifacts(ctx context.Context, session *state.Session, source string) error {
+	now := a.clock().Format(time.RFC3339)
+	session.LastCleanupSource = source
+	if err := worktree.CleanupIssueArtifacts(ctx, a.env.Runner, session.RepoPath, session.WorktreePath, session.Branch); err != nil {
+		session.CleanupError = err.Error()
+		session.UpdatedAt = now
+		return err
+	}
+
+	session.CleanupCompletedAt = now
+	session.CleanupError = ""
+	session.LastMaintenanceError = ""
+	session.UpdatedAt = now
+	return nil
 }
 
 func (a *App) launchIssueSession(ctx context.Context, target state.WatchTarget, issue ghcli.Issue, session state.Session) {
