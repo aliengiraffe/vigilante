@@ -134,7 +134,7 @@ func TestBuildIssuePrompt(t *testing.T) {
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 	prompt := BuildIssuePrompt(target, issue, session)
-	for _, text := range []string{"Use the `vigilante-issue-implementation` skill", "Detected repo shape: traditional", `Repo process context JSON: {"shape":"traditional"}`, "Selected issue implementation skill: vigilante-issue-implementation", "Issue: #12 - Fix bug", "Worktree path: /tmp/worktree", "gh issue comment", "implementation plan", "open a pull request", "Closes #12", "Coding Agent Launched: Codex", "10-cell progress bar", "ETA: ~N minutes"} {
+	for _, text := range []string{"Use the `vigilante-issue-implementation` skill", "Detected repo shape: traditional", `Repo process context JSON: {"shape":"traditional"}`, "Selected issue implementation skill: vigilante-issue-implementation", "Issue: #12 - Fix bug", "Worktree path: /tmp/worktree", "vigilante gh issue comment", "vigilante git push", "vigilante gh pr create", "Closes #12", "Coding Agent Launched: Codex", "10-cell progress bar", "ETA: ~N minutes"} {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q: %s", text, prompt)
 		}
@@ -704,7 +704,7 @@ func TestLocalServiceDependenciesSkillCoversStructuredOutputAndFailureModes(t *t
 	text := string(body)
 	for _, snippet := range []string{
 		"Prefer repository-provided service startup mechanisms",
-		"repository-owned `docker compose` or `docker-compose` files before generating anything new",
+		"repository-owned `vigilante docker compose` or `docker-compose` flows before generating anything new",
 		"Docker Compose is an allowed fallback, not the defining abstraction.",
 		"`status`: `ready`, `not_needed`, or `failed`",
 		"`mechanism`: `repo_native`, `repo_compose`, `repo_script`, `repo_task_runner`, or `generated_fallback`",

@@ -165,6 +165,24 @@ vigilante completion bash > ~/.local/share/bash-completion/completions/vigilante
 vigilante completion fish > ~/.config/fish/completions/vigilante.fish
 ```
 
+### Tool proxy commands
+
+Vigilante can proxy a bounded set of external CLIs while emitting privacy-aware telemetry about only the tool and sanitized command shape:
+
+- `vigilante gh ...`
+- `vigilante git ...`
+- `vigilante docker ...`
+
+Examples:
+
+```sh
+vigilante gh repo view aliengiraffe/vigilante
+vigilante git status --short
+vigilante docker compose ps
+```
+
+The proxy preserves the underlying tool's stdout, stderr, and exit status. Telemetry intentionally avoids raw positional arguments, flag values, repo slugs, tokens, paths, prompts, and free-form text.
+
 ## Installation
 
 Install `vigilante` from the Homebrew tap:

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -70,6 +71,7 @@ var supportedCompletionShells = []string{"bash", "fish", "zsh"}
 var errHelpHandled = errors.New("help handled")
 
 type App struct {
+	stdin  io.Reader
 	stdout io.Writer
 	stderr io.Writer
 	state  *state.Store
@@ -82,6 +84,7 @@ type App struct {
 	cancels                   map[string]context.CancelFunc
 	repoLabelProvisioningMu   sync.Mutex
 	repoLabelsProvisionedOnce map[string]bool
+	proxyExec                 func(context.Context, io.Reader, io.Writer, io.Writer, string, ...string) (int, error)
 }
 
 type stringListFlag []string
@@ -102,12 +105,14 @@ func (f *stringListFlag) Set(value string) error {
 func New() *App {
 	store := state.NewStore()
 	return &App{
+		stdin:                     os.Stdin,
 		stdout:                    os.Stdout,
 		stderr:                    os.Stderr,
 		state:                     store,
 		clock:                     time.Now().UTC,
 		cancels:                   make(map[string]context.CancelFunc),
 		repoLabelsProvisionedOnce: make(map[string]bool),
+		proxyExec:                 runProxyBinary,
 		env: &environment.Environment{
 			OS: runtime.GOOS,
 			Runner: environment.LoggingRunner{
@@ -187,6 +192,10 @@ func (a *App) Run(ctx context.Context, args []string) int {
 	}
 
 	if err := a.runCommand(ctx, args); err != nil {
+		var exitErr commandExitError
+		if errors.As(err, &exitErr) {
+			return exitErr.code
+		}
 		fmt.Fprintln(a.stderr, "error:", err)
 		return 1
 	}
@@ -198,6 +207,9 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 	if len(args) == 1 && isHelpToken(args[0]) {
 		a.printUsage(a.stdout)
 		return nil
+	}
+	if isSupportedProxyTool(args[0]) {
+		return a.runProxyCommand(ctx, args[0], args[1:])
 	}
 
 	switch args[0] {
@@ -299,6 +311,49 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+type commandExitError struct {
+	code int
+}
+
+func (e commandExitError) Error() string {
+	return fmt.Sprintf("command exited with status %d", e.code)
+}
+
+func isSupportedProxyTool(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "gh", "git", "docker":
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *App) runProxyCommand(ctx context.Context, tool string, args []string) error {
+	exitCode, err := a.proxyExec(ctx, a.stdin, a.stdout, a.stderr, tool, args...)
+	if err != nil {
+		return err
+	}
+	if exitCode != 0 {
+		return commandExitError{code: exitCode}
+	}
+	return nil
+}
+
+func runProxyBinary(ctx context.Context, stdin io.Reader, stdout io.Writer, stderr io.Writer, name string, args ...string) (int, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Stdin = stdin
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return exitErr.ExitCode(), nil
+		}
+		return 0, err
+	}
+	return 0, nil
 }
 
 func (a *App) runResumeCommand(ctx context.Context, args []string) error {
@@ -3559,6 +3614,7 @@ func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  vigilante service restart")
 	fmt.Fprintln(w, "  vigilante daemon run [--once] [--interval duration]")
 	fmt.Fprintln(w, "  vigilante completion <bash|fish|zsh>")
+	fmt.Fprintln(w, "  vigilante <gh|git|docker> ...")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Use \"vigilante <command> --help\" for command-specific usage.")
 }

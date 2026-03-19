@@ -22,4 +22,4 @@ Use this skill after Vigilante has already opened a pull request and a follow-up
 - Do not broaden the change beyond the conflicting files unless required to restore build or test health.
 - Keep the original issue behavior authoritative; do not drop commits or rewrite away issue scope just to remove conflicts.
 - Do not claim the branch is merge-ready unless the requested validation actually passed.
-- Report blockers immediately with `gh issue comment`.
+- Report blockers immediately with `vigilante gh issue comment`.
