@@ -59,6 +59,7 @@ type IssueDetails struct {
 	Title     string         `json:"title"`
 	Body      string         `json:"body"`
 	URL       string         `json:"html_url"`
+	State     string         `json:"state"`
 	Labels    []Label        `json:"labels"`
 	Assignees []IssueUserRef `json:"assignees"`
 }
