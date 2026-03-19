@@ -350,13 +350,15 @@ Expected behavior:
   - `docker-compose-launch`
 - installs or updates the daemon definition when requested
 
-On macOS, `vigilante setup -d` resolves Homebrew-style symlinks before it prepares the daemon binary. The launchd plist still uses the invoked path, but Vigilante removes `com.apple.provenance` and `com.apple.quarantine` from the resolved binary when present, ad-hoc signs that binary, and runs `spctl --assess --type execute -vv` against the resolved path before loading the service.
+On macOS, `vigilante setup -d` resolves Homebrew-style symlinks before it prepares the daemon binary. For Homebrew cask installs, Vigilante first clears `com.apple.provenance` and `com.apple.quarantine` recursively from the enclosing Caskroom version directory, then removes those same xattrs from the resolved binary when present, ad-hoc signs that binary, and runs `spctl --assess --type execute -vv` against the resolved path before loading the service.
 
 If Gatekeeper still rejects the binary, the error now reports both the assessed path and the invoked path when they differ. A useful manual recovery sequence is:
 
 ```sh
 realbin="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' /opt/homebrew/bin/vigilante)"
 xattr "$realbin"
+xattr -dr com.apple.provenance "$(dirname "$realbin")" 2>/dev/null || true
+xattr -dr com.apple.quarantine "$(dirname "$realbin")" 2>/dev/null || true
 xattr -d com.apple.provenance "$realbin" 2>/dev/null || true
 xattr -d com.apple.quarantine "$realbin" 2>/dev/null || true
 codesign --force --sign - "$realbin"
@@ -427,7 +429,7 @@ task setup-daemon
 
 On macOS, `task setup-daemon` now performs one explicit recovery attempt when an existing `com.vigilante.agent` launch agent is already present. If the first refresh fails, the task cleans up the existing launch agent, retries once, and prints a short manual `launchctl bootout ...` hint if recovery still fails.
 
-On macOS, `vigilante setup -d` also prepares the installed daemon binary before reloading the LaunchAgent by clearing an observed `com.apple.provenance` xattr, applying ad-hoc signing, and validating the binary with `spctl`. If macOS still rejects the binary, setup exits with a code-signing error instead of leaving the agent stuck in `OS_REASON_CODESIGNING`.
+On macOS, `vigilante setup -d` also prepares the installed daemon binary before reloading the LaunchAgent by clearing observed Gatekeeper xattrs from the Homebrew cask install root when applicable, clearing those xattrs from the resolved binary, applying ad-hoc signing, and validating the binary with `spctl`. If macOS still rejects the binary, setup exits with a code-signing error instead of leaving the agent stuck in `OS_REASON_CODESIGNING`.
 
 Notes:
 
