@@ -2985,6 +2985,9 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 		}
 
 		sessions = upsertSession(sessions, updated)
+		if err := a.state.SaveSessions(sessions); err != nil {
+			return sessions, started, err
+		}
 		a.emitSessionTransition(previous.Status, updated, "iteration_dispatch")
 		a.syncSessionIssueLabelsBestEffort(ctx, updated, nil)
 		a.launchIssueSession(ctx, target, issue, updated)
