@@ -430,10 +430,10 @@ func TestPrepareMacOSDaemonBinaryUsesResolvedPath(t *testing.T) {
 			Outputs: map[string]string{
 				`/bin/sh -lc xattr -dr 'com.apple.provenance' ` + shellQuote(caskRoot) + ` >/dev/null 2>&1 || true`: "",
 				`/bin/sh -lc xattr -dr 'com.apple.quarantine' ` + shellQuote(caskRoot) + ` >/dev/null 2>&1 || true`: "",
-				testutil.Key("xattr", resolvedPath):                                         "com.apple.provenance\ncom.apple.quarantine\ncom.example.keep\n",
-				testutil.Key("xattr", "-d", "com.apple.provenance", resolvedPath):           "",
-				testutil.Key("xattr", "-d", "com.apple.quarantine", resolvedPath):           "",
-				testutil.Key("codesign", "--force", "--sign", "-", resolvedPath): "",
+				testutil.Key("xattr", resolvedPath):                               "com.apple.provenance\ncom.apple.quarantine\ncom.example.keep\n",
+				testutil.Key("xattr", "-d", "com.apple.provenance", resolvedPath): "",
+				testutil.Key("xattr", "-d", "com.apple.quarantine", resolvedPath): "",
+				testutil.Key("codesign", "--force", "--sign", "-", resolvedPath):  "",
 			},
 		},
 	}
@@ -468,7 +468,7 @@ func TestPrepareMacOSDaemonBinarySkipsMissingKnownAttrs(t *testing.T) {
 	runner := &recordingRunner{
 		FakeRunner: testutil.FakeRunner{
 			Outputs: map[string]string{
-				testutil.Key("xattr", path):                                         "com.example.keep\n",
+				testutil.Key("xattr", path):                              "com.example.keep\n",
 				testutil.Key("codesign", "--force", "--sign", "-", path): "",
 			},
 		},
