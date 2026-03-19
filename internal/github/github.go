@@ -56,10 +56,15 @@ type IssueComment struct {
 }
 
 type IssueDetails struct {
-	Title  string  `json:"title"`
-	Body   string  `json:"body"`
-	URL    string  `json:"html_url"`
-	Labels []Label `json:"labels"`
+	Title     string         `json:"title"`
+	Body      string         `json:"body"`
+	URL       string         `json:"html_url"`
+	Labels    []Label        `json:"labels"`
+	Assignees []IssueUserRef `json:"assignees"`
+}
+
+type IssueUserRef struct {
+	Login string `json:"login"`
 }
 
 type RepositoryLabelDetails struct {
@@ -406,6 +411,64 @@ func FindCleanupComment(comments []IssueComment, claimedCommentID int64) *IssueC
 	return findCommandComment(comments, "@vigilanteai cleanup", claimedCommentID)
 }
 
+func FindIterationComment(comments []IssueComment, claimedCommentID int64) *IssueComment {
+	for i := len(comments) - 1; i >= 0; i-- {
+		if claimedCommentID != 0 && comments[i].ID == claimedCommentID {
+			continue
+		}
+		if !IsIterationComment(comments[i]) {
+			continue
+		}
+		return &comments[i]
+	}
+	return nil
+}
+
+func IsIterationComment(comment IssueComment) bool {
+	body := normalizeVigilanteComment(comment.Body)
+	if !strings.HasPrefix(body, "@vigilanteai") {
+		return false
+	}
+	if IsKnownVigilanteCommandComment(body) {
+		return false
+	}
+	return strings.TrimSpace(strings.TrimPrefix(body, "@vigilanteai")) != ""
+}
+
+func IsKnownVigilanteCommandComment(body string) bool {
+	switch normalizeVigilanteComment(body) {
+	case "@vigilanteai resume", "@vigilanteai cleanup":
+		return true
+	default:
+		return false
+	}
+}
+
+func AssigneeIterationComments(comments []IssueComment, assignees []string) []IssueComment {
+	if len(assignees) == 0 {
+		return nil
+	}
+	allowed := make(map[string]struct{}, len(assignees))
+	for _, assignee := range assignees {
+		login := strings.TrimSpace(strings.ToLower(assignee))
+		if login == "" {
+			continue
+		}
+		allowed[login] = struct{}{}
+	}
+	selected := make([]IssueComment, 0, len(comments))
+	for _, comment := range comments {
+		if !IsIterationComment(comment) {
+			continue
+		}
+		if _, ok := allowed[strings.ToLower(strings.TrimSpace(comment.User.Login))]; !ok {
+			continue
+		}
+		selected = append(selected, comment)
+	}
+	return selected
+}
+
 func LatestUserCommentTime(comments []IssueComment) time.Time {
 	for i := len(comments) - 1; i >= 0; i-- {
 		if IsUserComment(comments[i]) {
@@ -427,9 +490,10 @@ func IsUserComment(comment IssueComment) bool {
 }
 
 func findCommandComment(comments []IssueComment, command string, claimedCommentID int64) *IssueComment {
+	want := normalizeVigilanteComment(command)
 	for i := len(comments) - 1; i >= 0; i-- {
-		body := strings.TrimSpace(comments[i].Body)
-		if body != command {
+		body := normalizeVigilanteComment(comments[i].Body)
+		if body != want {
 			continue
 		}
 		if claimedCommentID != 0 && comments[i].ID == claimedCommentID {
@@ -438,6 +502,11 @@ func findCommandComment(comments []IssueComment, command string, claimedCommentI
 		return &comments[i]
 	}
 	return nil
+}
+
+func normalizeVigilanteComment(body string) string {
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(body)))
+	return strings.Join(fields, " ")
 }
 
 func FindPullRequestForBranch(ctx context.Context, runner environment.Runner, repo string, branch string) (*PullRequest, error) {

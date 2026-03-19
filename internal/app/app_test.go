@@ -235,6 +235,205 @@ func TestDesiredSessionLabels(t *testing.T) {
 	}
 }
 
+func TestSessionManagedLabelsIncludesIteratingWhenActive(t *testing.T) {
+	labels := sessionManagedLabels(state.Session{
+		Status:              state.SessionStatusRunning,
+		IterationInProgress: true,
+	}, nil)
+	if len(labels) != 2 || labels[0] != labelRunning || labels[1] != labelIterating {
+		t.Fatalf("unexpected labels: %#v", labels)
+	}
+}
+
+func TestProcessGitHubIterationRequestsForTargetRejectsNonAssignee(t *testing.T) {
+	now := time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)
+	repoPath := t.TempDir()
+	stateRoot := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", stateRoot)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.clock = func() time.Time { return now }
+	app.state = state.NewStore()
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1":          `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","labels":[{"name":"vigilante:ready-for-review"}],"assignees":[{"login":"nicobistolfi"}]}`,
+			"gh api repos/owner/repo/issues/1/comments": `[{"id":101,"body":"@vigilanteai please revise this","created_at":"2026-03-19T11:59:00Z","user":{"login":"someoneelse"}}]`,
+			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Iteration Ignored",
+				Emoji:      "🛂",
+				Percent:    100,
+				ETAMinutes: 1,
+				Items: []string{
+					"Ignored the latest `@vigilanteai` iteration request from `@someoneelse`.",
+					"Only a current issue assignee can request another implementation iteration for this issue.",
+					"Next step: ask an assignee to post the follow-up request if another pass is needed.",
+				},
+				Tagline: "Hands on the wheel, one driver at a time.",
+			}): "ok",
+		},
+	}
+
+	sessions := []state.Session{{
+		RepoPath:     repoPath,
+		Repo:         "owner/repo",
+		Provider:     "codex",
+		IssueNumber:  1,
+		IssueTitle:   "first",
+		IssueURL:     "https://github.com/owner/repo/issues/1",
+		Status:       state.SessionStatusSuccess,
+		Branch:       "vigilante/issue-1-first",
+		WorktreePath: filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1"),
+	}}
+
+	updated, started, err := app.processGitHubIterationRequestsForTarget(context.Background(), state.WatchTarget{
+		Path:   repoPath,
+		Repo:   "owner/repo",
+		Branch: "main",
+	}, sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started != 0 {
+		t.Fatalf("expected no iteration dispatches, got %d", started)
+	}
+	if updated[0].LastIterationCommentID != 101 {
+		t.Fatalf("expected rejected iteration comment to be recorded, got %#v", updated[0])
+	}
+}
+
+func TestProcessGitHubIterationRequestsForTargetDispatchesAssigneeComment(t *testing.T) {
+	now := time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)
+	repoPath := t.TempDir()
+	stateRoot := t.TempDir()
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	t.Setenv("VIGILANTE_HOME", stateRoot)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.clock = func() time.Time { return now }
+	app.state = state.NewStore()
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	app.repoLabelsProvisionedOnce["owner/repo"] = true
+
+	iterationContext := buildIterationPromptContext([]ghcli.IssueComment{
+		{
+			ID:        101,
+			Body:      "@vigilanteai first follow-up",
+			CreatedAt: now.Add(-2 * time.Minute),
+			User: struct {
+				Login string `json:"login"`
+			}{Login: "nicobistolfi"},
+		},
+		{
+			ID:        102,
+			Body:      "@vigilanteai tighten the validation path",
+			CreatedAt: now.Add(-1 * time.Minute),
+			User: struct {
+				Login string `json:"login"`
+			}{Login: "nicobistolfi"},
+		},
+	})
+	startSession := state.Session{
+		RepoPath:               repoPath,
+		Repo:                   "owner/repo",
+		Provider:               "codex",
+		IssueNumber:            1,
+		IssueTitle:             "first",
+		IssueURL:               "https://github.com/owner/repo/issues/1",
+		Status:                 state.SessionStatusSuccess,
+		Branch:                 "vigilante/issue-1-first",
+		WorktreePath:           worktreePath,
+		IssueBody:              "Original body",
+		IterationPromptContext: iterationContext,
+		IterationInProgress:    true,
+	}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1":          `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","labels":[{"name":"vigilante:ready-for-review"}],"assignees":[{"login":"nicobistolfi"}]}`,
+			"gh api repos/owner/repo/issues/1/comments": `[{"id":101,"body":"@vigilanteai first follow-up","created_at":"2026-03-19T11:58:00Z","user":{"login":"nicobistolfi"}},{"id":102,"body":"@vigilanteai tighten the validation path","created_at":"2026-03-19T11:59:00Z","user":{"login":"nicobistolfi"}}]`,
+			"gh api --method POST -H Accept: application/vnd.github+json repos/owner/repo/issues/comments/102/reactions -f content=eyes": "ok",
+			"git worktree prune":                          "ok",
+			"git fetch origin main":                       "ok",
+			"git worktree list --porcelain":               "",
+			"git branch -f main refs/remotes/origin/main": "ok",
+			"git worktree add -b vigilante/issue-1-first " + worktreePath + " origin/main":                                                              "ok",
+			"gh issue edit --repo owner/repo 1 --add-label vigilante:iterating --add-label vigilante:running --remove-label vigilante:ready-for-review": "ok",
+			sessionStartCommentCommand("owner/repo", 1, worktreePath, state.Session{
+				Repo:                   "owner/repo",
+				IssueNumber:            1,
+				IssueTitle:             "first",
+				IssueBody:              "Issue body",
+				IssueURL:               "https://github.com/owner/repo/issues/1",
+				BaseBranch:             "main",
+				Branch:                 "vigilante/issue-1-first",
+				WorktreePath:           worktreePath,
+				Status:                 state.SessionStatusRunning,
+				Provider:               "codex",
+				IterationInProgress:    true,
+				IterationPromptContext: iterationContext,
+			}): "ok",
+			preflightPromptCommand(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", "vigilante/issue-1-first"): "ok",
+			issuePromptCommandForSession(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", state.Session{
+				WorktreePath:           worktreePath,
+				Branch:                 "vigilante/issue-1-first",
+				Provider:               "codex",
+				IssueBody:              "Issue body",
+				IterationPromptContext: iterationContext,
+			}): "done",
+			"gh issue edit --repo owner/repo 1 --add-label vigilante:ready-for-review --remove-label vigilante:iterating --remove-label vigilante:running": "ok",
+		},
+		Errors: map[string]error{
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-1-first": errors.New("exit status 1"),
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-1":       errors.New("exit status 1"),
+		},
+	}
+
+	sessions := []state.Session{startSession}
+	updated, started, err := app.processGitHubIterationRequestsForTarget(context.Background(), state.WatchTarget{
+		Path:   repoPath,
+		Repo:   "owner/repo",
+		Branch: "main",
+	}, sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started != 1 {
+		t.Fatalf("expected one iteration dispatch, got %d", started)
+	}
+	app.waitForSessions()
+
+	saved, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved) != 1 {
+		t.Fatalf("expected one saved session, got %#v", saved)
+	}
+	if saved[0].LastIterationCommentID != 102 {
+		t.Fatalf("expected iteration comment tracking, got %#v", saved[0])
+	}
+	if saved[0].IssueBody != "Issue body" {
+		t.Fatalf("expected updated issue body, got %#v", saved[0])
+	}
+	if strings.TrimSpace(saved[0].IterationPromptContext) == "" {
+		t.Fatalf("expected iteration prompt context, got %#v", saved[0])
+	}
+	if saved[0].IterationInProgress {
+		t.Fatalf("expected iteration flag to clear after successful run, got %#v", saved[0])
+	}
+	if updated[0].Status != state.SessionStatusRunning {
+		t.Fatalf("expected in-memory session to be redispatched before completion, got %#v", updated[0])
+	}
+}
+
 func TestSyncIssueManagedLabelsQueued(t *testing.T) {
 	capture, shutdownTelemetry := setupTelemetryCapture(t)
 	app := New()
@@ -242,7 +441,7 @@ func TestSyncIssueManagedLabelsQueued(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/labels?per_page=100":                                                     `[{"name":"bug"},{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/labels?per_page=100":                                                     `[{"name":"bug"},{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 			"gh api repos/owner/repo/issues/7":                                                                `{"labels":[{"name":"bug"},{"name":"vigilante:running"}]}`,
 			"gh issue edit --repo owner/repo 7 --add-label vigilante:queued --remove-label vigilante:running": "ok",
 		},
@@ -275,7 +474,7 @@ func TestSyncIssueManagedLabelsNoopDoesNotEmitTelemetry(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 			"gh api repos/owner/repo/issues/7":            `{"labels":[{"name":"vigilante:queued"}]}`,
 		},
 	}
@@ -356,7 +555,7 @@ func TestSyncSessionIssueLabelsUsesPullRequestReviewState(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 			"gh pr view --repo owner/repo 17 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": `{"number":17,"title":"Demo PR","body":"PR body","url":"https://github.com/owner/repo/pull/17","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}]}`,
 			"gh api repos/owner/repo/issues/7": `{"labels":[{"name":"vigilante:ready-for-review"},{"name":"vigilante:needs-review"}]}`,
 			"gh issue edit --repo owner/repo 7 --add-label vigilante:awaiting-user-validation --remove-label vigilante:needs-review --remove-label vigilante:ready-for-review": "ok",
@@ -383,6 +582,7 @@ func TestSyncIssueManagedLabelsProvisionMissingRepositoryLabels(t *testing.T) {
 			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"bug"}]`,
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:queued -f color=BFDADC -f description=The issue is eligible for dispatch and waiting for a worker slot.":                                           "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:running -f color=0E8A16 -f description=A coding-agent session is currently executing for the issue.":                                               "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=vigilante:iterating -f color=1D76DB -f description=An assignee-requested follow-up implementation iteration is actively in progress.":                        "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:blocked -f color=D93F0B -f description=Execution cannot continue until a blocker is resolved.":                                                     "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:recovering -f color=FBCA04 -f description=An automatic stale-session recovery attempt is actively rebuilding local execution state.":               "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:ready-for-review -f color=FBCA04 -f description=Implementation is complete enough for a human to review the resulting PR or branch.":               "ok",
@@ -5221,6 +5421,14 @@ func issuePromptCommand(worktreePath string, repo string, repoPath string, issue
 	))
 }
 
+func issuePromptCommandForSession(worktreePath string, repo string, repoPath string, issueNumber int, title string, issueURL string, session state.Session) string {
+	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePrompt(
+		state.WatchTarget{Path: repoPath, Repo: repo},
+		ghcli.Issue{Number: issueNumber, Title: title, URL: issueURL},
+		session,
+	))
+}
+
 func issuePromptCommandForProvider(providerID string, worktreePath string, repo string, repoPath string, issueNumber int, title string, issueURL string, branch string) string {
 	switch providerID {
 	case "gemini":
@@ -5241,14 +5449,6 @@ func preflightPromptCommand(worktreePath string, repo string, repoPath string, i
 
 func preflightPromptCommandForSession(worktreePath string, repo string, repoPath string, issueNumber int, title string, issueURL string, session state.Session) string {
 	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePreflightPrompt(
-		state.WatchTarget{Path: repoPath, Repo: repo},
-		ghcli.Issue{Number: issueNumber, Title: title, URL: issueURL},
-		session,
-	))
-}
-
-func issuePromptCommandForSession(worktreePath string, repo string, repoPath string, issueNumber int, title string, issueURL string, session state.Session) string {
-	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePrompt(
 		state.WatchTarget{Path: repoPath, Repo: repo},
 		ghcli.Issue{Number: issueNumber, Title: title, URL: issueURL},
 		session,

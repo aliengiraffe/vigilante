@@ -362,6 +362,42 @@ func TestFindCleanupComment(t *testing.T) {
 	}
 }
 
+func TestFindIterationCommentSkipsKnownCommands(t *testing.T) {
+	now := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
+	comments := []IssueComment{
+		{ID: 10, Body: "@vigilanteai cleanup", CreatedAt: now.Add(-2 * time.Minute)},
+		{ID: 11, Body: "@vigilanteai please adjust the copy", CreatedAt: now.Add(-1 * time.Minute)},
+	}
+
+	comment := FindIterationComment(comments, 0)
+	if comment == nil || comment.ID != 11 {
+		t.Fatalf("expected iteration comment to be found, got: %#v", comment)
+	}
+	if comment := FindIterationComment(comments, 11); comment != nil {
+		t.Fatalf("expected claimed iteration comment to be ignored, got: %#v", comment)
+	}
+}
+
+func TestAssigneeIterationCommentsFiltersByAuthor(t *testing.T) {
+	now := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
+	comments := []IssueComment{
+		{ID: 10, Body: "@vigilanteai first pass", CreatedAt: now.Add(-3 * time.Minute), User: struct {
+			Login string `json:"login"`
+		}{Login: "nicobistolfi"}},
+		{ID: 11, Body: "@vigilanteai resume", CreatedAt: now.Add(-2 * time.Minute), User: struct {
+			Login string `json:"login"`
+		}{Login: "nicobistolfi"}},
+		{ID: 12, Body: "@vigilanteai second pass", CreatedAt: now.Add(-1 * time.Minute), User: struct {
+			Login string `json:"login"`
+		}{Login: "someoneelse"}},
+	}
+
+	filtered := AssigneeIterationComments(comments, []string{"nicobistolfi"})
+	if len(filtered) != 1 || filtered[0].ID != 10 {
+		t.Fatalf("unexpected assignee iteration comments: %#v", filtered)
+	}
+}
+
 func TestLatestUserCommentTimeIgnoresAutomationComments(t *testing.T) {
 	now := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
 	comments := []IssueComment{
