@@ -2927,7 +2927,9 @@ func (a *App) recordSessionFailure(session *state.Session, stage string, operati
 }
 
 func classifyBlockedReason(stage string, operation string, err error) state.BlockedReason {
-	return blocking.Classify(stage, operation, err.Error(), summarizeMaintenanceError(err))
+	blocked := blocking.Classify(stage, operation, err.Error(), summarizeMaintenanceError(err))
+	telemetry.CaptureDownstreamRateLimit(stage, operation, blocked, err.Error())
+	return blocked
 }
 
 func markSessionBlocked(session *state.Session, stage string, blocked state.BlockedReason, now time.Time) {

@@ -2,7 +2,11 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +18,7 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/repo"
 	"github.com/nicobistolfi/vigilante/internal/skill"
 	"github.com/nicobistolfi/vigilante/internal/state"
+	"github.com/nicobistolfi/vigilante/internal/telemetry"
 	"github.com/nicobistolfi/vigilante/internal/testutil"
 )
 
@@ -536,6 +541,82 @@ func TestClassifyBlockedFailureDetectsProviderQuota(t *testing.T) {
 	}
 	if !strings.Contains(got.Detail, "You've hit your usage limit.") {
 		t.Fatalf("expected detail to preserve provider output, got %q", got.Detail)
+	}
+}
+
+func TestClassifyBlockedFailureEmitsProviderQuotaTelemetry(t *testing.T) {
+	var events []struct {
+		Event      string         `json:"event"`
+		Properties map[string]any `json:"properties"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read telemetry request: %v", err)
+		}
+		var payload struct {
+			Messages []json.RawMessage `json:"batch"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("parse telemetry batch: %v", err)
+		}
+		events = events[:0]
+		for _, raw := range payload.Messages {
+			var event struct {
+				Event      string         `json:"event"`
+				Properties map[string]any `json:"properties"`
+			}
+			if err := json.Unmarshal(raw, &event); err != nil {
+				t.Fatalf("parse telemetry event: %v", err)
+			}
+			events = append(events, event)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	manager, err := telemetry.Setup(context.Background(), telemetry.SetupConfig{
+		BuildInfo: telemetry.BuildInfo{
+			Version:           "1.2.3",
+			Distro:            "direct",
+			TelemetryEndpoint: server.URL,
+			TelemetryToken:    "token",
+		},
+		StateRoot: t.TempDir(),
+		EnvLookup: func(string) string { return "" },
+	})
+	if err != nil {
+		t.Fatalf("setup telemetry: %v", err)
+	}
+	telemetry.SetDefault(manager)
+	t.Cleanup(func() {
+		telemetry.SetDefault(nil)
+	})
+
+	_ = classifyBlockedFailure("issue_execution", "codex exec", "You've hit your usage limit. Purchase more credits with token sk-live-secret.", errors.New("exit status 1"))
+	if err := manager.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown telemetry: %v", err)
+	}
+
+	if len(events) != 1 {
+		t.Fatalf("expected 1 telemetry event, got %d", len(events))
+	}
+	if got, want := events[0].Event, "downstream_service_rate_limited"; got != want {
+		t.Fatalf("event = %q, want %q", got, want)
+	}
+	if got, want := events[0].Properties["service"], "provider"; got != want {
+		t.Fatalf("service = %v, want %q", got, want)
+	}
+	if got, want := events[0].Properties["classification"], "quota"; got != want {
+		t.Fatalf("classification = %v, want %q", got, want)
+	}
+	encoded, err := json.Marshal(events[0])
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	if strings.Contains(string(encoded), "sk-live-secret") {
+		t.Fatalf("expected bounded telemetry payload, got %s", encoded)
 	}
 }
 
