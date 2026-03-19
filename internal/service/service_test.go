@@ -405,7 +405,6 @@ func TestRestartReturnsUnsupportedOSError(t *testing.T) {
 func TestPrepareMacOSDaemonBinaryUsesResolvedPath(t *testing.T) {
 	dir := t.TempDir()
 	resolvedPath := filepath.Join(dir, "Caskroom", "vigilante", "1.2.3", "vigilante")
-	caskRoot := filepath.Dir(resolvedPath)
 	if err := os.MkdirAll(filepath.Dir(resolvedPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -416,6 +415,7 @@ func TestPrepareMacOSDaemonBinaryUsesResolvedPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	caskRoot := filepath.Dir(resolvedPath)
 
 	invokedPath := filepath.Join(dir, "bin", "vigilante")
 	if err := os.MkdirAll(filepath.Dir(invokedPath), 0o755); err != nil {
@@ -430,11 +430,10 @@ func TestPrepareMacOSDaemonBinaryUsesResolvedPath(t *testing.T) {
 			Outputs: map[string]string{
 				`/bin/sh -lc xattr -dr 'com.apple.provenance' ` + shellQuote(caskRoot) + ` >/dev/null 2>&1 || true`: "",
 				`/bin/sh -lc xattr -dr 'com.apple.quarantine' ` + shellQuote(caskRoot) + ` >/dev/null 2>&1 || true`: "",
-				testutil.Key("xattr", resolvedPath):                                         "com.apple.provenance\ncom.apple.quarantine\ncom.example.keep\n",
-				testutil.Key("xattr", "-d", "com.apple.provenance", resolvedPath):           "",
-				testutil.Key("xattr", "-d", "com.apple.quarantine", resolvedPath):           "",
-				testutil.Key("codesign", "--force", "--sign", "-", resolvedPath):            "",
-				testutil.Key("spctl", "--assess", "--type", "execute", "-vv", resolvedPath): "",
+				testutil.Key("xattr", resolvedPath):                               "com.apple.provenance\ncom.apple.quarantine\ncom.example.keep\n",
+				testutil.Key("xattr", "-d", "com.apple.provenance", resolvedPath): "",
+				testutil.Key("xattr", "-d", "com.apple.quarantine", resolvedPath): "",
+				testutil.Key("codesign", "--force", "--sign", "-", resolvedPath):  "",
 			},
 		},
 	}
@@ -450,7 +449,6 @@ func TestPrepareMacOSDaemonBinaryUsesResolvedPath(t *testing.T) {
 		testutil.Key("xattr", "-d", "com.apple.provenance", resolvedPath),
 		testutil.Key("xattr", "-d", "com.apple.quarantine", resolvedPath),
 		testutil.Key("codesign", "--force", "--sign", "-", resolvedPath),
-		testutil.Key("spctl", "--assess", "--type", "execute", "-vv", resolvedPath),
 	}
 	if !reflect.DeepEqual(runner.calls, wantCalls) {
 		t.Fatalf("unexpected command sequence:\n got: %#v\nwant: %#v", runner.calls, wantCalls)
@@ -470,9 +468,8 @@ func TestPrepareMacOSDaemonBinarySkipsMissingKnownAttrs(t *testing.T) {
 	runner := &recordingRunner{
 		FakeRunner: testutil.FakeRunner{
 			Outputs: map[string]string{
-				testutil.Key("xattr", path):                                         "com.example.keep\n",
-				testutil.Key("codesign", "--force", "--sign", "-", path):            "",
-				testutil.Key("spctl", "--assess", "--type", "execute", "-vv", path): "",
+				testutil.Key("xattr", path):                              "com.example.keep\n",
+				testutil.Key("codesign", "--force", "--sign", "-", path): "",
 			},
 		},
 	}
@@ -484,17 +481,15 @@ func TestPrepareMacOSDaemonBinarySkipsMissingKnownAttrs(t *testing.T) {
 	wantCalls := []string{
 		testutil.Key("xattr", path),
 		testutil.Key("codesign", "--force", "--sign", "-", path),
-		testutil.Key("spctl", "--assess", "--type", "execute", "-vv", path),
 	}
 	if !reflect.DeepEqual(runner.calls, wantCalls) {
 		t.Fatalf("unexpected command sequence:\n got: %#v\nwant: %#v", runner.calls, wantCalls)
 	}
 }
 
-func TestPrepareMacOSDaemonBinaryReportsSymlinkContextOnSpctlFailure(t *testing.T) {
+func TestPrepareMacOSDaemonBinaryReportsSymlinkContextOnCodesignFailure(t *testing.T) {
 	dir := t.TempDir()
 	resolvedPath := filepath.Join(dir, "Caskroom", "vigilante", "1.2.3", "vigilante")
-	caskRoot := filepath.Dir(resolvedPath)
 	if err := os.MkdirAll(filepath.Dir(resolvedPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -505,6 +500,7 @@ func TestPrepareMacOSDaemonBinaryReportsSymlinkContextOnSpctlFailure(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
+	caskRoot := filepath.Dir(resolvedPath)
 
 	invokedPath := filepath.Join(dir, "bin", "vigilante")
 	if err := os.MkdirAll(filepath.Dir(invokedPath), 0o755); err != nil {
@@ -519,11 +515,10 @@ func TestPrepareMacOSDaemonBinaryReportsSymlinkContextOnSpctlFailure(t *testing.
 			Outputs: map[string]string{
 				`/bin/sh -lc xattr -dr 'com.apple.provenance' ` + shellQuote(caskRoot) + ` >/dev/null 2>&1 || true`: "",
 				`/bin/sh -lc xattr -dr 'com.apple.quarantine' ` + shellQuote(caskRoot) + ` >/dev/null 2>&1 || true`: "",
-				testutil.Key("xattr", resolvedPath):                              "",
-				testutil.Key("codesign", "--force", "--sign", "-", resolvedPath): "",
+				testutil.Key("xattr", resolvedPath): "",
 			},
 			Errors: map[string]error{
-				testutil.Key("spctl", "--assess", "--type", "execute", "-vv", resolvedPath): errors.New("exit status 3 (/opt/homebrew/bin/vigilante: rejected)"),
+				testutil.Key("codesign", "--force", "--sign", "-", resolvedPath): errors.New("codesign failed"),
 			},
 		},
 	}
