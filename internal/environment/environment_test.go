@@ -85,6 +85,58 @@ func TestLoggingRunnerLogsFailures(t *testing.T) {
 	}
 }
 
+func TestLoggingRunnerEmitsTelemetryForTargetedInternalCommandsOnly(t *testing.T) {
+	var captured []capturedCommand
+
+	runner := LoggingRunner{
+		Base: testutil.FakeRunner{
+			Outputs: map[string]string{
+				"git -C /tmp/repo status --short": "M internal/environment/environment.go\n",
+				"gh issue list":                   "[]",
+			},
+		},
+		CaptureCommand: func(_ context.Context, name string, args []string, exitCode int, durationMs int64) {
+			if strings.TrimSpace(name) == "git" {
+				captured = append(captured, capturedCommand{
+					Name:       name,
+					Args:       append([]string(nil), args...),
+					ExitCode:   exitCode,
+					DurationMs: durationMs,
+				})
+			}
+		},
+	}
+
+	if _, err := runner.Run(context.Background(), "", "git", "-C", "/tmp/repo", "status", "--short"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(context.Background(), "", "gh", "issue", "list"); err != nil {
+		t.Fatal(err)
+	}
+	if len(captured) != 1 {
+		t.Fatalf("expected 1 captured command, got %d", len(captured))
+	}
+	if got, want := captured[0].Name, "git"; got != want {
+		t.Fatalf("name = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(captured[0].Args, " "), "-C /tmp/repo status --short"; got != want {
+		t.Fatalf("args = %q, want %q", got, want)
+	}
+	if captured[0].ExitCode != 0 {
+		t.Fatalf("exitCode = %d, want 0", captured[0].ExitCode)
+	}
+	if captured[0].DurationMs < 0 {
+		t.Fatalf("durationMs = %d, want non-negative", captured[0].DurationMs)
+	}
+}
+
 func sprintf(format string, args ...any) string {
 	return fmt.Sprintf(format, args...)
+}
+
+type capturedCommand struct {
+	Name       string
+	Args       []string
+	ExitCode   int
+	DurationMs int64
 }

@@ -365,6 +365,165 @@ func TestStartCommandAnalyticsTaxonomyForGroupedCommands(t *testing.T) {
 	}
 }
 
+func TestInternalCommandName(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name         string
+		command      string
+		args         []string
+		wantName     string
+		wantCategory string
+		wantOK       bool
+	}{
+		{
+			name:         "git uses proxy sanitization",
+			command:      "git",
+			args:         []string{"-C", "/tmp/repo", "worktree", "add", "/tmp/repo/.worktrees/issue-1", "branch"},
+			wantName:     "git worktree add",
+			wantCategory: "git",
+			wantOK:       true,
+		},
+		{
+			name:         "codex drops prompt payload",
+			command:      "codex",
+			args:         []string{"exec", "--cd", "/tmp/worktree", "--dangerously-bypass-approvals-and-sandbox", "write a full prompt here"},
+			wantName:     "codex exec",
+			wantCategory: "coding_agent",
+			wantOK:       true,
+		},
+		{
+			name:         "claude with prompt flags stays bounded",
+			command:      "claude",
+			args:         []string{"--print", "--dangerously-skip-permissions", "free form prompt"},
+			wantName:     "claude",
+			wantCategory: "coding_agent",
+			wantOK:       true,
+		},
+		{
+			name:         "gemini skips prompt flag value",
+			command:      "gemini",
+			args:         []string{"--prompt", "free form prompt", "--yolo"},
+			wantName:     "gemini",
+			wantCategory: "coding_agent",
+			wantOK:       true,
+		},
+		{
+			name:    "non target command excluded",
+			command: "gh",
+			args:    []string{"issue", "view", "255"},
+			wantOK:  false,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotName, gotCategory, gotOK := internalCommandName(tc.command, tc.args)
+			if gotOK != tc.wantOK {
+				t.Fatalf("internalCommandName(%q, %v) ok = %v, want %v", tc.command, tc.args, gotOK, tc.wantOK)
+			}
+			if !tc.wantOK {
+				return
+			}
+			if gotName != tc.wantName {
+				t.Fatalf("internalCommandName(%q, %v) name = %q, want %q", tc.command, tc.args, gotName, tc.wantName)
+			}
+			if gotCategory != tc.wantCategory {
+				t.Fatalf("internalCommandName(%q, %v) category = %q, want %q", tc.command, tc.args, gotCategory, tc.wantCategory)
+			}
+		})
+	}
+}
+
+func TestCaptureInternalCommandEmitsSanitizedOTELRecord(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	exporter := &captureExporter{}
+	manager, err := Setup(context.Background(), SetupConfig{
+		BuildInfo: BuildInfo{
+			Version:           "1.2.3",
+			Distro:            "direct",
+			TelemetryEndpoint: "otel.example.test",
+			TelemetryToken:    "token",
+			TelemetryURLPath:  "/i/v1/logs",
+		},
+		StateRoot: root,
+		EnvLookup: func(string) string { return "" },
+		NewExporter: func(context.Context, BuildInfo) (sdklog.Exporter, error) {
+			return exporter, nil
+		},
+		NewAnalyticsExporter: func(BuildInfo, string) (analyticsExporter, error) {
+			return &captureAnalyticsExporter{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Setup() error = %v", err)
+	}
+
+	SetDefault(manager)
+	t.Cleanup(func() {
+		SetDefault(nil)
+	})
+
+	CaptureInternalCommand(context.Background(), "codex", []string{"exec", "--cd", "/tmp/worktree", "--dangerously-bypass-approvals-and-sandbox", "top secret prompt"}, 7, 123)
+
+	if err := manager.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+
+	records := exporter.Records()
+	if len(records) != 1 {
+		t.Fatalf("expected 1 exported record, got %d", len(records))
+	}
+
+	record := records[0]
+	if got, want := record.EventName(), "internal.command"; got != want {
+		t.Fatalf("record.EventName() = %q, want %q", got, want)
+	}
+	if got, want := record.Severity(), otellog.SeverityError; got != want {
+		t.Fatalf("record.Severity() = %v, want %v", got, want)
+	}
+	if got, want := record.Body().AsString(), "internal command failed"; got != want {
+		t.Fatalf("record.Body() = %q, want %q", got, want)
+	}
+
+	attrs := map[string]otellog.Value{}
+	record.WalkAttributes(func(kv otellog.KeyValue) bool {
+		attrs[kv.Key] = kv.Value
+		return true
+	})
+	if got, want := attrs["command.name"].AsString(), "codex exec"; got != want {
+		t.Fatalf("command.name = %q, want %q", got, want)
+	}
+	if got, want := attrs["command.group"].AsString(), "codex"; got != want {
+		t.Fatalf("command.group = %q, want %q", got, want)
+	}
+	if got, want := attrs["tool.category"].AsString(), "coding_agent"; got != want {
+		t.Fatalf("tool.category = %q, want %q", got, want)
+	}
+	if got, want := attrs["tool.name"].AsString(), "codex"; got != want {
+		t.Fatalf("tool.name = %q, want %q", got, want)
+	}
+	if got, want := attrs["invocation"].AsString(), "internal"; got != want {
+		t.Fatalf("invocation = %q, want %q", got, want)
+	}
+	if got, want := attrs["command.exit_code"].AsInt64(), int64(7); got != want {
+		t.Fatalf("command.exit_code = %d, want %d", got, want)
+	}
+	if got, want := attrs["command.duration_ms"].AsInt64(), int64(123); got != want {
+		t.Fatalf("command.duration_ms = %d, want %d", got, want)
+	}
+	for _, forbidden := range []string{"/tmp/worktree", "top secret prompt"} {
+		if strings.Contains(attrs["command.name"].AsString(), forbidden) {
+			t.Fatalf("command.name leaked %q", forbidden)
+		}
+	}
+}
+
 func TestCaptureWorkflowEventUsesDefaultManagerAndBoundedProperties(t *testing.T) {
 	t.Parallel()
 
