@@ -3,16 +3,10 @@ package environment
 import (
 	"context"
 	"fmt"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/nicobistolfi/vigilante/internal/telemetry"
 	"github.com/nicobistolfi/vigilante/internal/testutil"
-	otellog "go.opentelemetry.io/otel/log"
-	sdklog "go.opentelemetry.io/otel/sdk/log"
 )
 
 func TestLoggingRunnerLogsCommandsWithoutSuccessOutputByDefault(t *testing.T) {
@@ -92,35 +86,7 @@ func TestLoggingRunnerLogsFailures(t *testing.T) {
 }
 
 func TestLoggingRunnerEmitsTelemetryForTargetedInternalCommandsOnly(t *testing.T) {
-	root := t.TempDir()
-	exporter := &captureExporter{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.Copy(io.Discard, r.Body)
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(server.Close)
-	manager, err := telemetry.Setup(context.Background(), telemetry.SetupConfig{
-		BuildInfo: telemetry.BuildInfo{
-			Version:           "1.2.3",
-			Distro:            "direct",
-			TelemetryEndpoint: server.URL,
-			TelemetryToken:    "token",
-			TelemetryURLPath:  "/i/v1/logs",
-		},
-		StateRoot: root,
-		EnvLookup: func(string) string { return "" },
-		NewExporter: func(context.Context, telemetry.BuildInfo) (sdklog.Exporter, error) {
-			return exporter, nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("Setup() error = %v", err)
-	}
-
-	telemetry.SetDefault(manager)
-	t.Cleanup(func() {
-		telemetry.SetDefault(nil)
-	})
+	var captured []capturedCommand
 
 	runner := LoggingRunner{
 		Base: testutil.FakeRunner{
@@ -128,6 +94,16 @@ func TestLoggingRunnerEmitsTelemetryForTargetedInternalCommandsOnly(t *testing.T
 				"git -C /tmp/repo status --short": "M internal/environment/environment.go\n",
 				"gh issue list":                   "[]",
 			},
+		},
+		CaptureCommand: func(_ context.Context, name string, args []string, exitCode int, durationMs int64) {
+			if strings.TrimSpace(name) == "git" {
+				captured = append(captured, capturedCommand{
+					Name:       name,
+					Args:       append([]string(nil), args...),
+					ExitCode:   exitCode,
+					DurationMs: durationMs,
+				})
+			}
 		},
 	}
 
@@ -137,19 +113,20 @@ func TestLoggingRunnerEmitsTelemetryForTargetedInternalCommandsOnly(t *testing.T
 	if _, err := runner.Run(context.Background(), "", "gh", "issue", "list"); err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Shutdown(context.Background()); err != nil {
-		t.Fatalf("Shutdown() error = %v", err)
+	if len(captured) != 1 {
+		t.Fatalf("expected 1 captured command, got %d", len(captured))
 	}
-
-	records := exporter.Records()
-	if len(records) != 1 {
-		t.Fatalf("expected 1 exported record, got %d", len(records))
+	if got, want := captured[0].Name, "git"; got != want {
+		t.Fatalf("name = %q, want %q", got, want)
 	}
-	if got, want := recordAttr(records[0], "command.name"), "git status"; got != want {
-		t.Fatalf("command.name = %q, want %q", got, want)
+	if got, want := strings.Join(captured[0].Args, " "), "-C /tmp/repo status --short"; got != want {
+		t.Fatalf("args = %q, want %q", got, want)
 	}
-	if got, want := recordAttr(records[0], "tool.category"), "git"; got != want {
-		t.Fatalf("tool.category = %q, want %q", got, want)
+	if captured[0].ExitCode != 0 {
+		t.Fatalf("exitCode = %d, want 0", captured[0].ExitCode)
+	}
+	if captured[0].DurationMs < 0 {
+		t.Fatalf("durationMs = %d, want non-negative", captured[0].DurationMs)
 	}
 }
 
@@ -157,35 +134,9 @@ func sprintf(format string, args ...any) string {
 	return fmt.Sprintf(format, args...)
 }
 
-type captureExporter struct {
-	records []sdklog.Record
-}
-
-func (e *captureExporter) Export(_ context.Context, records []sdklog.Record) error {
-	for _, record := range records {
-		e.records = append(e.records, record.Clone())
-	}
-	return nil
-}
-
-func (e *captureExporter) Shutdown(context.Context) error { return nil }
-
-func (e *captureExporter) ForceFlush(context.Context) error { return nil }
-
-func (e *captureExporter) Records() []sdklog.Record {
-	out := make([]sdklog.Record, len(e.records))
-	copy(out, e.records)
-	return out
-}
-
-func recordAttr(record sdklog.Record, key string) string {
-	value := ""
-	record.WalkAttributes(func(kv otellog.KeyValue) bool {
-		if kv.Key == key {
-			value = kv.Value.AsString()
-			return false
-		}
-		return true
-	})
-	return value
+type capturedCommand struct {
+	Name       string
+	Args       []string
+	ExitCode   int
+	DurationMs int64
 }

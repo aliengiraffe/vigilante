@@ -119,6 +119,7 @@ func New() *App {
 			OS: runtime.GOOS,
 			Runner: environment.LoggingRunner{
 				Base:             environment.ExecRunner{},
+				CaptureCommand:   telemetry.CaptureInternalCommand,
 				Logf:             store.AppendDaemonLog,
 				LogSuccessOutput: os.Getenv("VIGILANTE_DEBUG_COMMAND_OUTPUT") == "1",
 			},

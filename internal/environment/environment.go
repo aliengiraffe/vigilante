@@ -8,8 +8,6 @@ import (
 	"os/exec"
 	"strings"
 	"time"
-
-	"github.com/nicobistolfi/vigilante/internal/telemetry"
 )
 
 type Runner interface {
@@ -21,6 +19,7 @@ type ExecRunner struct{}
 
 type LoggingRunner struct {
 	Base             Runner
+	CaptureCommand   func(context.Context, string, []string, int, int64)
 	Logf             func(format string, args ...any)
 	LogSuccessOutput bool
 }
@@ -59,7 +58,9 @@ func (r LoggingRunner) Run(ctx context.Context, dir string, name string, args ..
 	if err != nil {
 		exitCode = 1
 	}
-	telemetry.CaptureInternalCommand(ctx, name, args, exitCode, time.Since(startedAt).Milliseconds())
+	if r.CaptureCommand != nil {
+		r.CaptureCommand(ctx, name, args, exitCode, time.Since(startedAt).Milliseconds())
+	}
 	if r.Logf != nil {
 		if err != nil {
 			r.Logf("command failed cmd=%s err=%v output=%s", commandString(name, args...), err, trimForLog(output))
