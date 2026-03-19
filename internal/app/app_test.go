@@ -434,6 +434,188 @@ func TestProcessGitHubIterationRequestsForTargetDispatchesAssigneeComment(t *tes
 	}
 }
 
+func TestProcessGitHubIterationRequestsForTargetReusesExistingWorktree(t *testing.T) {
+	now := time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)
+	repoPath := t.TempDir()
+	stateRoot := t.TempDir()
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	t.Setenv("VIGILANTE_HOME", stateRoot)
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.clock = func() time.Time { return now }
+	app.state = state.NewStore()
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	app.repoLabelsProvisionedOnce["owner/repo"] = true
+
+	iterationContext := buildIterationPromptContext([]ghcli.IssueComment{
+		{
+			ID:        102,
+			Body:      "@vigilanteai continue from the existing worktree",
+			CreatedAt: now.Add(-1 * time.Minute),
+			User: struct {
+				Login string `json:"login"`
+			}{Login: "nicobistolfi"},
+		},
+	})
+	startSession := state.Session{
+		RepoPath:               repoPath,
+		Repo:                   "owner/repo",
+		Provider:               "codex",
+		IssueNumber:            1,
+		IssueTitle:             "first",
+		IssueURL:               "https://github.com/owner/repo/issues/1",
+		Status:                 state.SessionStatusBlocked,
+		Branch:                 "vigilante/issue-1-first",
+		WorktreePath:           worktreePath,
+		BaseBranch:             "main",
+		IssueBody:              "Original body",
+		BlockedStage:           "issue_execution",
+		BlockedReason:          state.BlockedReason{Kind: "provider_runtime_error", Operation: "codex exec", Summary: "transient failure"},
+		ResumeRequired:         true,
+		ResumeHint:             "vigilante resume --repo owner/repo --issue 1",
+		IterationPromptContext: "Old iteration context",
+		IterationInProgress:    true,
+	}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1":          `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","labels":[{"name":"vigilante:blocked"}],"assignees":[{"login":"nicobistolfi"}]}`,
+			"gh api repos/owner/repo/issues/1/comments": `[{"id":102,"body":"@vigilanteai continue from the existing worktree","created_at":"2026-03-19T11:59:00Z","user":{"login":"nicobistolfi"}}]`,
+			"gh api --method POST -H Accept: application/vnd.github+json repos/owner/repo/issues/comments/102/reactions -f content=eyes": "ok",
+			"git worktree prune": "ok",
+			"gh issue edit --repo owner/repo 1 --add-label vigilante:iterating --add-label vigilante:running --remove-label vigilante:blocked": "ok",
+			sessionStartCommentCommand("owner/repo", 1, worktreePath, state.Session{
+				Repo:                   "owner/repo",
+				IssueNumber:            1,
+				IssueTitle:             "first",
+				IssueBody:              "Issue body",
+				IssueURL:               "https://github.com/owner/repo/issues/1",
+				BaseBranch:             "main",
+				Branch:                 "vigilante/issue-1-first",
+				WorktreePath:           worktreePath,
+				Status:                 state.SessionStatusRunning,
+				Provider:               "codex",
+				IterationInProgress:    true,
+				IterationPromptContext: iterationContext,
+			}): "ok",
+			preflightPromptCommand(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", "vigilante/issue-1-first"): "ok",
+			issuePromptCommandForSession(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", state.Session{
+				WorktreePath:           worktreePath,
+				Branch:                 "vigilante/issue-1-first",
+				Provider:               "codex",
+				IssueBody:              "Issue body",
+				IterationPromptContext: iterationContext,
+			}): "done",
+			"gh issue edit --repo owner/repo 1 --add-label vigilante:ready-for-review --remove-label vigilante:iterating --remove-label vigilante:running": "ok",
+		},
+	}
+
+	sessions := []state.Session{startSession}
+	updated, started, err := app.processGitHubIterationRequestsForTarget(context.Background(), state.WatchTarget{
+		Path:   repoPath,
+		Repo:   "owner/repo",
+		Branch: "main",
+	}, sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started != 1 {
+		t.Fatalf("expected one iteration dispatch, got %d", started)
+	}
+	if updated[0].Status != state.SessionStatusRunning {
+		t.Fatalf("expected reused iteration session to be running, got %#v", updated[0])
+	}
+	if updated[0].BlockedStage != "" || updated[0].ResumeRequired {
+		t.Fatalf("expected reused iteration session to clear blocked state, got %#v", updated[0])
+	}
+
+	app.waitForSessions()
+
+	saved, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved) != 1 {
+		t.Fatalf("expected one saved session, got %#v", saved)
+	}
+	if saved[0].LastIterationCommentID != 102 {
+		t.Fatalf("expected iteration comment tracking, got %#v", saved[0])
+	}
+	if saved[0].IssueBody != "Issue body" {
+		t.Fatalf("expected updated issue body, got %#v", saved[0])
+	}
+	if strings.TrimSpace(saved[0].IterationPromptContext) == "" {
+		t.Fatalf("expected iteration prompt context, got %#v", saved[0])
+	}
+	if saved[0].IterationInProgress {
+		t.Fatalf("expected iteration flag to clear after successful run, got %#v", saved[0])
+	}
+}
+
+func TestDispatchIssueSessionRejectsUnsafeExistingIterationWorktree(t *testing.T) {
+	now := time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)
+	repoPath := t.TempDir()
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.clock = func() time.Time { return now }
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"git worktree prune": "ok",
+		},
+	}
+
+	comment := &ghcli.IssueComment{
+		ID:        101,
+		Body:      "@vigilanteai continue",
+		CreatedAt: now,
+		User: struct {
+			Login string `json:"login"`
+		}{Login: "nicobistolfi"},
+	}
+	session, err := app.dispatchIssueSession(
+		context.Background(),
+		state.WatchTarget{Path: repoPath, Repo: "owner/repo", Branch: "main"},
+		ghcli.Issue{Number: 1, Title: "first", URL: "https://github.com/owner/repo/issues/1"},
+		"codex",
+		state.Session{
+			RepoPath:     repoPath,
+			Repo:         "owner/repo",
+			IssueNumber:  1,
+			IssueTitle:   "first",
+			IssueURL:     "https://github.com/owner/repo/issues/1",
+			Status:       state.SessionStatusBlocked,
+			WorktreePath: worktreePath,
+		},
+		"Issue body",
+		"iteration context",
+		comment,
+	)
+	if err == nil {
+		t.Fatal("expected unsafe existing worktree reuse to fail")
+	}
+	if session.Status != state.SessionStatusBlocked {
+		t.Fatalf("expected blocked session, got %#v", session)
+	}
+	if !strings.Contains(session.LastError, "existing session branch is empty") {
+		t.Fatalf("expected actionable unsafe-worktree error, got %#v", session)
+	}
+	if !strings.Contains(session.BlockedReason.Summary, "existing session branch is empty") {
+		t.Fatalf("expected blocked summary to explain refused reuse, got %#v", session)
+	}
+}
+
 func TestSyncIssueManagedLabelsQueued(t *testing.T) {
 	capture, shutdownTelemetry := setupTelemetryCapture(t)
 	app := New()
