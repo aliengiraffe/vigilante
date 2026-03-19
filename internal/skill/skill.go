@@ -181,6 +181,15 @@ func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue 
 		"Use the same GitHub comment structure for every non-terminal milestone comment: a short header with the current stage and optional emoji, a 10-cell progress bar with percentage, an `ETA: ~N minutes` line, 1-3 concise bullets covering what just happened and what is next, and an optional short playful quote or tagline.",
 		"Use the issue as the source of truth for the requested behavior and keep the implementation minimal.",
 	)
+	if body := strings.TrimSpace(session.IssueBody); body != "" {
+		lines = append(lines,
+			"Full issue body:",
+			body,
+		)
+	}
+	if iterationContext := strings.TrimSpace(session.IterationPromptContext); iterationContext != "" {
+		lines = append(lines, iterationContext)
+	}
 	if strings.TrimSpace(session.ReusedRemoteBranch) != "" {
 		baseBranch := strings.TrimSpace(session.BaseBranch)
 		if baseBranch == "" {

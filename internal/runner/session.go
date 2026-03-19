@@ -24,6 +24,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 	selectedProvider, err := provider.Resolve(session.Provider)
 	if err != nil {
 		session.Status = state.SessionStatusFailed
+		session.IterationInProgress = false
 		session.LastError = err.Error()
 		session.EndedAt = time.Now().UTC().Format(time.RFC3339)
 		session.UpdatedAt = session.EndedAt
@@ -36,6 +37,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := provider.ValidateRuntimeCompatibility(ctx, env.Runner, selectedProvider); err != nil {
 		session.Status = state.SessionStatusFailed
+		session.IterationInProgress = false
 		session.LastError = err.Error()
 		session.EndedAt = time.Now().UTC().Format(time.RFC3339)
 		session.UpdatedAt = session.EndedAt
@@ -69,6 +71,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 	appendSessionLog(logPath, "session started", session, "")
 	if err := ghcli.CommentOnIssue(ctx, env.Runner, target.Repo, issue.Number, startBody); err != nil {
 		session.Status = state.SessionStatusFailed
+		session.IterationInProgress = false
 		session.LastError = err.Error()
 		session.EndedAt = time.Now().UTC().Format(time.RFC3339)
 		session.UpdatedAt = session.EndedAt
@@ -79,6 +82,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 	preflightInvocation, err := selectedProvider.BuildIssuePreflightInvocation(provider.IssueTask{Target: target, Issue: issue, Session: session})
 	if err != nil {
 		session.Status = state.SessionStatusFailed
+		session.IterationInProgress = false
 		session.LastError = err.Error()
 		session.EndedAt = time.Now().UTC().Format(time.RFC3339)
 		session.LastHeartbeatAt = session.EndedAt
@@ -92,6 +96,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 	if err != nil {
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 			session.Status = state.SessionStatusFailed
+			session.IterationInProgress = false
 			session.LastError = "session canceled"
 			session.EndedAt = time.Now().UTC().Format(time.RFC3339)
 			session.LastHeartbeatAt = session.EndedAt
@@ -138,6 +143,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 	if err != nil {
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 			session.Status = state.SessionStatusFailed
+			session.IterationInProgress = false
 			session.LastError = "session canceled"
 			appendSessionLog(logPath, "session canceled", session, combineLogDetails(output, err.Error()))
 			return session
@@ -163,6 +169,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 	}
 
 	session.Status = state.SessionStatusSuccess
+	session.IterationInProgress = false
 	appendSessionLog(logPath, fmt.Sprintf("session succeeded duration=%s output_bytes=%d", time.Since(invocationStart).Truncate(time.Second), len(output)), session, output)
 	return session
 }

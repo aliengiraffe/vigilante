@@ -40,6 +40,7 @@ const autoRecoverySource = "auto_recovery"
 const (
 	labelQueued                 = "vigilante:queued"
 	labelRunning                = "vigilante:running"
+	labelIterating              = "vigilante:iterating"
 	labelBlocked                = "vigilante:blocked"
 	labelRecovering             = "vigilante:recovering"
 	labelReadyForReview         = "vigilante:ready-for-review"
@@ -54,6 +55,7 @@ const (
 var managedIssueLabels = []string{
 	labelQueued,
 	labelRunning,
+	labelIterating,
 	labelBlocked,
 	labelRecovering,
 	labelReadyForReview,
@@ -863,6 +865,12 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			}
 			target.MaxParallel = configuredMaxParallel(target.MaxParallel)
 			target.Classification = repo.Classify(target.Path)
+			var started int
+			sessions, started, err = a.processGitHubIterationRequestsForTarget(ctx, *target, sessions)
+			if err != nil {
+				return err
+			}
+			startedCount += started
 			a.state.AppendDaemonLog("scan repo classified repo=%s shape=%s hints=%d/%d/%d", target.Repo, target.Classification.Shape, len(target.Classification.ProcessHints.WorkspaceConfigFiles), len(target.Classification.ProcessHints.WorkspaceManifestFiles), len(target.Classification.ProcessHints.MultiPackageRoots))
 			a.state.AppendDaemonLog("scan repo start repo=%s path=%s max_parallel=%d", target.Repo, target.Path, target.MaxParallel)
 			issues, err := ghcli.ListOpenIssues(ctx, a.env.Runner, target.Repo, target.Assignee)
@@ -2892,6 +2900,216 @@ func clearBlockedState(session *state.Session, now time.Time, source string) {
 	session.LastDispatchFailureCommentedAt = ""
 }
 
+func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, target state.WatchTarget, sessions []state.Session) ([]state.Session, int, error) {
+	started := 0
+	for i := range sessions {
+		session := &sessions[i]
+		if session.Repo != target.Repo {
+			continue
+		}
+		if !sessionSupportsIteration(*session) {
+			continue
+		}
+
+		details, err := ghcli.GetIssueDetails(ctx, a.env.Runner, session.Repo, session.IssueNumber)
+		if err != nil {
+			a.state.AppendDaemonLog("iteration issue details failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
+			session.LastError = err.Error()
+			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			continue
+		}
+
+		comments, err := ghcli.ListIssueCommentsForPolling(ctx, a.env.Runner, session.Repo, session.IssueNumber, "iteration", a.state.AppendDaemonLog)
+		if err != nil {
+			a.state.AppendDaemonLog("iteration comment lookup failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
+			session.LastError = err.Error()
+			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			continue
+		}
+
+		comment := ghcli.FindIterationComment(comments, session.LastIterationCommentID)
+		if comment == nil {
+			continue
+		}
+
+		assignees := assigneeLogins(details.Assignees)
+		if !loginMatchesAssignee(comment.User.Login, assignees) {
+			session.LastIterationCommentID = comment.ID
+			session.LastIterationCommentAt = comment.CreatedAt.UTC().Format(time.RFC3339)
+			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Iteration Ignored",
+				Emoji:      "🛂",
+				Percent:    100,
+				ETAMinutes: 1,
+				Items: []string{
+					fmt.Sprintf("Ignored the latest `@vigilanteai` iteration request from `@%s`.", fallbackText(comment.User.Login, "unknown")),
+					"Only a current issue assignee can request another implementation iteration for this issue.",
+					"Next step: ask an assignee to post the follow-up request if another pass is needed.",
+				},
+				Tagline: "Hands on the wheel, one driver at a time.",
+			})
+			if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "iteration_ignored", "github_comment"); err != nil {
+				a.state.AppendDaemonLog("iteration rejection comment failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
+				session.LastError = err.Error()
+			}
+			continue
+		}
+
+		if err := ghcli.AddIssueCommentReaction(ctx, a.env.Runner, session.Repo, comment.ID, "eyes"); err != nil {
+			a.state.AppendDaemonLog("iteration reaction failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
+		}
+
+		iterationComments := ghcli.AssigneeIterationComments(comments, assignees)
+		issue := ghcli.Issue{
+			Number: session.IssueNumber,
+			Title:  fallbackText(details.Title, session.IssueTitle),
+			URL:    fallbackText(details.URL, session.IssueURL),
+			Labels: details.Labels,
+		}
+		previous := *session
+		updated, err := a.dispatchIssueSession(ctx, target, issue, session.Provider, previous, strings.TrimSpace(details.Body), buildIterationPromptContext(iterationComments), comment)
+		if err != nil {
+			if updated.IssueNumber == 0 {
+				updated = previous
+			}
+			updated.LastIterationCommentID = comment.ID
+			updated.LastIterationCommentAt = comment.CreatedAt.UTC().Format(time.RFC3339)
+			updated.UpdatedAt = a.clock().Format(time.RFC3339)
+			a.commentDispatchFailure(ctx, previous, &updated, "iteration_dispatch")
+			sessions = upsertSession(sessions, updated)
+			a.emitSessionTransition(previous.Status, updated, "iteration_dispatch")
+			a.syncSessionIssueLabelsBestEffort(ctx, updated, nil)
+			a.state.AppendDaemonLog("iteration dispatch failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
+			continue
+		}
+
+		sessions = upsertSession(sessions, updated)
+		a.emitSessionTransition(previous.Status, updated, "iteration_dispatch")
+		a.syncSessionIssueLabelsBestEffort(ctx, updated, nil)
+		a.launchIssueSession(ctx, target, issue, updated)
+		started++
+	}
+	return sessions, started, a.state.SaveSessions(sessions)
+}
+
+func sessionSupportsIteration(session state.Session) bool {
+	if session.CleanupCompletedAt != "" || session.MonitoringStoppedAt != "" {
+		return false
+	}
+	switch session.Status {
+	case state.SessionStatusRunning, state.SessionStatusResuming:
+		return false
+	case state.SessionStatusBlocked, state.SessionStatusSuccess, state.SessionStatusFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+func assigneeLogins(assignees []ghcli.IssueUserRef) []string {
+	logins := make([]string, 0, len(assignees))
+	for _, assignee := range assignees {
+		if login := strings.TrimSpace(assignee.Login); login != "" {
+			logins = append(logins, login)
+		}
+	}
+	return logins
+}
+
+func loginMatchesAssignee(login string, assignees []string) bool {
+	login = strings.TrimSpace(strings.ToLower(login))
+	if login == "" {
+		return false
+	}
+	for _, assignee := range assignees {
+		if login == strings.ToLower(strings.TrimSpace(assignee)) {
+			return true
+		}
+	}
+	return false
+}
+
+func buildIterationPromptContext(comments []ghcli.IssueComment) string {
+	if len(comments) == 0 {
+		return ""
+	}
+	var lines []string
+	latest := comments[len(comments)-1]
+	lines = append(lines,
+		"Iteration context for this pass:",
+		"The latest qualifying assignee `@vigilanteai` comment is the primary focus for this implementation pass.",
+		"",
+		"Primary focus comment:",
+		fmt.Sprintf("- Author: @%s", fallbackText(latest.User.Login, "unknown")),
+		fmt.Sprintf("- Created at: %s", latest.CreatedAt.UTC().Format(time.RFC3339)),
+		"- Body:",
+		strings.TrimSpace(latest.Body),
+	)
+	if len(comments) > 1 {
+		lines = append(lines, "", "Earlier assignee `@vigilanteai` comments for background:")
+		for i := 0; i < len(comments)-1; i++ {
+			lines = append(lines,
+				fmt.Sprintf("%d. @%s at %s", i+1, fallbackText(comments[i].User.Login, "unknown"), comments[i].CreatedAt.UTC().Format(time.RFC3339)),
+				strings.TrimSpace(comments[i].Body),
+			)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (a *App) dispatchIssueSession(ctx context.Context, target state.WatchTarget, issue ghcli.Issue, selectedProvider string, previous state.Session, issueBody string, iterationContext string, triggeringComment *ghcli.IssueComment) (state.Session, error) {
+	wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, target, issue.Number, issue.Title)
+	if err != nil {
+		return blockedIssueSessionForDispatchFailure(target, issue, selectedProvider, err, a.clock()), err
+	}
+	a.state.AppendDaemonLog("scan repo worktree ready repo=%s issue=%d path=%s branch=%s reused_remote=%t", target.Repo, issue.Number, wt.Path, wt.Branch, wt.ReusedRemoteBranch != "")
+
+	diffSummary := ""
+	if strings.TrimSpace(wt.ReusedRemoteBranch) != "" {
+		diffSummary, err = summarizeIssueBranchDiff(ctx, a.env.Runner, target.Path, target.Branch, wt.Branch)
+		if err != nil {
+			_ = worktree.CleanupIssueArtifacts(ctx, a.env.Runner, target.Path, wt.Path, wt.Branch)
+			blocked := blockedIssueSessionForDispatchFailure(target, issue, selectedProvider, fmt.Errorf("analyze reused remote issue branch %q against %q: %w", wt.Branch, target.Branch, err), a.clock())
+			blocked.Branch = wt.Branch
+			blocked.BaseBranch = target.Branch
+			blocked.WorktreePath = wt.Path
+			blocked.ReusedRemoteBranch = wt.ReusedRemoteBranch
+			return blocked, err
+		}
+		a.state.AppendDaemonLog("scan repo reused remote issue branch repo=%s issue=%d branch=%s base=%s diff=%s", target.Repo, issue.Number, wt.Branch, target.Branch, summarizeText(diffSummary))
+	}
+
+	now := a.clock().Format(time.RFC3339)
+	session := previous
+	session.RepoPath = target.Path
+	session.Repo = target.Repo
+	session.Provider = selectedProvider
+	session.IssueNumber = issue.Number
+	session.IssueTitle = issue.Title
+	session.IssueBody = strings.TrimSpace(issueBody)
+	session.IssueURL = issue.URL
+	session.BaseBranch = target.Branch
+	session.Branch = wt.Branch
+	session.WorktreePath = wt.Path
+	session.ReusedRemoteBranch = wt.ReusedRemoteBranch
+	session.BranchDiffSummary = diffSummary
+	session.Status = state.SessionStatusRunning
+	session.ProcessID = os.Getpid()
+	session.StartedAt = now
+	session.LastHeartbeatAt = now
+	session.EndedAt = ""
+	session.UpdatedAt = now
+	session.LastError = ""
+	session.IterationPromptContext = strings.TrimSpace(iterationContext)
+	session.IterationInProgress = triggeringComment != nil
+	if triggeringComment != nil {
+		session.LastIterationCommentID = triggeringComment.ID
+		session.LastIterationCommentAt = triggeringComment.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	return session, nil
+}
+
 func (a *App) syncQueuedIssueLabelsBestEffort(ctx context.Context, repo string, issueNumber int) {
 	if err := a.syncIssueManagedLabels(ctx, repo, issueNumber, []string{labelQueued}); err != nil {
 		a.state.AppendDaemonLog("issue label sync failed repo=%s issue=%d err=%v", repo, issueNumber, err)
@@ -2969,9 +3187,12 @@ func (a *App) ensureRepositoryLabelsProvisioned(ctx context.Context, repo string
 
 func sessionManagedLabels(session state.Session, pr *ghcli.PullRequest) []string {
 	stateLabel, interventionLabel := desiredSessionLabels(session, pr)
-	labels := make([]string, 0, 2)
+	labels := make([]string, 0, 3)
 	if stateLabel != "" {
 		labels = append(labels, stateLabel)
+	}
+	if session.IterationInProgress && (session.Status == state.SessionStatusRunning || session.Status == state.SessionStatusResuming || session.Status == state.SessionStatusBlocked) {
+		labels = append(labels, labelIterating)
 	}
 	if interventionLabel != "" {
 		labels = append(labels, interventionLabel)

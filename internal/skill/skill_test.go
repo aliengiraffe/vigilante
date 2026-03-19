@@ -165,6 +165,31 @@ func TestBuildIssuePromptIncludesReusedRemoteBranchContext(t *testing.T) {
 	}
 }
 
+func TestBuildIssuePromptIncludesIssueBodyAndIterationContext(t *testing.T) {
+	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
+	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	session := state.Session{
+		WorktreePath:           "/tmp/worktree",
+		Branch:                 "vigilante/issue-12",
+		Provider:               "Codex",
+		IssueBody:              "Full issue body here.",
+		IterationPromptContext: "Iteration context for this pass:\nPrimary focus comment:\n@vigilanteai tighten the validation path",
+	}
+
+	prompt := BuildIssuePrompt(target, issue, session)
+
+	for _, text := range []string{
+		"Full issue body:",
+		"Full issue body here.",
+		"Iteration context for this pass:",
+		"@vigilanteai tighten the validation path",
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q: %s", text, prompt)
+		}
+	}
+}
+
 func TestVigilanteSkillNamesIncludesLocalServiceDependencies(t *testing.T) {
 	foundLocalServices := false
 	foundComposeLaunch := false

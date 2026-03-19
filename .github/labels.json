@@ -31,6 +31,18 @@
       ]
     },
     {
+      "name": "vigilante:iterating",
+      "color": "1D76DB",
+      "group": "execution-state",
+      "behavior": "informational",
+      "applied_by": "vigilante",
+      "description": "An assignee-requested follow-up implementation iteration is actively in progress.",
+      "notes": [
+        "Coexists with the current execution-state label while Vigilante is handling a new assignee-driven `@vigilanteai` follow-up pass.",
+        "Clear when the active iteration returns to a stable non-iterating state."
+      ]
+    },
+    {
       "name": "vigilante:blocked",
       "color": "D93F0B",
       "group": "execution-state",

@@ -95,6 +95,10 @@ type Session struct {
 	LastResumeFailureCommentedAt   string        `json:"last_resume_failure_commented_at,omitempty"`
 	LastDispatchFailureFingerprint string        `json:"last_dispatch_failure_fingerprint,omitempty"`
 	LastDispatchFailureCommentedAt string        `json:"last_dispatch_failure_commented_at,omitempty"`
+	LastIterationCommentID         int64         `json:"last_iteration_comment_id,omitempty"`
+	LastIterationCommentAt         string        `json:"last_iteration_comment_at,omitempty"`
+	IterationPromptContext         string        `json:"iteration_prompt_context,omitempty"`
+	IterationInProgress            bool          `json:"iteration_in_progress,omitempty"`
 	LastCleanupSource              string        `json:"last_cleanup_source,omitempty"`
 	LastCleanupCommentID           int64         `json:"last_cleanup_comment_id,omitempty"`
 	LastCleanupCommentAt           string        `json:"last_cleanup_comment_at,omitempty"`
