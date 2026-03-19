@@ -1059,11 +1059,13 @@ func TestRunDaemonCommandKeepsIntervalOverride(t *testing.T) {
 	}
 }
 
-func TestSetupCreatesStateLayoutAndSkill(t *testing.T) {
+func TestSetupCreatesStateLayoutAndInstallsBundledSkillsForAllProviders(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 	t.Setenv("HOME", home)
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv("CLAUDE_HOME", filepath.Join(home, ".claude"))
+	t.Setenv("GEMINI_HOME", filepath.Join(home, ".gemini"))
 
 	app := New()
 	app.stdout = testutil.IODiscard{}
@@ -1085,6 +1087,7 @@ func TestSetupCreatesStateLayoutAndSkill(t *testing.T) {
 		filepath.Join(app.state.Root(), "sessions.json"),
 		filepath.Join(app.state.Root(), "logs"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementation, "SKILL.md"),
+		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementation, "agents", "openai.yaml"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementationOnMonorepo, "SKILL.md"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementationOnTurborepo, "SKILL.md"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementationOnNx, "SKILL.md"),
@@ -1092,6 +1095,10 @@ func TestSetupCreatesStateLayoutAndSkill(t *testing.T) {
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementationOnRushMonorepo, "SKILL.md"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteConflictResolution, "SKILL.md"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.DockerComposeLaunch, "SKILL.md"),
+		filepath.Join(app.state.ClaudeHome(), "skills", skill.VigilanteIssueImplementation, "SKILL.md"),
+		filepath.Join(app.state.ClaudeHome(), "commands", skill.VigilanteIssueImplementation, "SKILL.md"),
+		filepath.Join(app.state.GeminiHome(), "skills", skill.VigilanteIssueImplementation, "SKILL.md"),
+		filepath.Join(app.state.GeminiHome(), "commands", skill.VigilanteIssueImplementation+".toml"),
 	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected %s to exist: %v", path, err)
@@ -1099,10 +1106,12 @@ func TestSetupCreatesStateLayoutAndSkill(t *testing.T) {
 	}
 }
 
-func TestSetupWithGeminiCreatesGeminiSkillAssets(t *testing.T) {
+func TestSetupWithGeminiInstallsBundledSkillsForAllProviders(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv("CLAUDE_HOME", filepath.Join(home, ".claude"))
 	t.Setenv("GEMINI_HOME", filepath.Join(home, ".gemini"))
 
 	app := New()
@@ -1121,6 +1130,9 @@ func TestSetupWithGeminiCreatesGeminiSkillAssets(t *testing.T) {
 	}
 
 	for _, path := range []string{
+		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementation, "SKILL.md"),
+		filepath.Join(app.state.ClaudeHome(), "skills", skill.VigilanteIssueImplementation, "SKILL.md"),
+		filepath.Join(app.state.ClaudeHome(), "commands", skill.VigilanteIssueImplementation, "SKILL.md"),
 		filepath.Join(app.state.GeminiHome(), "skills", skill.VigilanteIssueImplementation, "SKILL.md"),
 		filepath.Join(app.state.GeminiHome(), "commands", skill.VigilanteIssueImplementation+".toml"),
 		filepath.Join(app.state.GeminiHome(), "skills", skill.VigilanteIssueImplementationOnRushMonorepo, "SKILL.md"),
