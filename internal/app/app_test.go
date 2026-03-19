@@ -3624,6 +3624,7 @@ func TestScanOnceSelectsEligibleIssueAndPersistsSession(t *testing.T) {
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 
 	app := New()
+	app.clock = func() time.Time { return time.Date(2026, 3, 19, 21, 55, 0, 0, time.UTC) }
 	app.stdout = &bytes.Buffer{}
 	app.stderr = testutil.IODiscard{}
 	worktreePath := filepath.Join("/tmp/repo", ".worktrees", "vigilante", "issue-1")
@@ -3632,6 +3633,7 @@ func TestScanOnceSelectsEligibleIssueAndPersistsSession(t *testing.T) {
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
 		Outputs: mergeStringMaps(freshBaseBranchOutputs("/tmp/repo", "main"), map[string]string{
 			"gh auth status":          "ok",
+			"gh api /rate_limit":      `{"resources":{"core":{"limit":5000,"remaining":150,"reset":1773961151},"rate":{"limit":5000,"remaining":150,"reset":1773961151},"graphql":{"limit":5000,"remaining":4557,"reset":1773961792},"search":{"limit":30,"remaining":30,"reset":1773961093}}}`,
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[{"name":"to-do"}]}]`,
 			"git worktree prune": "ok",
@@ -3675,6 +3677,159 @@ func TestScanOnceSelectsEligibleIssueAndPersistsSession(t *testing.T) {
 	}
 	if len(sessions) != 1 || sessions[0].Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+}
+
+func TestScanOncePausesWhenGitHubCoreRateLimitIsLowAndCommentsActiveIssues(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	now := time.Date(2026, 3, 19, 21, 55, 0, 0, time.UTC)
+	resetAt := time.Unix(1773961151, 0).Local()
+	app := New()
+	app.clock = func() time.Time { return now }
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"gh": "/usr/bin/gh"},
+		Outputs: map[string]string{
+			"gh api /rate_limit": `{"resources":{"core":{"limit":5000,"remaining":95,"reset":1773961151},"rate":{"limit":5000,"remaining":95,"reset":1773961151},"graphql":{"limit":5000,"remaining":4557,"reset":1773961792},"search":{"limit":30,"remaining":30,"reset":1773961093}}}`,
+			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatGitHubRateLimitDelayComment(ghcli.RateLimitSnapshot{
+				Core:    ghcli.RateLimitResource{Limit: 5000, Remaining: 95, ResetAt: resetAt},
+				Rate:    ghcli.RateLimitResource{Limit: 5000, Remaining: 95, ResetAt: resetAt},
+				GraphQL: ghcli.RateLimitResource{Limit: 5000, Remaining: 4557, ResetAt: time.Unix(1773961792, 0).Local()},
+				Search:  ghcli.RateLimitResource{Limit: 30, Remaining: 30, ResetAt: time.Unix(1773961093, 0).Local()},
+			}, githubCoreLowQuotaThreshold, now): "ok",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:     "/tmp/repo",
+		Repo:         "owner/repo",
+		IssueNumber:  7,
+		IssueTitle:   "active work",
+		IssueURL:     "https://github.com/owner/repo/issues/7",
+		Branch:       "vigilante/issue-7",
+		WorktreePath: "/tmp/repo/.worktrees/vigilante/issue-7",
+		Status:       state.SessionStatusRunning,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := stdout.String(); !strings.Contains(got, "scan paused: GitHub REST core quota is below the low-quota threshold") {
+		t.Fatalf("unexpected stdout: %s", got)
+	}
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].LastGitHubDelayResetAt != resetAt.UTC().Format(time.RFC3339) && sessions[0].LastGitHubDelayResetAt != resetAt.Format(time.RFC3339) {
+		t.Fatalf("expected dedupe reset marker, got %#v", sessions[0])
+	}
+}
+
+func TestScanOnceSuppressesDuplicateGitHubLowQuotaCommentsWithinSameResetWindow(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	now := time.Date(2026, 3, 19, 21, 55, 0, 0, time.UTC)
+	resetAt := time.Unix(1773961151, 0).Local()
+	app := New()
+	app.clock = func() time.Time { return now }
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"gh": "/usr/bin/gh"},
+		Outputs: map[string]string{
+			"gh api /rate_limit": `{"resources":{"core":{"limit":5000,"remaining":95,"reset":1773961151},"rate":{"limit":5000,"remaining":95,"reset":1773961151},"graphql":{"limit":5000,"remaining":4557,"reset":1773961792},"search":{"limit":30,"remaining":30,"reset":1773961093}}}`,
+			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatGitHubRateLimitDelayComment(ghcli.RateLimitSnapshot{
+				Core:    ghcli.RateLimitResource{Limit: 5000, Remaining: 95, ResetAt: resetAt},
+				Rate:    ghcli.RateLimitResource{Limit: 5000, Remaining: 95, ResetAt: resetAt},
+				GraphQL: ghcli.RateLimitResource{Limit: 5000, Remaining: 4557, ResetAt: time.Unix(1773961792, 0).Local()},
+				Search:  ghcli.RateLimitResource{Limit: 30, Remaining: 30, ResetAt: time.Unix(1773961093, 0).Local()},
+			}, githubCoreLowQuotaThreshold, now): "ok",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:               "/tmp/repo",
+		Repo:                   "owner/repo",
+		IssueNumber:            7,
+		IssueTitle:             "active work",
+		IssueURL:               "https://github.com/owner/repo/issues/7",
+		Branch:                 "vigilante/issue-7",
+		WorktreePath:           "/tmp/repo/.worktrees/vigilante/issue-7",
+		Status:                 state.SessionStatusRunning,
+		LastGitHubDelayResetAt: resetAt.Format(time.RFC3339),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestScanOnceResumesAfterGitHubRateLimitResetWindowPasses(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	now := time.Date(2026, 3, 19, 23, 5, 0, 0, time.UTC)
+	resetAt := time.Unix(1773961151, 0).Local()
+	app := New()
+	app.clock = func() time.Time { return now }
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.githubRateLimitState = githubRateLimitState{
+		Active:  true,
+		ResetAt: resetAt,
+		Snapshot: ghcli.RateLimitSnapshot{
+			Core: ghcli.RateLimitResource{Limit: 5000, Remaining: 95, ResetAt: resetAt},
+		},
+	}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"gh": "/usr/bin/gh"},
+		Outputs: map[string]string{
+			"gh api /rate_limit":      `{"resources":{"core":{"limit":5000,"remaining":150,"reset":1773964751},"rate":{"limit":5000,"remaining":150,"reset":1773964751},"graphql":{"limit":5000,"remaining":4557,"reset":1773961792},"search":{"limit":30,"remaining":30,"reset":1773961093}}}`,
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(stdout.String(), "scan paused: GitHub REST core quota is below the low-quota threshold") {
+		t.Fatalf("expected scan to resume after reset, got: %s", stdout.String())
+	}
+	if app.githubRateLimitState.Active {
+		t.Fatalf("expected in-memory rate-limit pause to clear after reset")
 	}
 }
 

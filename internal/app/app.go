@@ -34,6 +34,7 @@ const defaultScanInterval = 1 * time.Minute
 const defaultAssigneeFilter = "me"
 const defaultStalledSessionThreshold = 10 * time.Minute
 const defaultMaintenanceAutoRecoveryTimeout = 10 * time.Minute
+const githubCoreLowQuotaThreshold = 100
 const unsetMaxParallel = -2147483648
 const autoRecoverySource = "auto_recovery"
 
@@ -86,7 +87,15 @@ type App struct {
 	cancels                   map[string]context.CancelFunc
 	repoLabelProvisioningMu   sync.Mutex
 	repoLabelsProvisionedOnce map[string]bool
+	githubRateLimitMu         sync.Mutex
+	githubRateLimitState      githubRateLimitState
 	proxyExec                 func(context.Context, io.Reader, io.Writer, io.Writer, string, ...string) (int, error)
+}
+
+type githubRateLimitState struct {
+	Active   bool
+	ResetAt  time.Time
+	Snapshot ghcli.RateLimitSnapshot
 }
 
 type stringListFlag []string
@@ -177,6 +186,22 @@ func (a *App) emitLabelSyncEvent(added []string, removed []string) {
 		"removed_labels": append([]string(nil), removed...),
 		"add_count":      len(added),
 		"remove_count":   len(removed),
+	})
+}
+
+func (a *App) emitGitHubRateLimitEvent(state string, snapshot ghcli.RateLimitSnapshot) {
+	telemetry.CaptureWorkflowEvent("github_rate_limit_state_changed", map[string]any{
+		"feature_area":   "github_rate_limit",
+		"invocation":     "daemon",
+		"state":          strings.TrimSpace(state),
+		"core_remaining": snapshot.Core.Remaining,
+		"core_limit":     snapshot.Core.Limit,
+		"core_reset_at":  snapshot.Core.ResetAt.Format(time.RFC3339),
+		"graphql_limit":  snapshot.GraphQL.Limit,
+		"graphql_remain": snapshot.GraphQL.Remaining,
+		"search_limit":   snapshot.Search.Limit,
+		"search_remain":  snapshot.Search.Remaining,
+		"healthy_cutoff": githubCoreLowQuotaThreshold,
 	})
 }
 
@@ -849,6 +874,18 @@ func (a *App) ScanOnce(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		sessions, throttled, err := a.enforceGitHubRateLimit(ctx, sessions)
+		if err != nil {
+			return err
+		}
+		if throttled {
+			if err := a.state.SaveSessions(sessions); err != nil {
+				return err
+			}
+			fmt.Fprintln(a.stdout, "scan paused: GitHub REST core quota is below the low-quota threshold")
+			a.state.AppendDaemonLog("scan paused by github rate limit")
+			return nil
+		}
 		sessions, err = a.processGitHubCleanupRequests(ctx, sessions)
 		if err != nil {
 			return err
@@ -1133,6 +1170,99 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 	}
 
 	return sessions, nil
+}
+
+func (a *App) enforceGitHubRateLimit(ctx context.Context, sessions []state.Session) ([]state.Session, bool, error) {
+	now := a.clock()
+	if snapshot, active, resumed := a.currentGitHubRateLimitState(now); active {
+		a.state.AppendDaemonLog("github rate limit pause active core_remaining=%d reset_at=%s", snapshot.Core.Remaining, snapshot.Core.ResetAt.Format(time.RFC3339))
+		return a.notifyGitHubLowQuotaSessions(ctx, sessions, snapshot), true, nil
+	} else if resumed {
+		a.state.AppendDaemonLog("github rate limit pause expired; refreshing snapshot")
+	}
+
+	snapshot, err := ghcli.GetRateLimitSnapshot(ctx, a.env.Runner)
+	if err != nil {
+		a.state.AppendDaemonLog("github rate limit fetch failed err=%v", err)
+		return sessions, false, nil
+	}
+	if snapshot.Core.Remaining >= githubCoreLowQuotaThreshold {
+		return sessions, false, nil
+	}
+
+	a.setGitHubRateLimitState(snapshot)
+	a.state.AppendDaemonLog("github rate limit pause entered core_remaining=%d reset_at=%s", snapshot.Core.Remaining, snapshot.Core.ResetAt.Format(time.RFC3339))
+	return a.notifyGitHubLowQuotaSessions(ctx, sessions, snapshot), true, nil
+}
+
+func (a *App) currentGitHubRateLimitState(now time.Time) (ghcli.RateLimitSnapshot, bool, bool) {
+	a.githubRateLimitMu.Lock()
+	defer a.githubRateLimitMu.Unlock()
+
+	if !a.githubRateLimitState.Active {
+		return ghcli.RateLimitSnapshot{}, false, false
+	}
+	if now.Before(a.githubRateLimitState.ResetAt) {
+		return a.githubRateLimitState.Snapshot, true, false
+	}
+
+	snapshot := a.githubRateLimitState.Snapshot
+	a.githubRateLimitState = githubRateLimitState{}
+	a.emitGitHubRateLimitEvent("resumed", snapshot)
+	return ghcli.RateLimitSnapshot{}, false, true
+}
+
+func (a *App) setGitHubRateLimitState(snapshot ghcli.RateLimitSnapshot) {
+	a.githubRateLimitMu.Lock()
+	a.githubRateLimitState = githubRateLimitState{
+		Active:   true,
+		ResetAt:  snapshot.Core.ResetAt,
+		Snapshot: snapshot,
+	}
+	a.githubRateLimitMu.Unlock()
+	a.emitGitHubRateLimitEvent("paused", snapshot)
+}
+
+func (a *App) notifyGitHubLowQuotaSessions(ctx context.Context, sessions []state.Session, snapshot ghcli.RateLimitSnapshot) []state.Session {
+	resetAt := snapshot.Core.ResetAt.Format(time.RFC3339)
+	for i := range sessions {
+		session := &sessions[i]
+		if !sessionAffectedByGitHubRateLimitPause(*session) {
+			continue
+		}
+		if session.LastGitHubDelayResetAt == resetAt {
+			continue
+		}
+
+		body := ghcli.FormatGitHubRateLimitDelayComment(snapshot, githubCoreLowQuotaThreshold, a.clock())
+		if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "rate_limit_delay", "github_rate_limit"); err != nil {
+			a.state.AppendDaemonLog("github rate limit delay comment failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
+			session.LastError = err.Error()
+			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			continue
+		}
+		session.LastGitHubDelayResetAt = resetAt
+		session.LastGitHubDelayCommentedAt = a.clock().Format(time.RFC3339)
+		session.UpdatedAt = session.LastGitHubDelayCommentedAt
+	}
+	return sessions
+}
+
+func sessionAffectedByGitHubRateLimitPause(session state.Session) bool {
+	if session.IssueNumber <= 0 {
+		return false
+	}
+	if strings.TrimSpace(session.Repo) == "" || session.CleanupCompletedAt != "" || session.MonitoringStoppedAt != "" {
+		return false
+	}
+	switch session.Status {
+	case state.SessionStatusRunning, state.SessionStatusResuming:
+		return true
+	case state.SessionStatusSuccess:
+		return session.PullRequestNumber > 0 && !strings.EqualFold(strings.TrimSpace(session.PullRequestState), "closed") && !strings.EqualFold(strings.TrimSpace(session.PullRequestState), "merged")
+	default:
+		return false
+	}
 }
 
 func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session) ([]state.Session, error) {
