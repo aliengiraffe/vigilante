@@ -342,6 +342,12 @@ func prepareMacOSDaemonBinary(ctx context.Context, runner environment.Runner, ex
 		return fmt.Errorf("resolve macOS daemon binary %q: %w", executable, err)
 	}
 
+	if caskRoot, ok := homebrewCaskInstallRoot(resolvedPath); ok {
+		if err := removeKnownMacOSAttributesRecursively(ctx, runner, caskRoot); err != nil {
+			return fmt.Errorf("remove macOS extended attributes from Homebrew cask install root %q: %w", caskRoot, err)
+		}
+	}
+
 	attrs, err := listExtendedAttributes(ctx, runner, resolvedPath)
 	if err != nil {
 		return fmt.Errorf("inspect macOS extended attributes for daemon binary %q: %w", resolvedPath, err)
@@ -365,6 +371,25 @@ func prepareMacOSDaemonBinary(ctx context.Context, runner environment.Runner, ex
 		return fmt.Errorf("macOS rejected daemon binary %s: %w", macOSBinaryContext(executable, resolvedPath, removedAttrs), err)
 	}
 
+	return nil
+}
+
+func homebrewCaskInstallRoot(path string) (string, bool) {
+	dir := filepath.Dir(path)
+	tokenDir := filepath.Dir(dir)
+	if filepath.Base(filepath.Dir(tokenDir)) != "Caskroom" {
+		return "", false
+	}
+	return dir, true
+}
+
+func removeKnownMacOSAttributesRecursively(ctx context.Context, runner environment.Runner, path string) error {
+	for _, attr := range []string{"com.apple.provenance", "com.apple.quarantine"} {
+		command := fmt.Sprintf("xattr -dr %s %s >/dev/null 2>&1 || true", shellQuote(attr), shellQuote(path))
+		if _, err := runner.Run(ctx, "", "/bin/sh", "-lc", command); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

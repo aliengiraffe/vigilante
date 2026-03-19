@@ -405,6 +405,7 @@ func TestRestartReturnsUnsupportedOSError(t *testing.T) {
 func TestPrepareMacOSDaemonBinaryUsesResolvedPath(t *testing.T) {
 	dir := t.TempDir()
 	resolvedPath := filepath.Join(dir, "Caskroom", "vigilante", "1.2.3", "vigilante")
+	caskRoot := filepath.Dir(resolvedPath)
 	if err := os.MkdirAll(filepath.Dir(resolvedPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -427,6 +428,8 @@ func TestPrepareMacOSDaemonBinaryUsesResolvedPath(t *testing.T) {
 	runner := &recordingRunner{
 		FakeRunner: testutil.FakeRunner{
 			Outputs: map[string]string{
+				`/bin/sh -lc xattr -dr 'com.apple.provenance' ` + shellQuote(caskRoot) + ` >/dev/null 2>&1 || true`: "",
+				`/bin/sh -lc xattr -dr 'com.apple.quarantine' ` + shellQuote(caskRoot) + ` >/dev/null 2>&1 || true`: "",
 				testutil.Key("xattr", resolvedPath):                                         "com.apple.provenance\ncom.apple.quarantine\ncom.example.keep\n",
 				testutil.Key("xattr", "-d", "com.apple.provenance", resolvedPath):           "",
 				testutil.Key("xattr", "-d", "com.apple.quarantine", resolvedPath):           "",
@@ -441,6 +444,8 @@ func TestPrepareMacOSDaemonBinaryUsesResolvedPath(t *testing.T) {
 	}
 
 	wantCalls := []string{
+		`/bin/sh -lc xattr -dr 'com.apple.provenance' ` + shellQuote(caskRoot) + ` >/dev/null 2>&1 || true`,
+		`/bin/sh -lc xattr -dr 'com.apple.quarantine' ` + shellQuote(caskRoot) + ` >/dev/null 2>&1 || true`,
 		testutil.Key("xattr", resolvedPath),
 		testutil.Key("xattr", "-d", "com.apple.provenance", resolvedPath),
 		testutil.Key("xattr", "-d", "com.apple.quarantine", resolvedPath),
@@ -489,6 +494,7 @@ func TestPrepareMacOSDaemonBinarySkipsMissingKnownAttrs(t *testing.T) {
 func TestPrepareMacOSDaemonBinaryReportsSymlinkContextOnSpctlFailure(t *testing.T) {
 	dir := t.TempDir()
 	resolvedPath := filepath.Join(dir, "Caskroom", "vigilante", "1.2.3", "vigilante")
+	caskRoot := filepath.Dir(resolvedPath)
 	if err := os.MkdirAll(filepath.Dir(resolvedPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -511,6 +517,8 @@ func TestPrepareMacOSDaemonBinaryReportsSymlinkContextOnSpctlFailure(t *testing.
 	runner := &recordingRunner{
 		FakeRunner: testutil.FakeRunner{
 			Outputs: map[string]string{
+				`/bin/sh -lc xattr -dr 'com.apple.provenance' ` + shellQuote(caskRoot) + ` >/dev/null 2>&1 || true`: "",
+				`/bin/sh -lc xattr -dr 'com.apple.quarantine' ` + shellQuote(caskRoot) + ` >/dev/null 2>&1 || true`: "",
 				testutil.Key("xattr", resolvedPath):                              "",
 				testutil.Key("codesign", "--force", "--sign", "-", resolvedPath): "",
 			},
@@ -532,5 +540,38 @@ func TestPrepareMacOSDaemonBinaryReportsSymlinkContextOnSpctlFailure(t *testing.
 	}
 	if !strings.Contains(err.Error(), "removed_xattrs=none") {
 		t.Fatalf("error missing xattr context: %v", err)
+	}
+}
+
+func TestHomebrewCaskInstallRoot(t *testing.T) {
+	tests := []struct {
+		name string
+		path string
+		want string
+		ok   bool
+	}{
+		{
+			name: "homebrew cask binary",
+			path: "/opt/homebrew/Caskroom/vigilante-nightly/0.0.0-nightly.1/vigilante",
+			want: "/opt/homebrew/Caskroom/vigilante-nightly/0.0.0-nightly.1",
+			ok:   true,
+		},
+		{
+			name: "non cask path",
+			path: "/usr/local/bin/vigilante",
+			ok:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := homebrewCaskInstallRoot(tt.path)
+			if ok != tt.ok {
+				t.Fatalf("unexpected ok=%v want %v", ok, tt.ok)
+			}
+			if got != tt.want {
+				t.Fatalf("unexpected root=%q want %q", got, tt.want)
+			}
+		})
 	}
 }
