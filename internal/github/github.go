@@ -72,6 +72,34 @@ type RepositoryLabelDetails struct {
 	Name string `json:"name"`
 }
 
+type RateLimitResource struct {
+	Limit     int
+	Remaining int
+	ResetAt   time.Time
+}
+
+type RateLimitSnapshot struct {
+	Core    RateLimitResource
+	Rate    RateLimitResource
+	GraphQL RateLimitResource
+	Search  RateLimitResource
+}
+
+type rateLimitAPIResponse struct {
+	Resources struct {
+		Core    rateLimitAPIResource `json:"core"`
+		Rate    rateLimitAPIResource `json:"rate"`
+		GraphQL rateLimitAPIResource `json:"graphql"`
+		Search  rateLimitAPIResource `json:"search"`
+	} `json:"resources"`
+}
+
+type rateLimitAPIResource struct {
+	Limit     int   `json:"limit"`
+	Remaining int   `json:"remaining"`
+	Reset     int64 `json:"reset"`
+}
+
 func ListOpenIssues(ctx context.Context, runner environment.Runner, repo string, assignee string) ([]Issue, error) {
 	resolvedAssignee, err := resolveAssignee(ctx, runner, assignee)
 	if err != nil {
@@ -192,6 +220,40 @@ func matchesLabelAllowlist(issue Issue, allowlist []string) bool {
 func CommentOnIssue(ctx context.Context, runner environment.Runner, repo string, number int, body string) error {
 	_, err := runner.Run(ctx, "", "gh", "issue", "comment", "--repo", repo, fmt.Sprintf("%d", number), "--body", body)
 	return err
+}
+
+func GetRateLimitSnapshot(ctx context.Context, runner environment.Runner) (RateLimitSnapshot, error) {
+	output, err := runner.Run(ctx, "", "gh", "api", "/rate_limit")
+	if err != nil {
+		return RateLimitSnapshot{}, err
+	}
+
+	var response rateLimitAPIResponse
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &response); err != nil {
+		return RateLimitSnapshot{}, fmt.Errorf("parse gh rate limit output: %w", err)
+	}
+
+	snapshot := RateLimitSnapshot{
+		Core:    normalizeRateLimitResource(response.Resources.Core),
+		Rate:    normalizeRateLimitResource(response.Resources.Rate),
+		GraphQL: normalizeRateLimitResource(response.Resources.GraphQL),
+		Search:  normalizeRateLimitResource(response.Resources.Search),
+	}
+	if snapshot.Rate.Limit == 0 {
+		snapshot.Rate = snapshot.Core
+	}
+	return snapshot, nil
+}
+
+func normalizeRateLimitResource(resource rateLimitAPIResource) RateLimitResource {
+	snapshot := RateLimitResource{
+		Limit:     resource.Limit,
+		Remaining: resource.Remaining,
+	}
+	if resource.Reset > 0 {
+		snapshot.ResetAt = time.Unix(resource.Reset, 0).Local()
+	}
+	return snapshot
 }
 
 func GetIssueDetails(ctx context.Context, runner environment.Runner, repo string, number int) (*IssueDetails, error) {

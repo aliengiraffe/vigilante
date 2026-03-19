@@ -99,6 +99,8 @@ Once a folder is registered, `vigilante` should:
 
 In the current implementation, that worker loop already covers repository onboarding, issue intake, isolated worktrees, provider orchestration, repo-aware execution skills, local session recovery, and part of the pull request maintenance path. CI/CD promotion and richer deployment control are planned next-stage capabilities.
 
+Vigilante also monitors GitHub REST API quota through `gh api /rate_limit` before GitHub-heavy orchestration work. When the REST core bucket drops below `100` remaining requests, Vigilante posts one delay notice per affected issue for that reset window, pauses additional GitHub-backed work, and resumes automatically after GitHub's reported reset time.
+
 ## Telemetry
 
 Vigilante emits anonymous telemetry with two different purposes:

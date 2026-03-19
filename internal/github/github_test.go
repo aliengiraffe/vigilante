@@ -180,6 +180,28 @@ func TestListOpenIssuesReturnsErrorWhenResolvingMeFails(t *testing.T) {
 	}
 }
 
+func TestGetRateLimitSnapshot(t *testing.T) {
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api /rate_limit": `{"resources":{"core":{"limit":5000,"remaining":95,"reset":1773961151},"rate":{"limit":5000,"remaining":95,"reset":1773961151},"graphql":{"limit":5000,"remaining":4557,"reset":1773961792},"search":{"limit":30,"remaining":30,"reset":1773961093}}}`,
+		},
+	}
+
+	snapshot, err := GetRateLimitSnapshot(context.Background(), runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Core.Limit != 5000 || snapshot.Core.Remaining != 95 {
+		t.Fatalf("unexpected core snapshot: %#v", snapshot.Core)
+	}
+	if snapshot.GraphQL.Remaining != 4557 || snapshot.Search.Limit != 30 {
+		t.Fatalf("unexpected snapshot: %#v", snapshot)
+	}
+	if snapshot.Core.ResetAt.IsZero() || snapshot.Rate.ResetAt.IsZero() {
+		t.Fatalf("expected reset timestamps: %#v", snapshot)
+	}
+}
+
 func TestSyncIssueLabelsAddsAndRemovesManagedLabels(t *testing.T) {
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{

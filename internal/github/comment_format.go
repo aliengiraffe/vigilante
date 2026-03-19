@@ -3,6 +3,7 @@ package ghcli
 import (
 	"fmt"
 	"strings"
+	"time"
 )
 
 type ProgressComment struct {
@@ -78,6 +79,38 @@ func FormatDispatchFailureComment(comment DispatchFailureComment) string {
 	})
 }
 
+func FormatGitHubRateLimitDelayComment(snapshot RateLimitSnapshot, threshold int, now time.Time) string {
+	lines := []string{
+		"## ⏸️ GitHub Delay Window",
+		progressLine(70),
+		fmt.Sprintf("`ETA: ~%s`", formatMinutes(minutesUntil(now, snapshot.Core.ResetAt))),
+		fmt.Sprintf("- GitHub REST core quota fell below the safety threshold (`%d` remaining), so Vigilante is pausing GitHub-backed work for this issue.", threshold),
+		fmt.Sprintf("- Automatic resume is scheduled after `%s`.", formatAbsoluteTime(snapshot.Core.ResetAt)),
+		"- Vigilante will resume automatically after the GitHub-provided reset time without manual intervention.",
+		"",
+		FormatGitHubRateLimitSnapshot(snapshot),
+		"",
+		"> \"Waiting beats failing at the limit.\"",
+	}
+	return strings.Join(lines, "\n")
+}
+
+func FormatGitHubRateLimitSnapshot(snapshot RateLimitSnapshot) string {
+	rate := snapshot.Rate
+	if rate.Limit == 0 {
+		rate = snapshot.Core
+	}
+	lines := []string{
+		"gh api /rate_limit returned:",
+		"",
+		fmt.Sprintf("  - core: %d/%d used, %d remaining, resets at %s", usedRequests(snapshot.Core), snapshot.Core.Limit, snapshot.Core.Remaining, formatAbsoluteTime(snapshot.Core.ResetAt)),
+		fmt.Sprintf("  - rate (same as core): %d/%d used, %d remaining, resets at %s", usedRequests(rate), rate.Limit, rate.Remaining, formatAbsoluteTime(rate.ResetAt)),
+		fmt.Sprintf("  - graphql: %d/%d used, %d remaining, resets at %s", usedRequests(snapshot.GraphQL), snapshot.GraphQL.Limit, snapshot.GraphQL.Remaining, formatAbsoluteTime(snapshot.GraphQL.ResetAt)),
+		fmt.Sprintf("  - search: %d/%d used, %d remaining, resets at %s", usedRequests(snapshot.Search), snapshot.Search.Limit, snapshot.Search.Remaining, formatAbsoluteTime(snapshot.Search.ResetAt)),
+	}
+	return strings.Join(lines, "\n")
+}
+
 func fallbackCommentValue(value string, fallback string) string {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -113,4 +146,37 @@ func formatMinutes(minutes int) string {
 		return "1 minute"
 	}
 	return fmt.Sprintf("%d minutes", minutes)
+}
+
+func usedRequests(resource RateLimitResource) int {
+	used := resource.Limit - resource.Remaining
+	if used < 0 {
+		return 0
+	}
+	return used
+}
+
+func formatAbsoluteTime(ts time.Time) string {
+	if ts.IsZero() {
+		return "unknown"
+	}
+	return ts.Format("2006-01-02 15:04:05 -07:00")
+}
+
+func minutesUntil(now time.Time, resetAt time.Time) int {
+	if resetAt.IsZero() {
+		return 1
+	}
+	if !resetAt.After(now) {
+		return 1
+	}
+	duration := resetAt.Sub(now)
+	minutes := int(duration / time.Minute)
+	if duration%time.Minute != 0 {
+		minutes++
+	}
+	if minutes < 1 {
+		return 1
+	}
+	return minutes
 }
