@@ -2902,6 +2902,7 @@ func clearBlockedState(session *state.Session, now time.Time, source string) {
 
 func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, target state.WatchTarget, sessions []state.Session) ([]state.Session, int, error) {
 	started := 0
+	needsSave := false
 	for i := range sessions {
 		session := &sessions[i]
 		if session.Repo != target.Repo {
@@ -2916,6 +2917,7 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 			a.state.AppendDaemonLog("iteration issue details failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			needsSave = true
 			continue
 		}
 
@@ -2924,6 +2926,7 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 			a.state.AppendDaemonLog("iteration comment lookup failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			needsSave = true
 			continue
 		}
 
@@ -2953,6 +2956,7 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 				a.state.AppendDaemonLog("iteration rejection comment failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
 				session.LastError = err.Error()
 			}
+			needsSave = true
 			continue
 		}
 
@@ -2978,6 +2982,7 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 			updated.UpdatedAt = a.clock().Format(time.RFC3339)
 			a.commentDispatchFailure(ctx, previous, &updated, "iteration_dispatch")
 			sessions = upsertSession(sessions, updated)
+			needsSave = true
 			a.emitSessionTransition(previous.Status, updated, "iteration_dispatch")
 			a.syncSessionIssueLabelsBestEffort(ctx, updated, nil)
 			a.state.AppendDaemonLog("iteration dispatch failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
@@ -2988,10 +2993,14 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 		if err := a.state.SaveSessions(sessions); err != nil {
 			return sessions, started, err
 		}
+		needsSave = false
 		a.emitSessionTransition(previous.Status, updated, "iteration_dispatch")
 		a.syncSessionIssueLabelsBestEffort(ctx, updated, nil)
 		a.launchIssueSession(ctx, target, issue, updated)
 		started++
+	}
+	if !needsSave {
+		return sessions, started, nil
 	}
 	return sessions, started, a.state.SaveSessions(sessions)
 }
