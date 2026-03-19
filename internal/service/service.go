@@ -367,9 +367,6 @@ func prepareMacOSDaemonBinary(ctx context.Context, runner environment.Runner, ex
 	if _, err := runner.Run(ctx, "", "codesign", "--force", "--sign", "-", resolvedPath); err != nil {
 		return fmt.Errorf("ad-hoc sign macOS daemon binary %s: %w", macOSBinaryContext(executable, resolvedPath, removedAttrs), err)
 	}
-	if _, err := runner.Run(ctx, "", "spctl", "--assess", "--type", "execute", "-vv", resolvedPath); err != nil {
-		return fmt.Errorf("macOS rejected daemon binary %s: %w", macOSBinaryContext(executable, resolvedPath, removedAttrs), err)
-	}
 
 	return nil
 }
