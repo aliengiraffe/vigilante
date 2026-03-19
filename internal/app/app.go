@@ -2902,6 +2902,7 @@ func clearBlockedState(session *state.Session, now time.Time, source string) {
 
 func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, target state.WatchTarget, sessions []state.Session) ([]state.Session, int, error) {
 	started := 0
+	needsSave := false
 	for i := range sessions {
 		session := &sessions[i]
 		if session.Repo != target.Repo {
@@ -2916,6 +2917,7 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 			a.state.AppendDaemonLog("iteration issue details failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			needsSave = true
 			continue
 		}
 
@@ -2924,6 +2926,7 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 			a.state.AppendDaemonLog("iteration comment lookup failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			needsSave = true
 			continue
 		}
 
@@ -2953,6 +2956,7 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 				a.state.AppendDaemonLog("iteration rejection comment failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
 				session.LastError = err.Error()
 			}
+			needsSave = true
 			continue
 		}
 
@@ -2978,6 +2982,7 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 			updated.UpdatedAt = a.clock().Format(time.RFC3339)
 			a.commentDispatchFailure(ctx, previous, &updated, "iteration_dispatch")
 			sessions = upsertSession(sessions, updated)
+			needsSave = true
 			a.emitSessionTransition(previous.Status, updated, "iteration_dispatch")
 			a.syncSessionIssueLabelsBestEffort(ctx, updated, nil)
 			a.state.AppendDaemonLog("iteration dispatch failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
@@ -2985,10 +2990,17 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 		}
 
 		sessions = upsertSession(sessions, updated)
+		if err := a.state.SaveSessions(sessions); err != nil {
+			return sessions, started, err
+		}
+		needsSave = false
 		a.emitSessionTransition(previous.Status, updated, "iteration_dispatch")
 		a.syncSessionIssueLabelsBestEffort(ctx, updated, nil)
 		a.launchIssueSession(ctx, target, issue, updated)
 		started++
+	}
+	if !needsSave {
+		return sessions, started, nil
 	}
 	return sessions, started, a.state.SaveSessions(sessions)
 }
@@ -3061,6 +3073,14 @@ func buildIterationPromptContext(comments []ghcli.IssueComment) string {
 func (a *App) dispatchIssueSession(ctx context.Context, target state.WatchTarget, issue ghcli.Issue, selectedProvider string, previous state.Session, issueBody string, iterationContext string, triggeringComment *ghcli.IssueComment) (state.Session, error) {
 	wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, target, issue.Number, issue.Title)
 	if err != nil {
+		if triggeringComment != nil && strings.Contains(strings.ToLower(err.Error()), "worktree already exists") {
+			reused, reuseErr := reuseExistingIterationSession(target, issue, selectedProvider, previous, issueBody, iterationContext, triggeringComment, a.clock())
+			if reuseErr == nil {
+				a.state.AppendDaemonLog("iteration dispatch reusing existing worktree repo=%s issue=%d path=%s branch=%s", target.Repo, issue.Number, reused.WorktreePath, reused.Branch)
+				return reused, nil
+			}
+			err = reuseErr
+		}
 		return blockedIssueSessionForDispatchFailure(target, issue, selectedProvider, err, a.clock()), err
 	}
 	a.state.AppendDaemonLog("scan repo worktree ready repo=%s issue=%d path=%s branch=%s reused_remote=%t", target.Repo, issue.Number, wt.Path, wt.Branch, wt.ReusedRemoteBranch != "")
@@ -3107,6 +3127,67 @@ func (a *App) dispatchIssueSession(ctx context.Context, target state.WatchTarget
 		session.LastIterationCommentID = triggeringComment.ID
 		session.LastIterationCommentAt = triggeringComment.CreatedAt.UTC().Format(time.RFC3339)
 	}
+	return session, nil
+}
+
+func reuseExistingIterationSession(target state.WatchTarget, issue ghcli.Issue, selectedProvider string, previous state.Session, issueBody string, iterationContext string, triggeringComment *ghcli.IssueComment, now time.Time) (state.Session, error) {
+	expectedPath := worktree.IssueWorktreePath(target.Path, issue.Number)
+	if strings.TrimSpace(previous.WorktreePath) != expectedPath {
+		return state.Session{}, fmt.Errorf("iteration reuse refused for issue #%d: existing worktree state points to %q instead of %q", issue.Number, strings.TrimSpace(previous.WorktreePath), expectedPath)
+	}
+	if info, err := os.Stat(expectedPath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return state.Session{}, fmt.Errorf("iteration reuse refused for issue #%d: expected existing worktree path %s is missing", issue.Number, expectedPath)
+		}
+		return state.Session{}, fmt.Errorf("iteration reuse refused for issue #%d: inspect worktree path %s: %w", issue.Number, expectedPath, err)
+	} else if !info.IsDir() {
+		return state.Session{}, fmt.Errorf("iteration reuse refused for issue #%d: existing worktree path %s is not a directory", issue.Number, expectedPath)
+	}
+
+	branch := strings.TrimSpace(previous.Branch)
+	if branch == "" {
+		return state.Session{}, fmt.Errorf("iteration reuse refused for issue #%d: existing session branch is empty", issue.Number)
+	}
+	legacyPrefix := worktree.LegacyIssueBranchName(issue.Number)
+	if !strings.HasPrefix(branch, legacyPrefix) {
+		return state.Session{}, fmt.Errorf("iteration reuse refused for issue #%d: existing branch %q does not match %q", issue.Number, branch, legacyPrefix)
+	}
+
+	timestamp := now.Format(time.RFC3339)
+	session := previous
+	session.RepoPath = target.Path
+	session.Repo = target.Repo
+	session.Provider = selectedProvider
+	session.IssueNumber = issue.Number
+	session.IssueTitle = issue.Title
+	session.IssueBody = strings.TrimSpace(issueBody)
+	session.IssueURL = issue.URL
+	session.BaseBranch = target.Branch
+	session.Branch = branch
+	session.WorktreePath = expectedPath
+	session.Status = state.SessionStatusRunning
+	session.ProcessID = os.Getpid()
+	session.StartedAt = timestamp
+	session.LastHeartbeatAt = timestamp
+	session.EndedAt = ""
+	session.UpdatedAt = timestamp
+	session.LastError = ""
+	session.BlockedAt = ""
+	session.BlockedStage = ""
+	session.BlockedReason = state.BlockedReason{}
+	session.RetryPolicy = ""
+	session.ResumeRequired = false
+	session.ResumeHint = ""
+	session.IterationPromptContext = strings.TrimSpace(iterationContext)
+	session.IterationInProgress = true
+	session.LastResumeSource = ""
+	session.LastResumeCommentAt = ""
+	session.LastResumeFailureFingerprint = ""
+	session.LastResumeFailureCommentedAt = ""
+	session.LastDispatchFailureFingerprint = ""
+	session.LastDispatchFailureCommentedAt = ""
+	session.LastIterationCommentID = triggeringComment.ID
+	session.LastIterationCommentAt = triggeringComment.CreatedAt.UTC().Format(time.RFC3339)
 	return session, nil
 }
 
