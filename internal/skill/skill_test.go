@@ -699,6 +699,30 @@ func TestVigilanteCreateIssueSkillDocumentsNativeIssueTypeFallback(t *testing.T)
 	}
 }
 
+func TestVigilanteCreateIssueSkillDocumentsNativeIssueRelationships(t *testing.T) {
+	body, err := os.ReadFile(repoSkillPath(VigilanteCreateIssue))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := string(body)
+	for _, snippet := range []string{
+		"When the draft explicitly says the new issue is a follow-up, child, or sub-issue of a specific existing issue, carry that parent issue number through issue creation.",
+		"After the base issue is created, attach it as a native GitHub sub-issue of that parent with `vigilante gh api --method POST repos/{owner}/{repo}/issues/{parent_issue_number}/sub_issues -f sub_issue_id={created_issue_id}`.",
+		"Only create a native relationship when the parent mapping is explicit and low-ambiguity; incidental issue-number mentions in prose are not enough.",
+		"If native sub-issue creation fails or the repository does not support it, keep the created issue, preserve the body text reference, and make the fallback explicit in the final response.",
+		"If the native sub-issue relationship request is rejected or unsupported, do not fail the overall issue creation flow; keep the new issue and report that the relationship fell back to body-only text.",
+		"Do not infer parent/child issue links from vague wording or unrelated issue references.",
+		"explicit follow-up or child relationships are attached as native GitHub sub-issues when the parent issue is clearly identified",
+		"ambiguous issue references do not create native parent/child links",
+		"the final response says whether the native sub-issue relationship was created or whether issue creation fell back to body-only linking",
+	} {
+		if !strings.Contains(text, snippet) {
+			t.Fatalf("skill missing %q", snippet)
+		}
+	}
+}
+
 func TestVigilanteCreateIssueSkillIncludesTypeSpecificDetailGuidance(t *testing.T) {
 	body, err := os.ReadFile(repoSkillPath(VigilanteCreateIssue))
 	if err != nil {
