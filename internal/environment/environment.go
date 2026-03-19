@@ -7,6 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
+
+	"github.com/nicobistolfi/vigilante/internal/telemetry"
 )
 
 type Runner interface {
@@ -47,10 +50,16 @@ func (ExecRunner) LookPath(file string) (string, error) {
 }
 
 func (r LoggingRunner) Run(ctx context.Context, dir string, name string, args ...string) (string, error) {
+	startedAt := time.Now().UTC()
 	if r.Logf != nil {
 		r.Logf("command start dir=%q cmd=%s", dir, commandString(name, args...))
 	}
 	output, err := r.Base.Run(ctx, dir, name, args...)
+	exitCode := 0
+	if err != nil {
+		exitCode = 1
+	}
+	telemetry.CaptureInternalCommand(ctx, name, args, exitCode, time.Since(startedAt).Milliseconds())
 	if r.Logf != nil {
 		if err != nil {
 			r.Logf("command failed cmd=%s err=%v output=%s", commandString(name, args...), err, trimForLog(output))

@@ -236,6 +236,56 @@ func (m *Manager) StartCommand(ctx context.Context, args []string) (context.Cont
 	}
 }
 
+func CaptureInternalCommand(ctx context.Context, name string, args []string, exitCode int, durationMs int64) {
+	defaultManagerMu.RLock()
+	manager := defaultManager
+	defaultManagerMu.RUnlock()
+	if manager == nil {
+		return
+	}
+	manager.CaptureInternalCommand(ctx, name, args, exitCode, durationMs)
+}
+
+func (m *Manager) CaptureInternalCommand(ctx context.Context, name string, args []string, exitCode int, durationMs int64) {
+	if m == nil || m.provider == nil {
+		return
+	}
+
+	commandName, category, ok := internalCommandName(name, args)
+	if !ok {
+		return
+	}
+
+	record := otellog.Record{}
+	record.SetEventName("internal.command")
+	record.SetTimestamp(time.Now().UTC().Add(-time.Duration(durationMs) * time.Millisecond))
+	record.SetObservedTimestamp(time.Now().UTC())
+	record.AddAttributes(
+		otellog.KeyValueFromAttribute(attribute.Int("command.exit_code", exitCode)),
+		otellog.KeyValueFromAttribute(attribute.String("command.name", commandName)),
+		otellog.KeyValueFromAttribute(attribute.String("command.group", commandGroup(commandName))),
+		otellog.KeyValueFromAttribute(attribute.Int64("command.duration_ms", durationMs)),
+		otellog.KeyValueFromAttribute(attribute.String("feature_area", internalCommandFeatureArea(category))),
+		otellog.KeyValueFromAttribute(attribute.String("invocation", "internal")),
+		otellog.KeyValueFromAttribute(attribute.String("tool.category", category)),
+		otellog.KeyValueFromAttribute(attribute.String("tool.name", strings.TrimSpace(filepath.Base(name)))),
+		otellog.KeyValueFromAttribute(attribute.String("platform.os", runtime.GOOS)),
+		otellog.KeyValueFromAttribute(attribute.String("platform.arch", runtime.GOARCH)),
+		otellog.KeyValueFromAttribute(attribute.String("app.version", m.version)),
+		otellog.KeyValueFromAttribute(attribute.String("distro", m.distro)),
+	)
+	if exitCode != 0 {
+		record.SetBody(otellog.StringValue("internal command failed"))
+		record.SetSeverity(otellog.SeverityError)
+		record.SetSeverityText("ERROR")
+	} else {
+		record.SetBody(otellog.StringValue("internal command completed"))
+		record.SetSeverity(otellog.SeverityInfo)
+		record.SetSeverityText("INFO")
+	}
+	m.logger.Emit(ctx, record)
+}
+
 func CommandName(args []string) string {
 	if len(args) == 0 {
 		return "root"
@@ -637,6 +687,104 @@ func boundedOperation(operation string) string {
 	return operation
 }
 
+func internalCommandName(name string, args []string) (string, string, bool) {
+	tool := strings.TrimSpace(filepath.Base(name))
+	switch tool {
+	case "git":
+		commandPath := proxyCommandPath("git", args)
+		if commandPath == "" {
+			return tool, "git", true
+		}
+		return tool + " " + commandPath, "git", true
+	case "codex", "claude", "gemini":
+		commandPath := internalCommandPath(tool, args)
+		if commandPath == "" {
+			return tool, "coding_agent", true
+		}
+		return tool + " " + commandPath, "coding_agent", true
+	default:
+		return "", "", false
+	}
+}
+
+func internalCommandPath(tool string, args []string) string {
+	for i := 0; i < len(args); i++ {
+		token := strings.TrimSpace(args[i])
+		if token == "" {
+			continue
+		}
+		if isHelpToken(token) {
+			return "help"
+		}
+		if strings.HasPrefix(token, "-") {
+			if internalFlagTakesValue(tool, token) && i+1 < len(args) && !strings.HasPrefix(strings.TrimSpace(args[i+1]), "-") {
+				i++
+			}
+			continue
+		}
+		if internalCommandTokenAllowed(tool, token) {
+			return token
+		}
+		return ""
+	}
+	return ""
+}
+
+func internalCommandTokenAllowed(tool string, token string) bool {
+	switch tool {
+	case "codex":
+		switch token {
+		case "exec", "help", "login", "logout", "mcp":
+			return true
+		}
+	case "claude":
+		switch token {
+		case "config", "doctor", "help", "mcp", "update":
+			return true
+		}
+	case "gemini":
+		switch token {
+		case "help", "mcp":
+			return true
+		}
+	}
+	return false
+}
+
+func internalFlagTakesValue(tool string, flag string) bool {
+	if strings.Contains(flag, "=") {
+		return false
+	}
+	switch tool {
+	case "codex":
+		switch flag {
+		case "--cd", "--config", "--model", "--sandbox", "--color":
+			return true
+		}
+	case "claude":
+		switch flag {
+		case "--model", "--permission-mode", "--output-format", "--input-format", "--add-dir":
+			return true
+		}
+	case "gemini":
+		switch flag {
+		case "--model", "--prompt", "--sandbox", "--checkpointing":
+			return true
+		}
+	}
+	return false
+}
+
+func internalCommandFeatureArea(category string) string {
+	switch category {
+	case "git":
+		return "tool_proxy"
+	case "coding_agent":
+		return "coding_agent"
+	default:
+		return "internal_subprocess"
+	}
+}
 func commandFeatureArea(commandGroup string) string {
 	switch commandGroup {
 	case "setup":
