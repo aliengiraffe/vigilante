@@ -549,26 +549,22 @@ func (a *App) runCompletionCommand(args []string) error {
 }
 
 func (a *App) Status(ctx context.Context) error {
+	return a.statusExpanded(ctx)
+}
+
+func (a *App) statusServiceSection(ctx context.Context) (serviceStatusInfo, error) {
 	status, err := service.ServiceStatus(ctx, a.env)
 	if err != nil {
-		return err
+		return serviceStatusInfo{}, err
 	}
-
-	fmt.Fprintf(a.stdout, "state: %s\n", status.State)
-	fmt.Fprintf(a.stdout, "manager: %s\n", status.Manager)
-	fmt.Fprintf(a.stdout, "service: %s\n", status.Service)
-	fmt.Fprintf(a.stdout, "path: %s\n", status.FilePath)
-	if status.Installed {
-		fmt.Fprintln(a.stdout, "installed: yes")
-	} else {
-		fmt.Fprintln(a.stdout, "installed: no")
-	}
-	if status.Running {
-		fmt.Fprintln(a.stdout, "running: yes")
-	} else {
-		fmt.Fprintln(a.stdout, "running: no")
-	}
-	return nil
+	return serviceStatusInfo{
+		State:     status.State,
+		Manager:   status.Manager,
+		Service:   status.Service,
+		FilePath:  status.FilePath,
+		Installed: status.Installed,
+		Running:   status.Running,
+	}, nil
 }
 
 func (a *App) RestartService(ctx context.Context) error {
