@@ -22,7 +22,7 @@ type sessionGroup struct {
 }
 
 func groupSessions(sessions []state.Session, now time.Time, inactivityTimeout time.Duration) []sessionGroup {
-	var active, prTracking, issueTracking, stale, completed, failed []state.Session
+	var active, prTracking, issueTracking, stale, completed, failed, closed []state.Session
 
 	staleBlockedThreshold := time.Duration(staleBlockedMultiplier) * inactivityTimeout
 
@@ -44,6 +44,8 @@ func groupSessions(sessions []state.Session, now time.Time, inactivityTimeout ti
 			completed = append(completed, s)
 		case state.SessionStatusFailed:
 			failed = append(failed, s)
+		case state.SessionStatusClosed:
+			closed = append(closed, s)
 		}
 	}
 
@@ -60,10 +62,11 @@ func groupSessions(sessions []state.Session, now time.Time, inactivityTimeout ti
 	if len(stale) > 0 {
 		groups = append(groups, sessionGroup{Label: "Stale sessions", Sessions: stale})
 	}
-	if len(completed) > 0 || len(failed) > 0 {
+	if len(completed) > 0 || len(failed) > 0 || len(closed) > 0 {
 		var summary []state.Session
 		summary = append(summary, completed...)
 		summary = append(summary, failed...)
+		summary = append(summary, closed...)
 		groups = append(groups, sessionGroup{Label: "Completed / failed", Sessions: summary})
 	}
 	return groups

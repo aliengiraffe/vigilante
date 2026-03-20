@@ -111,6 +111,38 @@ func TestSessionLogPathFallsBackWhenRepositorySlugMissing(t *testing.T) {
 	}
 }
 
+func TestSessionStatusClosedRoundTrips(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+
+	store := NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions := []Session{
+		{Repo: "owner/repo", IssueNumber: 1, Branch: "vigilante/issue-1", Status: SessionStatusClosed},
+		{Repo: "owner/repo", IssueNumber: 2, Branch: "vigilante/issue-2", Status: SessionStatusSuccess},
+	}
+	if err := store.SaveSessions(sessions); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := store.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 2 {
+		t.Fatalf("expected 2 sessions, got %d", len(loaded))
+	}
+	if loaded[0].Status != SessionStatusClosed {
+		t.Fatalf("expected closed status, got %q", loaded[0].Status)
+	}
+	if loaded[1].Status != SessionStatusSuccess {
+		t.Fatalf("expected success status, got %q", loaded[1].Status)
+	}
+}
+
 func TestWatchTargetMaxParallelDefaultsToSharedValue(t *testing.T) {
 	if got := normalizeMaxParallelSessions(0); got != DefaultMaxParallelSessions {
 		t.Fatalf("expected zero max_parallel_sessions to normalize to shared default %d, got %d", DefaultMaxParallelSessions, got)

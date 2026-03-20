@@ -44,6 +44,7 @@ const (
 	SessionStatusResuming SessionStatus = "resuming"
 	SessionStatusSuccess  SessionStatus = "success"
 	SessionStatusFailed   SessionStatus = "failed"
+	SessionStatusClosed   SessionStatus = "closed"
 )
 
 type BlockedReason struct {
