@@ -122,6 +122,24 @@ func TestGroupSessionsCompletedAndFailed(t *testing.T) {
 	}
 }
 
+func TestGroupSessionsClosedInCompletedGroup(t *testing.T) {
+	now := time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)
+	sessions := []state.Session{
+		{Repo: "owner/repo", IssueNumber: 70, Status: state.SessionStatusClosed},
+		{Repo: "owner/repo", IssueNumber: 71, Status: state.SessionStatusSuccess},
+	}
+	groups := groupSessions(sessions, now, 20*time.Minute)
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(groups))
+	}
+	if groups[0].Label != "Completed / failed" {
+		t.Fatalf("expected 'Completed / failed', got %q", groups[0].Label)
+	}
+	if len(groups[0].Sessions) != 2 {
+		t.Fatalf("expected 2 sessions, got %d", len(groups[0].Sessions))
+	}
+}
+
 func TestGroupSessionsMixedPopulation(t *testing.T) {
 	now := time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)
 	sessions := []state.Session{

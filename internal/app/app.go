@@ -162,6 +162,8 @@ func (a *App) emitSessionTransition(previous state.SessionStatus, session state.
 		properties["transition"] = "succeeded"
 	case state.SessionStatusFailed:
 		properties["transition"] = "failed"
+	case state.SessionStatusClosed:
+		properties["transition"] = "closed"
 	}
 	telemetry.CaptureWorkflowEvent("issue_session_transition", properties)
 }
@@ -1381,7 +1383,9 @@ func (a *App) cleanupClosedIssueSessions(ctx context.Context, sessions []state.S
 			continue
 		}
 
-		a.state.AppendDaemonLog("cleanup complete repo=%s issue=%d branch=%s worktree=%s source=issue_closed", session.Repo, session.IssueNumber, session.Branch, session.WorktreePath)
+		session.Status = state.SessionStatusClosed
+		session.UpdatedAt = a.clock().Format(time.RFC3339)
+		a.state.AppendDaemonLog("cleanup complete repo=%s issue=%d branch=%s worktree=%s source=issue_closed status=closed", session.Repo, session.IssueNumber, session.Branch, session.WorktreePath)
 		a.syncSessionIssueLabelsBestEffort(ctx, *session, nil)
 	}
 
@@ -3234,6 +3238,8 @@ func sessionSupportsIteration(session state.Session) bool {
 		return false
 	case state.SessionStatusBlocked, state.SessionStatusSuccess, state.SessionStatusFailed:
 		return true
+	case state.SessionStatusClosed:
+		return false
 	default:
 		return false
 	}
@@ -3511,6 +3517,8 @@ func desiredSessionLabels(session state.Session, pr *ghcli.PullRequest) (string,
 		return labelRunning, ""
 	case state.SessionStatusBlocked:
 		return labelBlocked, blockedInterventionLabel(session.BlockedReason)
+	case state.SessionStatusClosed:
+		return labelDone, ""
 	case state.SessionStatusSuccess:
 		if pr != nil && pr.MergedAt != nil {
 			return labelDone, ""
