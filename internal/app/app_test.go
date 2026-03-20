@@ -3087,6 +3087,59 @@ func TestScanOnceReportsNoMatchingRunningSessionForGitHubCleanupRequest(t *testi
 	}
 }
 
+func TestScanOnceSkipsClosedSessionsForCleanupCommentPolling(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	// Deliberately omit the comments API endpoint for the closed session.
+	// If processGitHubCleanupRequests attempts to poll comments for the
+	// closed session, the fake runner will return an error and the test will
+	// fail, proving that closed sessions are properly skipped.
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:           "/tmp/repo",
+		Repo:               "owner/repo",
+		IssueNumber:        1,
+		Branch:             "vigilante/issue-1",
+		WorktreePath:       filepath.Join("/tmp/repo", ".worktrees", "vigilante", "issue-1"),
+		Status:             state.SessionStatusClosed,
+		CleanupCompletedAt: "2026-03-19T10:00:00Z",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+	if sessions[0].Status != state.SessionStatusClosed {
+		t.Fatalf("expected closed session to remain closed, got %q", sessions[0].Status)
+	}
+}
+
 func TestBlockedSessionExceededInactivityTimeoutTreatsUserCommentAsActivity(t *testing.T) {
 	home := t.TempDir()
 	repoPath := filepath.Join(home, "repo")

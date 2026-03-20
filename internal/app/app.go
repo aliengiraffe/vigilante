@@ -1786,6 +1786,9 @@ func (a *App) listRunningSessions() error {
 func (a *App) processGitHubCleanupRequests(ctx context.Context, sessions []state.Session) ([]state.Session, error) {
 	for i := range sessions {
 		session := &sessions[i]
+		if session.Status == state.SessionStatusClosed {
+			continue
+		}
 
 		comments, err := ghcli.ListIssueCommentsForPolling(ctx, a.env.Runner, session.Repo, session.IssueNumber, "cleanup", a.state.AppendDaemonLog)
 		if err != nil {
