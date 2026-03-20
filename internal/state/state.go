@@ -86,6 +86,7 @@ type Session struct {
 	BlockedStage                   string        `json:"blocked_stage,omitempty"`
 	BlockedReason                  BlockedReason `json:"blocked_reason,omitempty"`
 	RetryPolicy                    string        `json:"retry_policy,omitempty"`
+	ResumeAfter                    string        `json:"resume_after,omitempty"`
 	ResumeRequired                 bool          `json:"resume_required,omitempty"`
 	ResumeHint                     string        `json:"resume_hint,omitempty"`
 	LastResumeSource               string        `json:"last_resume_source,omitempty"`

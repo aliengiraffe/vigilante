@@ -1180,10 +1180,10 @@ func (a *App) enforceGitHubRateLimit(ctx context.Context, sessions []state.Sessi
 	snapshot, err := ghcli.GetRateLimitSnapshot(ctx, a.env.Runner)
 	if err != nil {
 		a.state.AppendDaemonLog("github rate limit fetch failed err=%v", err)
-		return sessions, false, nil
+		return a.clearExpiredGitHubResumeState(sessions, now), false, nil
 	}
 	if snapshot.Core.Remaining >= githubCoreLowQuotaThreshold {
-		return sessions, false, nil
+		return a.clearExpiredGitHubResumeState(sessions, now), false, nil
 	}
 
 	a.setGitHubRateLimitState(snapshot)
@@ -1198,7 +1198,7 @@ func (a *App) currentGitHubRateLimitState(now time.Time) (ghcli.RateLimitSnapsho
 	if !a.githubRateLimitState.Active {
 		return ghcli.RateLimitSnapshot{}, false, false
 	}
-	if now.Before(a.githubRateLimitState.ResetAt) {
+	if !a.githubRateLimitState.ResetAt.IsZero() && now.Before(a.githubRateLimitState.ResetAt) {
 		return a.githubRateLimitState.Snapshot, true, false
 	}
 
@@ -1226,6 +1226,7 @@ func (a *App) notifyGitHubLowQuotaSessions(ctx context.Context, sessions []state
 		if !sessionAffectedByGitHubRateLimitPause(*session) {
 			continue
 		}
+		session.ResumeAfter = resetAt
 		if session.LastGitHubDelayResetAt == resetAt {
 			continue
 		}
@@ -1239,7 +1240,21 @@ func (a *App) notifyGitHubLowQuotaSessions(ctx context.Context, sessions []state
 		}
 		session.LastGitHubDelayResetAt = resetAt
 		session.LastGitHubDelayCommentedAt = a.clock().Format(time.RFC3339)
-		session.UpdatedAt = session.LastGitHubDelayCommentedAt
+	}
+	return sessions
+}
+
+func (a *App) clearExpiredGitHubResumeState(sessions []state.Session, now time.Time) []state.Session {
+	for i := range sessions {
+		session := &sessions[i]
+		if strings.TrimSpace(session.ResumeAfter) == "" {
+			continue
+		}
+		resumeAfter, err := time.Parse(time.RFC3339, session.ResumeAfter)
+		if err != nil || now.Before(resumeAfter) {
+			continue
+		}
+		session.ResumeAfter = ""
 	}
 	return sessions
 }
@@ -2706,7 +2721,7 @@ func isStalledSession(session state.Session, now time.Time, threshold time.Durat
 		}
 	}
 
-	lastActivity := sessionActivityTime(session)
+	lastActivity := sessionLivenessTime(session)
 	if lastActivity.IsZero() {
 		return true, "session has no recorded heartbeat"
 	}
@@ -2717,6 +2732,19 @@ func isStalledSession(session state.Session, now time.Time, threshold time.Durat
 		return true, fmt.Sprintf("process %d is not running and the session has been idle since %s", session.ProcessID, lastActivity.Format(time.RFC3339))
 	}
 	return true, fmt.Sprintf("no active process is recorded and the session has been idle since %s", lastActivity.Format(time.RFC3339))
+}
+
+func sessionLivenessTime(session state.Session) time.Time {
+	for _, raw := range []string{session.LastHeartbeatAt, session.StartedAt} {
+		if strings.TrimSpace(raw) == "" {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339, raw)
+		if err == nil {
+			return parsed
+		}
+	}
+	return time.Time{}
 }
 
 func sessionActivityTime(session state.Session) time.Time {
@@ -3076,6 +3104,7 @@ func clearBlockedState(session *state.Session, now time.Time, source string) {
 	session.BlockedReason = state.BlockedReason{}
 	session.BlockedStage = ""
 	session.RetryPolicy = ""
+	session.ResumeAfter = ""
 	session.ResumeRequired = false
 	session.ResumeHint = ""
 	session.RecoveredAt = now.Format(time.RFC3339)
@@ -3367,6 +3396,7 @@ func reuseExistingIterationSession(target state.WatchTarget, issue ghcli.Issue, 
 	session.BlockedStage = ""
 	session.BlockedReason = state.BlockedReason{}
 	session.RetryPolicy = ""
+	session.ResumeAfter = ""
 	session.ResumeRequired = false
 	session.ResumeHint = ""
 	session.IterationPromptContext = strings.TrimSpace(iterationContext)

@@ -3737,6 +3737,9 @@ func TestScanOncePausesWhenGitHubCoreRateLimitIsLowAndCommentsActiveIssues(t *te
 	if sessions[0].LastGitHubDelayResetAt != resetAt.UTC().Format(time.RFC3339) && sessions[0].LastGitHubDelayResetAt != resetAt.Format(time.RFC3339) {
 		t.Fatalf("expected dedupe reset marker, got %#v", sessions[0])
 	}
+	if sessions[0].ResumeAfter != resetAt.UTC().Format(time.RFC3339) && sessions[0].ResumeAfter != resetAt.Format(time.RFC3339) {
+		t.Fatalf("expected explicit resume_after marker, got %#v", sessions[0])
+	}
 }
 
 func TestScanOnceSuppressesDuplicateGitHubLowQuotaCommentsWithinSameResetWindow(t *testing.T) {
@@ -3830,6 +3833,78 @@ func TestScanOnceResumesAfterGitHubRateLimitResetWindowPasses(t *testing.T) {
 	}
 	if app.githubRateLimitState.Active {
 		t.Fatalf("expected in-memory rate-limit pause to clear after reset")
+	}
+}
+
+func TestScanOnceClearsExpiredSessionResumeAfterWhenQuotaRecovered(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	now := time.Date(2026, 3, 19, 23, 5, 0, 0, time.UTC)
+	resetAt := now.Add(-5 * time.Minute)
+	app := New()
+	app.clock = func() time.Time { return now }
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"gh": "/usr/bin/gh"},
+		Outputs: map[string]string{
+			"gh api /rate_limit":      `{"resources":{"core":{"limit":5000,"remaining":150,"reset":1773964751},"rate":{"limit":5000,"remaining":150,"reset":1773964751},"graphql":{"limit":5000,"remaining":4557,"reset":1773961792},"search":{"limit":30,"remaining":30,"reset":1773961093}}}`,
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:     "/tmp/repo",
+		Repo:         "owner/repo",
+		IssueNumber:  7,
+		IssueTitle:   "active work",
+		IssueURL:     "https://github.com/owner/repo/issues/7",
+		Branch:       "vigilante/issue-7",
+		WorktreePath: "/tmp/repo/.worktrees/vigilante/issue-7",
+		Status:       state.SessionStatusRunning,
+		ResumeAfter:  resetAt.Format(time.RFC3339),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].ResumeAfter != "" {
+		t.Fatalf("expected expired resume_after to clear, got %#v", sessions[0])
+	}
+}
+
+func TestIsStalledSessionIgnoresUpdatedAtWithoutHeartbeat(t *testing.T) {
+	now := time.Date(2026, 3, 19, 23, 5, 0, 0, time.UTC)
+	session := state.Session{
+		WorktreePath:           t.TempDir(),
+		ProcessID:              999999,
+		StartedAt:              now.Add(-20 * time.Minute).Format(time.RFC3339),
+		UpdatedAt:              now.Add(-1 * time.Minute).Format(time.RFC3339),
+		LastGitHubDelayResetAt: now.Add(10 * time.Minute).Format(time.RFC3339),
+		ResumeAfter:            now.Add(10 * time.Minute).Format(time.RFC3339),
+	}
+
+	stalled, reason := isStalledSession(session, now, 10*time.Minute)
+	if !stalled {
+		t.Fatalf("expected session to be stale when only updated_at changed: %#v", session)
+	}
+	if !strings.Contains(reason, "idle since") {
+		t.Fatalf("expected idle-since reason, got %q", reason)
 	}
 }
 
