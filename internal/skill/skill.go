@@ -72,7 +72,7 @@ func EnsureInstalled(runtime string, home string) error {
 			}
 		}
 		if strings.TrimSpace(runtime) == RuntimeGemini {
-			if err := installGeminiCommand(home, name); err != nil {
+			if err := removeGeminiLegacyCommand(home, name); err != nil {
 				return err
 			}
 		}
@@ -98,24 +98,12 @@ func installTargets(runtime string, home string, name string) ([]string, error) 
 	}
 }
 
-func installGeminiCommand(home string, name string) error {
-	body, err := skillBody(name)
-	if err != nil {
+func removeGeminiLegacyCommand(home string, name string) error {
+	commandPath := filepath.Join(home, "commands", name+".toml")
+	if err := os.Remove(commandPath); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	commandDir := filepath.Join(home, "commands")
-	if err := os.MkdirAll(commandDir, 0o755); err != nil {
-		return err
-	}
-	commandPath := filepath.Join(commandDir, name+".toml")
-	commandBody := strings.TrimSpace(fmt.Sprintf(`
-description = "Bundled Vigilante skill: %s"
-prompt = '''
-Follow these %q skill instructions directly for this task:
-%s
-'''
-`, name, "`"+name+"`", body)) + "\n"
-	return os.WriteFile(commandPath, []byte(commandBody), 0o644)
+	return nil
 }
 
 func skillBody(name string) (string, error) {

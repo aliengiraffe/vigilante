@@ -1098,11 +1098,13 @@ func TestSetupCreatesStateLayoutAndInstallsBundledSkillsForAllProviders(t *testi
 		filepath.Join(app.state.ClaudeHome(), "skills", skill.VigilanteIssueImplementation, "SKILL.md"),
 		filepath.Join(app.state.ClaudeHome(), "commands", skill.VigilanteIssueImplementation, "SKILL.md"),
 		filepath.Join(app.state.GeminiHome(), "skills", skill.VigilanteIssueImplementation, "SKILL.md"),
-		filepath.Join(app.state.GeminiHome(), "commands", skill.VigilanteIssueImplementation+".toml"),
 	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected %s to exist: %v", path, err)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(app.state.GeminiHome(), "commands", skill.VigilanteIssueImplementation+".toml")); !os.IsNotExist(err) {
+		t.Fatalf("expected Gemini legacy command to be removed, got: %v", err)
 	}
 }
 
@@ -1134,14 +1136,20 @@ func TestSetupWithGeminiInstallsBundledSkillsForAllProviders(t *testing.T) {
 		filepath.Join(app.state.ClaudeHome(), "skills", skill.VigilanteIssueImplementation, "SKILL.md"),
 		filepath.Join(app.state.ClaudeHome(), "commands", skill.VigilanteIssueImplementation, "SKILL.md"),
 		filepath.Join(app.state.GeminiHome(), "skills", skill.VigilanteIssueImplementation, "SKILL.md"),
-		filepath.Join(app.state.GeminiHome(), "commands", skill.VigilanteIssueImplementation+".toml"),
 		filepath.Join(app.state.GeminiHome(), "skills", skill.VigilanteIssueImplementationOnRushMonorepo, "SKILL.md"),
-		filepath.Join(app.state.GeminiHome(), "commands", skill.VigilanteIssueImplementationOnRushMonorepo+".toml"),
 		filepath.Join(app.state.GeminiHome(), "skills", skill.VigilanteConflictResolution, "SKILL.md"),
-		filepath.Join(app.state.GeminiHome(), "commands", skill.VigilanteConflictResolution+".toml"),
 	} {
 		if _, err := os.Stat(path); err != nil {
 			t.Fatalf("expected %s to exist: %v", path, err)
+		}
+	}
+	for _, path := range []string{
+		filepath.Join(app.state.GeminiHome(), "commands", skill.VigilanteIssueImplementation+".toml"),
+		filepath.Join(app.state.GeminiHome(), "commands", skill.VigilanteIssueImplementationOnRushMonorepo+".toml"),
+		filepath.Join(app.state.GeminiHome(), "commands", skill.VigilanteConflictResolution+".toml"),
+	} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("expected Gemini legacy command to be removed: %s (%v)", path, err)
 		}
 	}
 }
