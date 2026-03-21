@@ -22,11 +22,14 @@ type sessionGroup struct {
 }
 
 func groupSessions(sessions []state.Session, now time.Time, inactivityTimeout time.Duration) []sessionGroup {
-	var active, prTracking, issueTracking, stale, completed, failed, closed []state.Session
+	var active, prTracking, issueTracking, stale, completed, failed []state.Session
 
 	staleBlockedThreshold := time.Duration(staleBlockedMultiplier) * inactivityTimeout
 
 	for _, s := range sessions {
+		if s.Status == state.SessionStatusClosed {
+			continue
+		}
 		if isStale(s, now, staleBlockedThreshold) {
 			stale = append(stale, s)
 			continue
@@ -44,8 +47,6 @@ func groupSessions(sessions []state.Session, now time.Time, inactivityTimeout ti
 			completed = append(completed, s)
 		case state.SessionStatusFailed:
 			failed = append(failed, s)
-		case state.SessionStatusClosed:
-			closed = append(closed, s)
 		}
 	}
 
@@ -62,14 +63,24 @@ func groupSessions(sessions []state.Session, now time.Time, inactivityTimeout ti
 	if len(stale) > 0 {
 		groups = append(groups, sessionGroup{Label: "Stale sessions", Sessions: stale})
 	}
-	if len(completed) > 0 || len(failed) > 0 || len(closed) > 0 {
+	if len(completed) > 0 || len(failed) > 0 {
 		var summary []state.Session
 		summary = append(summary, completed...)
 		summary = append(summary, failed...)
-		summary = append(summary, closed...)
 		groups = append(groups, sessionGroup{Label: "Completed / failed", Sessions: summary})
 	}
 	return groups
+}
+
+func visibleStatusSessions(sessions []state.Session) []state.Session {
+	visible := make([]state.Session, 0, len(sessions))
+	for _, s := range sessions {
+		if s.Status == state.SessionStatusClosed {
+			continue
+		}
+		visible = append(visible, s)
+	}
+	return visible
 }
 
 func isPRTracking(s state.Session) bool {
@@ -192,10 +203,12 @@ func (a *App) statusExpanded(ctx context.Context) error {
 		sessions = nil
 	}
 
-	fmt.Fprintln(a.stdout)
-	fmt.Fprintf(a.stdout, "Sessions: %d total\n", len(sessions))
+	visibleSessions := visibleStatusSessions(sessions)
 
-	if len(sessions) > 0 {
+	fmt.Fprintln(a.stdout)
+	fmt.Fprintf(a.stdout, "Sessions: %d total\n", len(visibleSessions))
+
+	if len(visibleSessions) > 0 {
 		cfg, cfgErr := a.state.LoadServiceConfig()
 		inactivityTimeout := state.DefaultBlockedSessionInactivityTimeout
 		if cfgErr == nil {
@@ -204,7 +217,7 @@ func (a *App) statusExpanded(ctx context.Context) error {
 			}
 		}
 
-		groups := groupSessions(sessions, a.clock(), inactivityTimeout)
+		groups := groupSessions(visibleSessions, a.clock(), inactivityTimeout)
 		if len(groups) > 0 {
 			fmt.Fprintln(a.stdout)
 			writeSessionGroups(a.stdout, groups)
