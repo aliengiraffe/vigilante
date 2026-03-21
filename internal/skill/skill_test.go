@@ -530,7 +530,7 @@ func TestEnsureInstalledForClaudeCreatesCommandsAndSkills(t *testing.T) {
 	}
 }
 
-func TestEnsureInstalledForGeminiCreatesCommandsAndSkills(t *testing.T) {
+func TestEnsureInstalledForGeminiCreatesSkillsAndRemovesLegacyCommands(t *testing.T) {
 	dir := t.TempDir()
 	repoRoot := t.TempDir()
 	for _, name := range VigilanteSkillNames() {
@@ -539,6 +539,13 @@ func TestEnsureInstalledForGeminiCreatesCommandsAndSkills(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(skillSourceDir, "SKILL.md"), []byte("# repo skill\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		legacyCommandPath := filepath.Join(dir, "commands", name+".toml")
+		if err := os.MkdirAll(filepath.Dir(legacyCommandPath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(legacyCommandPath, []byte("prompt = \"legacy\"\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -558,13 +565,13 @@ func TestEnsureInstalledForGeminiCreatesCommandsAndSkills(t *testing.T) {
 	}
 
 	for _, name := range VigilanteSkillNames() {
-		for _, path := range []string{
-			filepath.Join(dir, "skills", name, "SKILL.md"),
-			filepath.Join(dir, "commands", name+".toml"),
-		} {
-			if _, err := os.Stat(path); err != nil {
-				t.Fatalf("expected %s to exist: %v", path, err)
-			}
+		skillPath := filepath.Join(dir, "skills", name, "SKILL.md")
+		if _, err := os.Stat(skillPath); err != nil {
+			t.Fatalf("expected %s to exist: %v", skillPath, err)
+		}
+		legacyCommandPath := filepath.Join(dir, "commands", name+".toml")
+		if _, err := os.Stat(legacyCommandPath); !os.IsNotExist(err) {
+			t.Fatalf("expected %s to be removed, got: %v", legacyCommandPath, err)
 		}
 	}
 }
