@@ -34,7 +34,7 @@ const defaultScanInterval = 1 * time.Minute
 const defaultAssigneeFilter = "me"
 const defaultStalledSessionThreshold = 10 * time.Minute
 const defaultMaintenanceAutoRecoveryTimeout = 10 * time.Minute
-const githubCoreLowQuotaThreshold = 100
+const githubCoreLowQuotaThreshold = 5
 const unsetMaxParallel = -2147483648
 const autoRecoverySource = "auto_recovery"
 
