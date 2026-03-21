@@ -122,7 +122,7 @@ func TestGroupSessionsCompletedAndFailed(t *testing.T) {
 	}
 }
 
-func TestGroupSessionsClosedInCompletedGroup(t *testing.T) {
+func TestGroupSessionsExcludesClosed(t *testing.T) {
 	now := time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)
 	sessions := []state.Session{
 		{Repo: "owner/repo", IssueNumber: 70, Status: state.SessionStatusClosed},
@@ -135,8 +135,11 @@ func TestGroupSessionsClosedInCompletedGroup(t *testing.T) {
 	if groups[0].Label != "Completed / failed" {
 		t.Fatalf("expected 'Completed / failed', got %q", groups[0].Label)
 	}
-	if len(groups[0].Sessions) != 2 {
-		t.Fatalf("expected 2 sessions, got %d", len(groups[0].Sessions))
+	if len(groups[0].Sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(groups[0].Sessions))
+	}
+	if groups[0].Sessions[0].IssueNumber != 71 {
+		t.Fatalf("expected only open operational session to remain visible, got %#v", groups[0].Sessions)
 	}
 }
 
@@ -494,6 +497,63 @@ func TestStatusCommandStaleSessionsShown(t *testing.T) {
 	}
 	if !strings.Contains(output, "Issue #99") {
 		t.Errorf("expected stale session row, got:\n%s", output)
+	}
+}
+
+func TestStatusCommandExcludesClosedSessionsFromCountsAndGroups(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+
+	unitPath := filepath.Join(home, ".config", "systemd", "user", "vigilante.service")
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unitPath, []byte("unit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	vigilanteHome := filepath.Join(home, ".vigilante")
+	if err := os.MkdirAll(vigilanteHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions := []state.Session{
+		{Repo: "owner/repo", IssueNumber: 70, Status: state.SessionStatusClosed},
+		{Repo: "owner/repo", IssueNumber: 71, Status: state.SessionStatusSuccess},
+	}
+	sessionData, _ := json.Marshal(sessions)
+	if err := os.WriteFile(filepath.Join(vigilanteHome, "sessions.json"), sessionData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.OS = "linux"
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"systemctl --user show --property=LoadState,ActiveState vigilante.service": "LoadState=loaded\nActiveState=active\n",
+		},
+	}
+
+	exitCode := app.Run(context.Background(), []string{"status"})
+	if exitCode != 0 {
+		t.Fatalf("expected success, got %d", exitCode)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "Sessions: 1 total") {
+		t.Fatalf("expected closed sessions to be excluded from count, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Completed / failed (1)") {
+		t.Fatalf("expected only visible operational sessions in completed/failed group, got:\n%s", output)
+	}
+	if strings.Contains(output, "Issue #70") {
+		t.Fatalf("expected closed session to be hidden from status output, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Issue #71 in owner/repo: success") {
+		t.Fatalf("expected success session to remain visible, got:\n%s", output)
 	}
 }
 
