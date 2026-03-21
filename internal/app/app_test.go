@@ -3748,9 +3748,9 @@ func TestScanOncePausesWhenGitHubCoreRateLimitIsLowAndCommentsActiveIssues(t *te
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"gh": "/usr/bin/gh"},
 		Outputs: map[string]string{
-			"gh api /rate_limit":      `{"resources":{"core":{"limit":5000,"remaining":4,"reset":1773961151},"rate":{"limit":5000,"remaining":4,"reset":1773961151},"graphql":{"limit":5000,"remaining":4557,"reset":1773961792},"search":{"limit":30,"remaining":30,"reset":1773961093}}}`,
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+			"gh api /rate_limit": `{"resources":{"core":{"limit":5000,"remaining":4,"reset":1773961151},"rate":{"limit":5000,"remaining":4,"reset":1773961151},"graphql":{"limit":5000,"remaining":4557,"reset":1773961792},"search":{"limit":30,"remaining":30,"reset":1773961093}}}`,
 			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatGitHubRateLimitDelayComment(ghcli.RateLimitSnapshot{
 				Core:    ghcli.RateLimitResource{Limit: 5000, Remaining: 4, ResetAt: resetAt},
 				Rate:    ghcli.RateLimitResource{Limit: 5000, Remaining: 4, ResetAt: resetAt},
