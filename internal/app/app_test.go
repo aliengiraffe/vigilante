@@ -3893,6 +3893,58 @@ func TestScanOnceResumesAfterGitHubRateLimitResetWindowPasses(t *testing.T) {
 	}
 }
 
+func TestScanOnceClearsStaleGitHubRateLimitPauseWhenLiveQuotaRecovered(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	now := time.Date(2026, 3, 21, 21, 51, 38, 0, time.FixedZone("PDT", -7*60*60))
+	cachedResetAt := time.Date(2026, 3, 21, 22, 42, 41, 0, time.FixedZone("PDT", -7*60*60))
+	liveResetAt := now.Add(52 * time.Minute)
+	app := New()
+	app.clock = func() time.Time { return now }
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.githubRateLimitState = githubRateLimitState{
+		Active:  true,
+		ResetAt: cachedResetAt,
+		Snapshot: ghcli.RateLimitSnapshot{
+			Core: ghcli.RateLimitResource{Limit: 5000, Remaining: 0, ResetAt: cachedResetAt},
+		},
+	}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"gh": "/usr/bin/gh"},
+		Outputs: map[string]string{
+			"gh api /rate_limit": fmt.Sprintf(`{"resources":{"core":{"limit":5000,"remaining":4991,"reset":%d},"rate":{"limit":5000,"remaining":4991,"reset":%d},"graphql":{"limit":5000,"remaining":4989,"reset":%d},"search":{"limit":30,"remaining":30,"reset":%d}}}`,
+				liveResetAt.Unix(),
+				liveResetAt.Unix(),
+				liveResetAt.Unix(),
+				now.Add(time.Minute).Unix(),
+			),
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(stdout.String(), "scan paused: GitHub REST core quota is below the low-quota threshold") {
+		t.Fatalf("expected live quota recovery to skip pause, got: %s", stdout.String())
+	}
+	if app.githubRateLimitState.Active {
+		t.Fatalf("expected stale in-memory rate-limit pause to clear after live quota recovery")
+	}
+}
+
 func TestScanOnceClearsExpiredSessionResumeAfterWhenQuotaRecovered(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))

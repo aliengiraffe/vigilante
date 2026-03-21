@@ -1172,24 +1172,35 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 
 func (a *App) enforceGitHubRateLimit(ctx context.Context, sessions []state.Session) ([]state.Session, bool, error) {
 	now := a.clock()
-	if snapshot, active, resumed := a.currentGitHubRateLimitState(now); active {
-		a.state.AppendDaemonLog("github rate limit pause active core_remaining=%d reset_at=%s", snapshot.Core.Remaining, snapshot.Core.ResetAt.Format(time.RFC3339))
-		return a.notifyGitHubLowQuotaSessions(ctx, sessions, snapshot), true, nil
-	} else if resumed {
+	cachedSnapshot, cachedActive, resumed := a.currentGitHubRateLimitState(now)
+	if resumed {
 		a.state.AppendDaemonLog("github rate limit pause expired; refreshing snapshot")
 	}
 
 	snapshot, err := ghcli.GetRateLimitSnapshot(ctx, a.env.Runner)
 	if err != nil {
 		a.state.AppendDaemonLog("github rate limit fetch failed err=%v", err)
+		if cachedActive {
+			a.state.AppendDaemonLog("github rate limit pause active core_remaining=%d reset_at=%s", cachedSnapshot.Core.Remaining, cachedSnapshot.Core.ResetAt.Format(time.RFC3339))
+			return a.notifyGitHubLowQuotaSessions(ctx, sessions, cachedSnapshot), true, nil
+		}
 		return a.clearExpiredGitHubResumeState(sessions, now), false, nil
 	}
 	if snapshot.Core.Remaining >= githubCoreLowQuotaThreshold {
+		if cachedActive {
+			a.clearGitHubRateLimitState(false)
+			a.state.AppendDaemonLog("github rate limit pause cleared by live snapshot core_remaining=%d reset_at=%s", snapshot.Core.Remaining, snapshot.Core.ResetAt.Format(time.RFC3339))
+		}
 		return a.clearExpiredGitHubResumeState(sessions, now), false, nil
 	}
 
-	a.setGitHubRateLimitState(snapshot)
-	a.state.AppendDaemonLog("github rate limit pause entered core_remaining=%d reset_at=%s", snapshot.Core.Remaining, snapshot.Core.ResetAt.Format(time.RFC3339))
+	if cachedActive {
+		a.refreshGitHubRateLimitState(snapshot)
+		a.state.AppendDaemonLog("github rate limit pause active core_remaining=%d reset_at=%s", snapshot.Core.Remaining, snapshot.Core.ResetAt.Format(time.RFC3339))
+	} else {
+		a.setGitHubRateLimitState(snapshot)
+		a.state.AppendDaemonLog("github rate limit pause entered core_remaining=%d reset_at=%s", snapshot.Core.Remaining, snapshot.Core.ResetAt.Format(time.RFC3339))
+	}
 	return a.notifyGitHubLowQuotaSessions(ctx, sessions, snapshot), true, nil
 }
 
@@ -1219,6 +1230,28 @@ func (a *App) setGitHubRateLimitState(snapshot ghcli.RateLimitSnapshot) {
 	}
 	a.githubRateLimitMu.Unlock()
 	a.emitGitHubRateLimitEvent("paused", snapshot)
+}
+
+func (a *App) refreshGitHubRateLimitState(snapshot ghcli.RateLimitSnapshot) {
+	a.githubRateLimitMu.Lock()
+	a.githubRateLimitState = githubRateLimitState{
+		Active:   true,
+		ResetAt:  snapshot.Core.ResetAt,
+		Snapshot: snapshot,
+	}
+	a.githubRateLimitMu.Unlock()
+}
+
+func (a *App) clearGitHubRateLimitState(emit bool) {
+	a.githubRateLimitMu.Lock()
+	snapshot := a.githubRateLimitState.Snapshot
+	wasActive := a.githubRateLimitState.Active
+	a.githubRateLimitState = githubRateLimitState{}
+	a.githubRateLimitMu.Unlock()
+
+	if emit && wasActive {
+		a.emitGitHubRateLimitEvent("resumed", snapshot)
+	}
 }
 
 func (a *App) notifyGitHubLowQuotaSessions(ctx context.Context, sessions []state.Session, snapshot ghcli.RateLimitSnapshot) []state.Session {
