@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,6 +20,12 @@ const (
 type sessionGroup struct {
 	Label    string
 	Sessions []state.Session
+}
+
+type watchedRepoStatus struct {
+	Target       state.WatchTarget
+	ActiveCount  int
+	BlockedCount int
 }
 
 func groupSessions(sessions []state.Session, now time.Time, inactivityTimeout time.Duration) []sessionGroup {
@@ -189,6 +196,106 @@ func writeRateLimitUnavailable(w io.Writer) {
 	fmt.Fprintln(w, "GitHub rate limits: unavailable")
 }
 
+func watchedRepoStatuses(targets []state.WatchTarget, sessions []state.Session) []watchedRepoStatus {
+	statuses := make([]watchedRepoStatus, 0, len(targets))
+	indexByRepo := make(map[string]int, len(targets))
+	for _, target := range targets {
+		statuses = append(statuses, watchedRepoStatus{Target: target})
+		indexByRepo[target.Repo] = len(statuses) - 1
+	}
+	for _, session := range sessions {
+		index, ok := indexByRepo[session.Repo]
+		if !ok {
+			continue
+		}
+		switch session.Status {
+		case state.SessionStatusRunning, state.SessionStatusResuming:
+			statuses[index].ActiveCount++
+		case state.SessionStatusBlocked:
+			statuses[index].BlockedCount++
+		}
+	}
+	sort.Slice(statuses, func(i, j int) bool {
+		if statuses[i].Target.Repo != statuses[j].Target.Repo {
+			return statuses[i].Target.Repo < statuses[j].Target.Repo
+		}
+		return statuses[i].Target.Path < statuses[j].Target.Path
+	})
+	return statuses
+}
+
+func formatWatchTargetRow(status watchedRepoStatus) string {
+	target := status.Target
+	fields := []string{
+		fmt.Sprintf("branch %s", valueOrUnknown(target.Branch)),
+		fmt.Sprintf("provider %s", valueOrUnknown(target.Provider)),
+	}
+	if assignee := strings.TrimSpace(target.Assignee); assignee != "" {
+		fields = append(fields, fmt.Sprintf("assignee %s", assignee))
+	}
+	if len(target.Labels) > 0 {
+		fields = append(fields, fmt.Sprintf("labels %s", strings.Join(target.Labels, ",")))
+	}
+	if target.MaxParallel > 0 {
+		fields = append(fields, fmt.Sprintf("max %d", target.MaxParallel))
+	}
+	fields = append(fields, formatWatchActivity(status))
+	if scan := formatLastScan(target.LastScanAt); scan != "" {
+		fields = append(fields, scan)
+	}
+	return fmt.Sprintf("  %s (%s)", valueOrUnknown(target.Repo), strings.Join(fields, ", "))
+}
+
+func formatWatchTargetDetail(status watchedRepoStatus) string {
+	return fmt.Sprintf("    path: %s", valueOrUnknown(status.Target.Path))
+}
+
+func formatWatchActivity(status watchedRepoStatus) string {
+	parts := make([]string, 0, 3)
+	if status.ActiveCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d active", status.ActiveCount))
+	}
+	if status.BlockedCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d blocked", status.BlockedCount))
+	}
+	if len(parts) == 0 {
+		return "idle"
+	}
+	return strings.Join(parts, ", ")
+}
+
+func formatLastScan(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "last scan never"
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return "last scan unknown"
+	}
+	return fmt.Sprintf("last scan %s", t.UTC().Format("2006-01-02 15:04 UTC"))
+}
+
+func valueOrUnknown(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "unknown"
+	}
+	return value
+}
+
+func writeWatchedReposSection(w io.Writer, statuses []watchedRepoStatus) {
+	fmt.Fprintf(w, "Watched repositories (%d)\n", len(statuses))
+	if len(statuses) == 0 {
+		fmt.Fprintln(w, "  none configured")
+		return
+	}
+	for _, status := range statuses {
+		fmt.Fprintln(w, formatWatchTargetRow(status))
+		fmt.Fprintln(w, formatWatchTargetDetail(status))
+	}
+}
+
 func (a *App) statusExpanded(ctx context.Context) error {
 	status, err := a.statusServiceSection(ctx)
 	if err != nil {
@@ -198,12 +305,19 @@ func (a *App) statusExpanded(ctx context.Context) error {
 	fmt.Fprintln(a.stdout)
 	writeStatusServiceSection(a.stdout, status)
 
+	targets, err := a.state.LoadWatchTargets()
+	if err != nil {
+		targets = nil
+	}
 	sessions, err := a.state.LoadSessions()
 	if err != nil {
 		sessions = nil
 	}
 
 	visibleSessions := visibleStatusSessions(sessions)
+
+	fmt.Fprintln(a.stdout)
+	writeWatchedReposSection(a.stdout, watchedRepoStatuses(targets, sessions))
 
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintf(a.stdout, "Sessions: %d total\n", len(visibleSessions))

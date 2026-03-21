@@ -270,12 +270,13 @@ Show currently running sessions with their repository, issue number, branch, and
 
 ### `vigilante status`
 
-Show whether the Vigilante OS-managed user service is installed and currently running.
+Show a compact operational overview of the Vigilante OS-managed user service, watched repositories, sessions, and GitHub rate limits.
 
 Expected behavior:
 
 - reports a stable `state` value of `running`, `stopped`, or `not-installed`
 - includes the service manager, service identifier, and installed service file path
+- includes a watched-repositories summary with key per-repo metadata such as repo slug, branch, provider, filters or limits, activity, and last scan time
 - exits successfully when the service is not installed so operators and scripts can inspect the reported state
 - fails with a clear error on unsupported operating systems or when the underlying service manager cannot be queried
 

@@ -351,6 +351,154 @@ func TestStatusCommandShowsSessionGroups(t *testing.T) {
 	}
 }
 
+func TestStatusCommandShowsWatchedRepositories(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+
+	unitPath := filepath.Join(home, ".config", "systemd", "user", "vigilante.service")
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unitPath, []byte("unit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	vigilanteHome := filepath.Join(home, ".vigilante")
+	if err := os.MkdirAll(vigilanteHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	targets := []state.WatchTarget{
+		{
+			Path:        "/repos/alpha",
+			Repo:        "owner/alpha",
+			Branch:      "main",
+			Provider:    "codex",
+			Assignee:    "me",
+			MaxParallel: 2,
+			LastScanAt:  "2026-03-19T11:55:00Z",
+		},
+		{
+			Path:       "/repos/beta",
+			Repo:       "owner/beta",
+			Branch:     "develop",
+			Provider:   "claude",
+			Labels:     []string{"to-do", "bug"},
+			LastScanAt: "2026-03-19T11:40:00Z",
+		},
+	}
+	targetData, _ := json.Marshal(targets)
+	if err := os.WriteFile(filepath.Join(vigilanteHome, "watchlist.json"), targetData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions := []state.Session{
+		{Repo: "owner/alpha", IssueNumber: 1, Status: state.SessionStatusRunning},
+		{Repo: "owner/alpha", IssueNumber: 2, Status: state.SessionStatusBlocked, BlockedStage: "issue_execution"},
+	}
+	sessionData, _ := json.Marshal(sessions)
+	if err := os.WriteFile(filepath.Join(vigilanteHome, "sessions.json"), sessionData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.OS = "linux"
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"systemctl --user show --property=LoadState,ActiveState vigilante.service": "LoadState=loaded\nActiveState=active\n",
+		},
+	}
+
+	exitCode := app.Run(context.Background(), []string{"status"})
+	if exitCode != 0 {
+		t.Fatalf("expected success, got %d; stdout: %s", exitCode, stdout.String())
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"Watched repositories (2)",
+		"owner/alpha (branch main, provider codex, assignee me, max 2, 1 active, 1 blocked, last scan 2026-03-19 11:55 UTC)",
+		"path: /repos/alpha",
+		"owner/beta (branch develop, provider claude, labels to-do,bug, idle, last scan 2026-03-19 11:40 UTC)",
+		"path: /repos/beta",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("expected output to contain %q, got:\n%s", want, output)
+		}
+	}
+}
+
+func TestStatusCommandShowsNoWatchedRepositories(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+
+	unitPath := filepath.Join(home, ".config", "systemd", "user", "vigilante.service")
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unitPath, []byte("unit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	vigilanteHome := filepath.Join(home, ".vigilante")
+	if err := os.MkdirAll(vigilanteHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vigilanteHome, "watchlist.json"), []byte("[]"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vigilanteHome, "sessions.json"), []byte("[]"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.OS = "linux"
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"systemctl --user show --property=LoadState,ActiveState vigilante.service": "LoadState=loaded\nActiveState=active\n",
+		},
+	}
+
+	exitCode := app.Run(context.Background(), []string{"status"})
+	if exitCode != 0 {
+		t.Fatalf("expected success, got %d", exitCode)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "Watched repositories (0)") {
+		t.Errorf("expected watched repository header, got:\n%s", output)
+	}
+	if !strings.Contains(output, "none configured") {
+		t.Errorf("expected no watch target message, got:\n%s", output)
+	}
+}
+
+func TestWatchedRepoStatusesIgnoreCompletedSessionsForActivity(t *testing.T) {
+	targets := []state.WatchTarget{{Repo: "owner/repo", Path: "/repo"}}
+	sessions := []state.Session{
+		{Repo: "owner/repo", Status: state.SessionStatusSuccess},
+		{Repo: "owner/repo", Status: state.SessionStatusFailed},
+		{Repo: "owner/repo", Status: state.SessionStatusClosed},
+	}
+
+	statuses := watchedRepoStatuses(targets, sessions)
+	if len(statuses) != 1 {
+		t.Fatalf("expected 1 status, got %d", len(statuses))
+	}
+	if statuses[0].ActiveCount != 0 || statuses[0].BlockedCount != 0 {
+		t.Fatalf("expected no active or blocked counts, got %+v", statuses[0])
+	}
+	if got := formatWatchActivity(statuses[0]); got != "idle" {
+		t.Fatalf("expected idle activity, got %q", got)
+	}
+}
+
 func TestStatusCommandShowsRateLimits(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
