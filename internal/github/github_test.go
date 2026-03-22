@@ -132,6 +132,23 @@ func TestSelectIssuesSkipsBlockedAndOpenPullRequestSessionsWithoutConsumingCapac
 	}
 }
 
+func TestSelectIssuesSkipsSessionAfterStaleAutoRestartLimitReached(t *testing.T) {
+	issues := []Issue{
+		{Number: 1, Labels: []Label{{Name: "to-do"}}},
+		{Number: 2, Labels: []Label{{Name: "to-do"}}},
+	}
+
+	selected := SelectIssues(issues, []state.Session{{
+		Repo:                      "owner/repo",
+		IssueNumber:               1,
+		Status:                    state.SessionStatusFailed,
+		StaleAutoRestartStoppedAt: "2026-03-10T15:00:00Z",
+	}}, state.WatchTarget{Repo: "owner/repo", Labels: []string{"to-do"}}, 2)
+	if len(selected) != 1 || selected[0].Number != 2 {
+		t.Fatalf("unexpected selected issues: %#v", selected)
+	}
+}
+
 func TestListOpenIssuesSupportsExplicitAssignee(t *testing.T) {
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{

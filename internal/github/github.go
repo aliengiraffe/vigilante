@@ -186,6 +186,9 @@ func ActiveSessionCount(sessions []state.Session, target state.WatchTarget) int 
 }
 
 func sessionPreventsRedispatch(session state.Session) bool {
+	if session.StaleAutoRestartStoppedAt != "" {
+		return true
+	}
 	if sessionConsumesDispatchCapacity(session) || session.Status == state.SessionStatusBlocked {
 		return true
 	}

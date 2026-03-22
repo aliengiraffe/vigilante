@@ -5965,7 +5965,79 @@ func TestScanOnceReportsRepoScanFailureWhenResolvingDefaultAssigneeFails(t *test
 	}
 }
 
-func TestScanOnceRecoversStalledSessionAndRedispatchesIssue(t *testing.T) {
+func TestScanOnceMarksStaleSessionPendingAutoRestart(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	var stdout bytes.Buffer
+	app := New()
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	now := time.Date(2026, 3, 10, 15, 0, 0, 0, time.UTC)
+	app.clock = func() time.Time { return now }
+
+	worktreePath := filepath.Join(home, "repo", ".worktrees", "vigilante", "issue-1")
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": "[]",
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, "repo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: filepath.Join(home, "repo"), Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:        filepath.Join(home, "repo"),
+		Repo:            "owner/repo",
+		IssueNumber:     1,
+		IssueTitle:      "first",
+		IssueURL:        "https://github.com/owner/repo/issues/1",
+		Branch:          "vigilante/issue-1",
+		WorktreePath:    worktreePath,
+		Status:          state.SessionStatusRunning,
+		ProcessID:       999999,
+		StartedAt:       now.Add(-20 * time.Minute).Format(time.RFC3339),
+		LastHeartbeatAt: now.Add(-20 * time.Minute).Format(time.RFC3339),
+		UpdatedAt:       now.Add(-20 * time.Minute).Format(time.RFC3339),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+	if sessions[0].Status != state.SessionStatusRunning {
+		t.Fatalf("expected running session to stay pending, got: %#v", sessions[0])
+	}
+	if sessions[0].StaleAutoRestartPendingSince != now.Format(time.RFC3339) {
+		t.Fatalf("expected pending timestamp to be recorded, got: %#v", sessions[0])
+	}
+	if sessions[0].StaleAutoRestartAttempts != 0 {
+		t.Fatalf("expected no restart attempts yet, got: %#v", sessions[0])
+	}
+	if got := stdout.String(); !strings.Contains(got, "repo: owner/repo no eligible issues (1 open)") {
+		t.Fatalf("unexpected output: %s", got)
+	}
+}
+
+func TestScanOnceAutoRestartsStaleSessionAfterDelay(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 	t.Setenv("HOME", home)
@@ -5990,15 +6062,15 @@ func TestScanOnceRecoversStalledSessionAndRedispatchesIssue(t *testing.T) {
 			"git branch -D vigilante/issue-1":                            "Deleted branch vigilante/issue-1\n",
 			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
 				Stage:      "Implementation In Progress",
-				Emoji:      "🧹",
-				Percent:    15,
-				ETAMinutes: 20,
+				Emoji:      "♻️",
+				Percent:    25,
+				ETAMinutes: 15,
 				Items: []string{
 					"The previous local session on `vigilante/issue-1` stalled (worktree path is missing).",
-					"The abandoned worktree state was cleaned up successfully.",
-					"Next step: the issue is ready to be redispatched in a fresh worktree.",
+					"Vigilante cleaned up the abandoned worktree and started automatic restart attempt 1/3.",
+					"Next step: launch a fresh implementation session in a new worktree now.",
 				},
-				Tagline: "A smooth sea never made a skilled sailor.",
+				Tagline: "Try again, but keep count.",
 			}): "ok",
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
@@ -6033,18 +6105,19 @@ func TestScanOnceRecoversStalledSessionAndRedispatchesIssue(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := app.state.SaveSessions([]state.Session{{
-		RepoPath:        filepath.Join(home, "repo"),
-		Repo:            "owner/repo",
-		IssueNumber:     1,
-		IssueTitle:      "first",
-		IssueURL:        "https://github.com/owner/repo/issues/1",
-		Branch:          "vigilante/issue-1",
-		WorktreePath:    worktreePath,
-		Status:          state.SessionStatusRunning,
-		ProcessID:       999999,
-		StartedAt:       now.Add(-20 * time.Minute).Format(time.RFC3339),
-		LastHeartbeatAt: now.Add(-20 * time.Minute).Format(time.RFC3339),
-		UpdatedAt:       now.Add(-20 * time.Minute).Format(time.RFC3339),
+		RepoPath:                     filepath.Join(home, "repo"),
+		Repo:                         "owner/repo",
+		IssueNumber:                  1,
+		IssueTitle:                   "first",
+		IssueURL:                     "https://github.com/owner/repo/issues/1",
+		Branch:                       "vigilante/issue-1",
+		WorktreePath:                 worktreePath,
+		Status:                       state.SessionStatusRunning,
+		ProcessID:                    999999,
+		StartedAt:                    now.Add(-20 * time.Minute).Format(time.RFC3339),
+		LastHeartbeatAt:              now.Add(-20 * time.Minute).Format(time.RFC3339),
+		UpdatedAt:                    now.Add(-20 * time.Minute).Format(time.RFC3339),
+		StaleAutoRestartPendingSince: now.Add(-20 * time.Minute).Format(time.RFC3339),
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -6061,7 +6134,99 @@ func TestScanOnceRecoversStalledSessionAndRedispatchesIssue(t *testing.T) {
 	if len(sessions) != 1 || sessions[0].Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected sessions: %#v", sessions)
 	}
+	if sessions[0].StaleAutoRestartAttempts != 1 {
+		t.Fatalf("expected one persisted auto-restart attempt, got: %#v", sessions[0])
+	}
+	if sessions[0].StaleAutoRestartPendingSince != "" {
+		t.Fatalf("expected pending timestamp to clear after restart, got: %#v", sessions[0])
+	}
 	if got := stdout.String(); !strings.Contains(got, "repo: owner/repo started issue #1 in "+worktreePath) {
+		t.Fatalf("unexpected output: %s", got)
+	}
+}
+
+func TestScanOnceStopsAutoRestartAfterAttemptLimit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	var stdout bytes.Buffer
+	app := New()
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	now := time.Date(2026, 3, 10, 15, 0, 0, 0, time.UTC)
+	app.clock = func() time.Time { return now }
+
+	worktreePath := filepath.Join(home, "repo", ".worktrees", "vigilante", "issue-1")
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": "[]",
+			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Manual Intervention Required",
+				Emoji:      "🧯",
+				Percent:    85,
+				ETAMinutes: 5,
+				Items: []string{
+					"The local session on `vigilante/issue-1` is still stale (worktree path is missing).",
+					"Vigilante already used all 3 automatic stale-session restart attempts for this issue.",
+					"Next step: inspect the local state and run `vigilante redispatch --repo owner/repo --issue 1` when it is safe to try again.",
+				},
+				Tagline: "No loops without consent.",
+			}): "ok",
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(home, "repo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: filepath.Join(home, "repo"), Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:                     filepath.Join(home, "repo"),
+		Repo:                         "owner/repo",
+		IssueNumber:                  1,
+		IssueTitle:                   "first",
+		IssueURL:                     "https://github.com/owner/repo/issues/1",
+		Branch:                       "vigilante/issue-1",
+		WorktreePath:                 worktreePath,
+		Status:                       state.SessionStatusRunning,
+		ProcessID:                    999999,
+		StartedAt:                    now.Add(-20 * time.Minute).Format(time.RFC3339),
+		LastHeartbeatAt:              now.Add(-20 * time.Minute).Format(time.RFC3339),
+		UpdatedAt:                    now.Add(-20 * time.Minute).Format(time.RFC3339),
+		StaleAutoRestartAttempts:     3,
+		StaleAutoRestartPendingSince: now.Add(-20 * time.Minute).Format(time.RFC3339),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+	if sessions[0].Status != state.SessionStatusFailed {
+		t.Fatalf("expected failed terminal session after limit, got: %#v", sessions[0])
+	}
+	if sessions[0].StaleAutoRestartStoppedAt == "" {
+		t.Fatalf("expected stop marker after limit, got: %#v", sessions[0])
+	}
+	if sessions[0].StaleAutoRestartPendingSince != "" {
+		t.Fatalf("expected pending timestamp to clear after limit, got: %#v", sessions[0])
+	}
+	if got := stdout.String(); !strings.Contains(got, "repo: owner/repo no eligible issues (1 open)") {
 		t.Fatalf("unexpected output: %s", got)
 	}
 }
