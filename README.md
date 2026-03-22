@@ -535,6 +535,7 @@ Notes:
 - The default is `20m`.
 - A blocked session is eligible for automatic local cleanup only after there have been no qualifying user comments on the issue, no session updates, and no worktree updates for longer than the configured timeout.
 - This inactivity cleanup is conservative: it clears local blocked-session artifacts so the issue can be redispatched later, but it does not delete remote pull requests or remote branches automatically.
+- Stale running implementation sessions use a separate recovery path: after Vigilante first confirms the run is stale, it waits 20 minutes before attempting an automatic fresh restart, persists the restart attempt count in session state, and stops after 3 automatic restarts until a human intervenes.
 
 Suggested `watchlist.json` shape:
 

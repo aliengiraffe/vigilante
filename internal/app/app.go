@@ -33,7 +33,9 @@ import (
 const defaultScanInterval = 1 * time.Minute
 const defaultAssigneeFilter = "me"
 const defaultStalledSessionThreshold = 10 * time.Minute
+const defaultStaleAutoRestartDelay = 20 * time.Minute
 const defaultMaintenanceAutoRecoveryTimeout = 10 * time.Minute
+const staleAutoRestartAttemptLimit = 3
 const githubCoreLowQuotaThreshold = 5
 const unsetMaxParallel = -2147483648
 const autoRecoverySource = "auto_recovery"
@@ -1027,6 +1029,9 @@ func (a *App) ScanOnce(ctx context.Context) error {
 					LastHeartbeatAt:    a.clock().Format(time.RFC3339),
 					UpdatedAt:          a.clock().Format(time.RFC3339),
 				}
+				if previous, ok := findSession(sessions, target.Repo, next.Number); ok {
+					carryStaleAutoRestartState(&session, previous)
+				}
 				sessions = upsertSession(sessions, session)
 				if err := a.state.SaveSessions(sessions); err != nil {
 					return err
@@ -1058,6 +1063,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 
 func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Session) ([]state.Session, error) {
 	threshold := stalledSessionThreshold()
+	restartDelay := defaultStaleAutoRestartDelay
 
 	for i := range sessions {
 		session := &sessions[i]
@@ -1065,11 +1071,13 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 			continue
 		}
 		if sessionProcessAlive(session.ProcessID) {
+			clearStaleAutoRestartPending(session)
 			continue
 		}
 
 		stale, reason := isStalledSession(*session, a.clock(), threshold)
 		if !stale {
+			clearStaleAutoRestartPending(session)
 			continue
 		}
 
@@ -1084,6 +1092,7 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 			session.Status = state.SessionStatusSuccess
 			session.ProcessID = 0
 			session.LastHeartbeatAt = ""
+			clearStaleAutoRestartPending(session)
 			updatePullRequestTrackingFromLookup(session, *pr)
 			session.LastError = ""
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
@@ -1107,6 +1116,52 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 				a.state.AppendDaemonLog("stalled session recovery comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
 			}
 			a.syncSessionIssueLabelsBestEffort(ctx, *session, pr)
+			continue
+		}
+
+		now := a.clock()
+		pendingSince, hasPending := staleAutoRestartPendingSince(*session)
+		if !hasPending {
+			session.StaleAutoRestartPendingSince = now.Format(time.RFC3339)
+			session.UpdatedAt = now.Format(time.RFC3339)
+			a.state.AppendDaemonLog("stalled session auto restart pending repo=%s issue=%d branch=%s reason=%q pending_since=%s delay=%s", session.Repo, session.IssueNumber, session.Branch, reason, session.StaleAutoRestartPendingSince, restartDelay)
+			continue
+		}
+		if now.Sub(pendingSince) < restartDelay {
+			a.state.AppendDaemonLog("stalled session auto restart waiting repo=%s issue=%d branch=%s reason=%q pending_since=%s delay=%s", session.Repo, session.IssueNumber, session.Branch, reason, pendingSince.Format(time.RFC3339), restartDelay)
+			continue
+		}
+		if session.StaleAutoRestartAttempts >= staleAutoRestartAttemptLimit {
+			nowText := now.Format(time.RFC3339)
+			previousStatus := session.Status
+			session.Status = state.SessionStatusFailed
+			session.ProcessID = 0
+			session.LastHeartbeatAt = ""
+			session.EndedAt = nowText
+			session.UpdatedAt = nowText
+			session.LastError = fmt.Sprintf("automatic stale-session restart limit reached after %d attempts; manual intervention required", staleAutoRestartAttemptLimit)
+			session.StaleAutoRestartStoppedAt = nowText
+			clearStaleAutoRestartPending(session)
+			a.emitSessionTransition(previousStatus, *session, "stalled_auto_restart_limit")
+			a.state.AppendDaemonLog("stalled session auto restart limit reached repo=%s issue=%d branch=%s attempts=%d reason=%q", session.Repo, session.IssueNumber, session.Branch, session.StaleAutoRestartAttempts, reason)
+			body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Manual Intervention Required",
+				Emoji:      "🧯",
+				Percent:    85,
+				ETAMinutes: 5,
+				Items: []string{
+					fmt.Sprintf("The local session on `%s` is still stale (%s).", session.Branch, reason),
+					fmt.Sprintf("Vigilante already used all %d automatic stale-session restart attempts for this issue.", staleAutoRestartAttemptLimit),
+					fmt.Sprintf("Next step: inspect the local state and run `vigilante redispatch --repo %s --issue %d` when it is safe to try again.", session.Repo, session.IssueNumber),
+				},
+				Tagline: "No loops without consent.",
+			})
+			if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "blocked", "stalled_auto_restart_limit"); err != nil {
+				session.LastError = err.Error()
+				session.UpdatedAt = a.clock().Format(time.RFC3339)
+				a.state.AppendDaemonLog("stalled session auto restart limit comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
+			}
+			a.syncSessionIssueLabelsBestEffort(ctx, *session, nil)
 			continue
 		}
 
@@ -1136,33 +1191,37 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 			continue
 		}
 
-		now := a.clock().Format(time.RFC3339)
+		nowText := now.Format(time.RFC3339)
 		previousStatus := session.Status
 		session.Status = state.SessionStatusFailed
 		session.ProcessID = 0
 		session.LastHeartbeatAt = ""
+		session.StaleAutoRestartAttempts++
+		session.StaleAutoRestartStoppedAt = ""
+		clearStaleAutoRestartPending(session)
+		session.CleanupCompletedAt = nowText
 		session.CleanupError = ""
-		session.EndedAt = now
-		session.UpdatedAt = now
-		session.LastError = fmt.Sprintf("stalled session recovered: %s", reason)
-		a.emitSessionTransition(previousStatus, *session, "stalled_recovery")
-		a.state.AppendDaemonLog("stalled session recovered for redispatch repo=%s issue=%d branch=%s reason=%q", session.Repo, session.IssueNumber, session.Branch, reason)
+		session.EndedAt = nowText
+		session.UpdatedAt = nowText
+		session.LastError = fmt.Sprintf("automatic stale-session restart attempt %d/%d triggered: %s", session.StaleAutoRestartAttempts, staleAutoRestartAttemptLimit, reason)
+		a.emitSessionTransition(previousStatus, *session, "stalled_auto_restart")
+		a.state.AppendDaemonLog("stalled session auto restart triggered repo=%s issue=%d branch=%s attempt=%d/%d reason=%q", session.Repo, session.IssueNumber, session.Branch, session.StaleAutoRestartAttempts, staleAutoRestartAttemptLimit, reason)
 		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
 			Stage:      "Implementation In Progress",
-			Emoji:      "🧹",
-			Percent:    15,
-			ETAMinutes: 20,
+			Emoji:      "♻️",
+			Percent:    25,
+			ETAMinutes: 15,
 			Items: []string{
 				fmt.Sprintf("The previous local session on `%s` stalled (%s).", session.Branch, reason),
-				"The abandoned worktree state was cleaned up successfully.",
-				"Next step: the issue is ready to be redispatched in a fresh worktree.",
+				fmt.Sprintf("Vigilante cleaned up the abandoned worktree and started automatic restart attempt %d/%d.", session.StaleAutoRestartAttempts, staleAutoRestartAttemptLimit),
+				"Next step: launch a fresh implementation session in a new worktree now.",
 			},
-			Tagline: "A smooth sea never made a skilled sailor.",
+			Tagline: "Try again, but keep count.",
 		})
-		if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "progress", "stalled_recovery"); err != nil {
+		if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "progress", "stalled_auto_restart"); err != nil {
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
-			a.state.AppendDaemonLog("stalled session redispatch comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
+			a.state.AppendDaemonLog("stalled session auto restart comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
 		}
 		a.syncSessionIssueLabelsBestEffort(ctx, *session, nil)
 	}
@@ -2158,6 +2217,13 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 		LastHeartbeatAt: now,
 		UpdatedAt:       now,
 	}
+	if previous, ok := findSession(sessions, repoSlug, issue); ok {
+		if source == "cli" {
+			resetStaleAutoRestartState(&session)
+		} else {
+			carryStaleAutoRestartState(&session, previous)
+		}
+	}
 	sessions = upsertSession(sessions, session)
 	if err := a.state.SaveSessions(sessions); err != nil {
 		return err
@@ -2303,8 +2369,38 @@ func (a *App) resetSessionForRedispatch(ctx context.Context, session *state.Sess
 	session.CleanupError = ""
 	session.LastCleanupSource = source
 	session.LastError = fmt.Sprintf("redispatch requested via %s", source)
+	if source == "cli" {
+		resetStaleAutoRestartState(session)
+	}
 	a.state.AppendDaemonLog("redispatch cleanup complete repo=%s issue=%d source=%s branch=%s worktree=%s", session.Repo, session.IssueNumber, source, session.Branch, session.WorktreePath)
 	return nil
+}
+
+func clearStaleAutoRestartPending(session *state.Session) {
+	session.StaleAutoRestartPendingSince = ""
+}
+
+func staleAutoRestartPendingSince(session state.Session) (time.Time, bool) {
+	if strings.TrimSpace(session.StaleAutoRestartPendingSince) == "" {
+		return time.Time{}, false
+	}
+	parsed, err := time.Parse(time.RFC3339, session.StaleAutoRestartPendingSince)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
+}
+
+func carryStaleAutoRestartState(session *state.Session, previous state.Session) {
+	session.StaleAutoRestartAttempts = previous.StaleAutoRestartAttempts
+	session.StaleAutoRestartStoppedAt = ""
+	clearStaleAutoRestartPending(session)
+}
+
+func resetStaleAutoRestartState(session *state.Session) {
+	session.StaleAutoRestartAttempts = 0
+	session.StaleAutoRestartStoppedAt = ""
+	clearStaleAutoRestartPending(session)
 }
 
 func (a *App) resumeBlockedSession(ctx context.Context, session *state.Session, source string) error {
