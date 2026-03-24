@@ -328,6 +328,8 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 			return errors.New("usage: vigilante status")
 		}
 		return a.Status(ctx)
+	case "logs":
+		return a.runLogsCommand(args[1:])
 	case "cleanup":
 		return a.runCleanupCommand(ctx, args[1:])
 	case "redispatch":
@@ -550,6 +552,57 @@ func (a *App) runCompletionCommand(args []string) error {
 	}
 	_, err = fmt.Fprint(a.stdout, script)
 	return err
+}
+
+func (a *App) runLogsCommand(args []string) error {
+	fs := flag.NewFlagSet("logs", flag.ContinueOnError)
+	configureFlagSet(fs, func(w io.Writer) {
+		fmt.Fprintln(w, "usage: vigilante logs [--repo <owner/name>] [--issue <n>]")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "List session log files or show a specific session log.")
+		fmt.Fprintln(w)
+		fs.SetOutput(w)
+		fs.PrintDefaults()
+	})
+	repoFlag := fs.String("repo", "", "repository slug")
+	issueFlag := fs.Int("issue", 0, "issue number")
+	if err := parseFlagSet(fs, args, a.stdout); err != nil {
+		if errors.Is(err, errHelpHandled) {
+			return nil
+		}
+		return err
+	}
+
+	if *repoFlag != "" && *issueFlag > 0 {
+		path := a.state.SessionLogPath(*repoFlag, *issueFlag)
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("no log found for %s#%d", *repoFlag, *issueFlag)
+		}
+		_, err = fmt.Fprint(a.stdout, string(content))
+		return err
+	}
+
+	entries, err := os.ReadDir(a.state.LogsDir())
+	if err != nil {
+		fmt.Fprintln(a.stdout, "no logs found")
+		return nil
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		fmt.Fprintf(a.stdout, "%-50s %8d bytes  %s\n",
+			entry.Name(),
+			info.Size(),
+			info.ModTime().Format("2006-01-02 15:04"),
+		)
+	}
+	return nil
 }
 
 func (a *App) Status(ctx context.Context) error {
@@ -4269,6 +4322,7 @@ func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  vigilante unwatch <path>")
 	fmt.Fprintln(w, "  vigilante list [--blocked | --running]")
 	fmt.Fprintln(w, "  vigilante status")
+	fmt.Fprintln(w, "  vigilante logs [--repo <owner/name>] [--issue <n>]")
 	fmt.Fprintln(w, "  vigilante cleanup --repo <owner/name> [--issue <n>]")
 	fmt.Fprintln(w, "  vigilante cleanup --all")
 	fmt.Fprintln(w, "  vigilante redispatch --repo <owner/name> --issue <n>")
