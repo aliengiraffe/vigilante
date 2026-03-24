@@ -802,6 +802,7 @@ func TestLocalServiceDependenciesSkillCoversStructuredOutputAndFailureModes(t *t
 		"Docker Compose is an allowed fallback, not the defining abstraction.",
 		"`status`: `ready`, `not_needed`, or `failed`",
 		"`mechanism`: `repo_native`, `repo_compose`, `repo_script`, `repo_task_runner`, or `generated_fallback`",
+		"`vigilante logs --repo <owner/name> --issue <n>`",
 		"missing local tooling",
 		"unsupported repository setup",
 		"startup failure",
