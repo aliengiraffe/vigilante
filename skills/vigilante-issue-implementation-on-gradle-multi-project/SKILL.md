@@ -43,7 +43,7 @@ Implement one GitHub issue from Vigilante dispatch through validated code change
 5. Validate incrementally
 - Run the most relevant Gradle tasks for the affected subproject(s) first, such as repo-defined `test`, `check`, `build`, or narrower module tasks.
 - Log the selected subproject(s) and Gradle task scope in issue progress updates when validation starts or changes.
-- If validation fails, determine whether the problem is in the code, Gradle task selection, test setup, or environment before retrying.
+- If validation fails, first inspect the per-issue session log with `vigilante logs --repo <owner/name> --issue <n>` to determine whether the problem is in the code, Gradle task selection, test setup, or environment before retrying.
 
 6. Commit, push, and open a pull request
 - Commit only issue-relevant changes in the assigned branch.
@@ -52,4 +52,5 @@ Implement one GitHub issue from Vigilante dispatch through validated code change
 
 7. Report progress and failures clearly
 - Use `vigilante gh issue comment` for progress updates, milestone updates, PR creation, and execution failures.
+- If execution is blocked, validation fails, or a resumed session is unclear, inspect `vigilante logs --repo <owner/name> --issue <n>` before retrying or reporting the blocker.
 - Keep comments concise, factual, and tied to real progress.

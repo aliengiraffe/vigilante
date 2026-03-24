@@ -42,7 +42,7 @@ Implement one GitHub issue from Vigilante dispatch through validated code change
 5. Validate incrementally
 - Start with the smallest relevant Bazel target, package pattern, or documented wrapper command for the touched area.
 - Expand to closely related targets only when the first target scope is insufficient or shared code requires it.
-- If validation fails, determine whether the problem is in the code, target selection, test setup, or environment before retrying.
+- If validation fails, first inspect the per-issue session log with `vigilante logs --repo <owner/name> --issue <n>` to determine whether the problem is in the code, target selection, test setup, or environment before retrying.
 
 6. Commit, push, and open a pull request
 - Commit only issue-relevant changes in the assigned branch.
@@ -51,4 +51,5 @@ Implement one GitHub issue from Vigilante dispatch through validated code change
 
 7. Report progress and failures clearly
 - Use `vigilante gh issue comment` for progress updates, milestone updates, PR creation, and execution failures.
+- If execution is blocked, validation fails, or a resumed session is unclear, inspect `vigilante logs --repo <owner/name> --issue <n>` before retrying or reporting the blocker.
 - Keep comments concise, factual, and tied to real progress.

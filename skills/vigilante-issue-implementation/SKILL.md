@@ -50,7 +50,7 @@ Service dependencies:
 5. Validate incrementally
 - Run relevant tests, builds, or linters for the changed area before concluding work.
 - Prefer targeted validation first, then broader validation when necessary.
-- If a command fails, determine whether the problem is in the code, test setup, or environment before retrying.
+- If a command fails, first inspect the per-issue session log with `vigilante logs --repo <owner/name> --issue <n>` to determine whether the problem is in the code, test setup, or environment before retrying.
 
 6. Commit and push the branch
 - Commit only issue-relevant changes in the assigned branch.
@@ -72,7 +72,9 @@ Service dependencies:
 - Do not spam the issue with low-signal updates.
 
 9. Handle failures and blockers explicitly
-- If tool setup fails, validation fails, or the issue is blocked, comment on the issue with the concrete problem using `vigilante gh issue comment`.
+- If tool setup fails, validation fails, the provider stops unexpectedly, a resumed session still looks unclear, or the issue is otherwise blocked, first inspect the per-issue session log with `vigilante logs --repo <owner/name> --issue <n>`.
+- After checking the log, comment on the issue with the concrete problem using `vigilante gh issue comment`.
+- Use `vigilante logs` for targeted local triage only when work is blocked or failing; do not turn it into routine log scraping on successful runs.
 - Include enough detail for a human maintainer to understand the current state and next step.
 - If work cannot proceed safely, stop and report the blocker instead of guessing.
 
@@ -90,6 +92,7 @@ Service dependencies:
 - Add progress comments for non-trivial implementations as milestones are reached.
 - Comment when the PR is opened.
 - Comment immediately on any execution failure or blocking condition.
+- When a failure or blocker is unclear locally, inspect `vigilante logs --repo <owner/name> --issue <n>` before reporting or retrying.
 - Comments should be concise, concrete, and tied to real progress.
 - Avoid generic status text that does not help the issue reader.
 
