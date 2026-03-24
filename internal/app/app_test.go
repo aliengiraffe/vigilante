@@ -6563,3 +6563,84 @@ func conflictResolutionPromptCommand(worktreePath string, repo string, repoPath 
 		pr,
 	))
 }
+
+func TestLogsCommandListsFiles(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	logsDir := filepath.Join(home, ".vigilante", "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logsDir, "vigilante.log"), []byte("daemon log"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(logsDir, "owner-repo-issue-42.log"), []byte("session log content"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+
+	exitCode := app.Run(context.Background(), []string{"logs"})
+	if exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d", exitCode)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "owner-repo-issue-42.log") {
+		t.Fatalf("expected output to list session log, got %q", output)
+	}
+	if !strings.Contains(output, "vigilante.log") {
+		t.Fatalf("expected output to list daemon log, got %q", output)
+	}
+}
+
+func TestLogsCommandShowsSessionLog(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	logsDir := filepath.Join(home, ".vigilante", "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logContent := "[2026-03-24T10:00:00-07:00] session started issue=42 provider=claude\n"
+	if err := os.WriteFile(filepath.Join(logsDir, "owner-repo-issue-42.log"), []byte(logContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+
+	exitCode := app.Run(context.Background(), []string{"logs", "--repo", "owner/repo", "--issue", "42"})
+	if exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d", exitCode)
+	}
+	if stdout.String() != logContent {
+		t.Fatalf("expected session log content %q, got %q", logContent, stdout.String())
+	}
+}
+
+func TestLogsCommandMissingLog(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	logsDir := filepath.Join(home, ".vigilante", "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = &stderr
+
+	exitCode := app.Run(context.Background(), []string{"logs", "--repo", "owner/repo", "--issue", "999"})
+	if exitCode != 1 {
+		t.Fatalf("expected failure exit code, got %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "no log found for owner/repo#999") {
+		t.Fatalf("expected error message about missing log, got %q", stderr.String())
+	}
+}
