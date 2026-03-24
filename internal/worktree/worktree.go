@@ -21,9 +21,27 @@ type Worktree struct {
 
 var nonAlnumPattern = regexp.MustCompile(`[^a-z0-9]+`)
 
+const (
+	DefaultBaseRemoteName = "origin"
+	DefaultForkRemoteName = "vigilante-fork"
+)
+
+func BaseRemoteName(target state.WatchTarget) string {
+	return DefaultBaseRemoteName
+}
+
+func PushRemoteName(target state.WatchTarget) string {
+	if target.ForkMode {
+		return DefaultForkRemoteName
+	}
+	return DefaultBaseRemoteName
+}
+
 func CreateIssueWorktree(ctx context.Context, runner environment.Runner, target state.WatchTarget, issueNumber int, issueTitle string) (Worktree, error) {
 	branch := IssueBranchName(issueNumber, issueTitle)
 	path := IssueWorktreePath(target.Path, issueNumber)
+	baseRemote := BaseRemoteName(target)
+	pushRemote := PushRemoteName(target)
 
 	if _, err := runner.Run(ctx, target.Path, "git", "worktree", "prune"); err != nil {
 		return Worktree{}, err
@@ -36,14 +54,14 @@ func CreateIssueWorktree(ctx context.Context, runner environment.Runner, target 
 	}
 
 	for _, candidate := range IssueBranchCandidates(issueNumber, issueTitle) {
-		exists, err := remoteBranchExistsWithError(ctx, runner, target.Path, candidate)
+		exists, err := remoteBranchExistsWithError(ctx, runner, target.Path, pushRemote, candidate)
 		if err != nil {
 			return Worktree{}, err
 		}
 		if !exists {
 			continue
 		}
-		if _, err := runner.Run(ctx, target.Path, "git", "fetch", "origin", candidate+":"+candidate); err != nil {
+		if _, err := runner.Run(ctx, target.Path, "git", "fetch", pushRemote, candidate+":"+candidate); err != nil {
 			return Worktree{}, fmt.Errorf("prepare remote issue branch %q: %w", candidate, err)
 		}
 		if _, err := runner.Run(ctx, target.Path, "git", "worktree", "add", path, candidate); err != nil {
@@ -61,18 +79,18 @@ func CreateIssueWorktree(ctx context.Context, runner environment.Runner, target 
 			return Worktree{Path: path, Branch: branch}, nil
 		}
 	}
-	if err := refreshBaseBranch(ctx, runner, target.Path, target.Branch); err != nil {
+	if err := refreshBaseBranch(ctx, runner, target.Path, baseRemote, target.Branch); err != nil {
 		return Worktree{}, err
 	}
 
-	if _, err := runner.Run(ctx, target.Path, "git", "worktree", "add", "-b", branch, path, "origin/"+target.Branch); err != nil {
+	if _, err := runner.Run(ctx, target.Path, "git", "worktree", "add", "-b", branch, path, baseRemote+"/"+target.Branch); err != nil {
 		return Worktree{}, err
 	}
 	return Worktree{Path: path, Branch: branch}, nil
 }
 
-func refreshBaseBranch(ctx context.Context, runner environment.Runner, repoPath string, branch string) error {
-	if _, err := runner.Run(ctx, repoPath, "git", "fetch", "origin", branch); err != nil {
+func refreshBaseBranch(ctx context.Context, runner environment.Runner, repoPath string, remote string, branch string) error {
+	if _, err := runner.Run(ctx, repoPath, "git", "fetch", remote, branch); err != nil {
 		return err
 	}
 
@@ -81,7 +99,7 @@ func refreshBaseBranch(ctx context.Context, runner environment.Runner, repoPath 
 		return err
 	}
 	if attachedPath == "" {
-		_, err := runner.Run(ctx, repoPath, "git", "branch", "-f", branch, "refs/remotes/origin/"+branch)
+		_, err := runner.Run(ctx, repoPath, "git", "branch", "-f", branch, "refs/remotes/"+remote+"/"+branch)
 		return err
 	}
 
@@ -93,7 +111,7 @@ func refreshBaseBranch(ctx context.Context, runner environment.Runner, repoPath 
 		return fmt.Errorf("base branch %q has local changes in worktree %s", branch, attachedPath)
 	}
 
-	_, err = runner.Run(ctx, attachedPath, "git", "merge", "--ff-only", "origin/"+branch)
+	_, err = runner.Run(ctx, attachedPath, "git", "merge", "--ff-only", remote+"/"+branch)
 	return err
 }
 
@@ -193,7 +211,7 @@ func CleanupIssueArtifactsForBranches(ctx context.Context, runner environment.Ru
 	return nil
 }
 
-func RecreateBranchWorktree(ctx context.Context, runner environment.Runner, repoPath string, worktreePath string, branch string) error {
+func RecreateBranchWorktree(ctx context.Context, runner environment.Runner, repoPath string, worktreePath string, remote string, branch string) error {
 	if err := Prune(ctx, runner, repoPath); err != nil {
 		return err
 	}
@@ -210,12 +228,12 @@ func RecreateBranchWorktree(ctx context.Context, runner environment.Runner, repo
 		return err
 	}
 
-	remoteExists, err := remoteBranchExistsWithError(ctx, runner, repoPath, branch)
+	remoteExists, err := remoteBranchExistsWithError(ctx, runner, repoPath, remote, branch)
 	if err != nil {
 		return err
 	}
 	if remoteExists {
-		if _, err := runner.Run(ctx, repoPath, "git", "fetch", "origin", branch+":"+branch); err != nil {
+		if _, err := runner.Run(ctx, repoPath, "git", "fetch", remote, branch+":"+branch); err != nil {
 			return fmt.Errorf("prepare remote branch %q: %w", branch, err)
 		}
 	} else {
@@ -224,7 +242,7 @@ func RecreateBranchWorktree(ctx context.Context, runner environment.Runner, repo
 			return err
 		}
 		if !exists {
-			return fmt.Errorf("branch %q not found locally or on origin", branch)
+			return fmt.Errorf("branch %q not found locally or on %s", branch, remote)
 		}
 	}
 
@@ -256,8 +274,8 @@ func branchExistsWithError(ctx context.Context, runner environment.Runner, repoP
 	return false, err
 }
 
-func remoteBranchExistsWithError(ctx context.Context, runner environment.Runner, repoPath string, branch string) (bool, error) {
-	_, err := runner.Run(ctx, repoPath, "git", "ls-remote", "--exit-code", "--heads", "origin", branch)
+func remoteBranchExistsWithError(ctx context.Context, runner environment.Runner, repoPath string, remote string, branch string) (bool, error) {
+	_, err := runner.Run(ctx, repoPath, "git", "ls-remote", "--exit-code", "--heads", remote, branch)
 	if err == nil {
 		return true, nil
 	}

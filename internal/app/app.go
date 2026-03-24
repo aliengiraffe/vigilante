@@ -452,7 +452,7 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 	case "watch":
 		fs := flag.NewFlagSet("watch", flag.ContinueOnError)
 		configureFlagSet(fs, func(w io.Writer) {
-			fmt.Fprintln(w, "usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--branch value | --track-default-branch] <path>")
+			fmt.Fprintln(w, "usage: vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] [--provider value] [--branch value | --track-default-branch] [--fork] [--fork-owner value] <path>")
 			fmt.Fprintln(w)
 			fmt.Fprintln(w, "Register a local repository for issue monitoring.")
 			fmt.Fprintln(w)
@@ -461,11 +461,14 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		})
 		var labels stringListFlag
 		fs.Var(&labels, "label", "allow only issues with this label; repeatable")
+		daemon := fs.Bool("d", false, "start the managed service after registering the repository")
 		assignee := fs.String("assignee", "", "issue assignee filter (defaults to me)")
 		maxParallel := fs.Int("max-parallel", 0, "maximum concurrent issue sessions for this repository (0 = unlimited)")
 		selectedProvider := fs.String("provider", "", "coding agent provider")
 		branch := fs.String("branch", "", "pin the watched repository to a specific base branch")
 		trackDefaultBranch := fs.Bool("track-default-branch", false, "track the repository default branch automatically")
+		forkMode := fs.Bool("fork", false, "push issue branches to a GitHub fork and open pull requests back to upstream")
+		forkOwner := fs.String("fork-owner", "", "fork owner to use instead of the authenticated GitHub account")
 		if err := parseFlagSet(fs, args[1:], a.stdout); err != nil {
 			if errors.Is(err, errHelpHandled) {
 				return nil
@@ -473,10 +476,12 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 			return err
 		}
 		if fs.NArg() != 1 {
-			return errors.New("usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--branch value | --track-default-branch] <path>")
+			return errors.New("usage: vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] [--provider value] [--branch value | --track-default-branch] [--fork] [--fork-owner value] <path>")
 		}
 		parsedMaxParallel := unsetMaxParallel
 		branchOptions := watchBranchOptions{}
+		forkModeProvided := false
+		forkOwnerProvided := false
 		fs.Visit(func(f *flag.Flag) {
 			switch f.Name {
 			case "max-parallel":
@@ -486,13 +491,19 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 			case "track-default-branch":
 				branchOptions.trackDefaultFlagSet = true
 			}
+			if f.Name == "fork" {
+				forkModeProvided = true
+			}
+			if f.Name == "fork-owner" {
+				forkOwnerProvided = true
+			}
 		})
 		branchOptions.pinnedBranch = strings.TrimSpace(*branch)
 		branchOptions.trackDefaultBranch = *trackDefaultBranch
 		if branchOptions.branchFlagSet && branchOptions.trackDefaultFlagSet {
 			return errors.New("watch accepts either --branch or --track-default-branch, not both")
 		}
-		return a.watchWithOptions(ctx, fs.Arg(0), labels, *assignee, parsedMaxParallel, *selectedProvider, branchOptions)
+		return a.watchWithOptions(ctx, fs.Arg(0), *daemon, labels, *assignee, parsedMaxParallel, *selectedProvider, branchOptions, *forkMode, forkModeProvided, *forkOwner, forkOwnerProvided)
 	case "unwatch":
 		if len(args) != 2 {
 			return errors.New("usage: vigilante unwatch <path>")
@@ -951,16 +962,16 @@ func (a *App) installBundledSkills() error {
 	return nil
 }
 
-func (a *App) Watch(ctx context.Context, rawPath string, labels []string, assignee string, maxParallel int) error {
-	return a.WatchWithProvider(ctx, rawPath, labels, assignee, maxParallel, "")
+func (a *App) Watch(ctx context.Context, rawPath string, daemon bool, labels []string, assignee string, maxParallel int) error {
+	return a.WatchWithProvider(ctx, rawPath, daemon, labels, assignee, maxParallel, "", false, false, "", false)
 }
 
-func (a *App) WatchWithProvider(ctx context.Context, rawPath string, labels []string, assignee string, maxParallel int, providerID string) error {
-	return a.watchWithOptions(ctx, rawPath, labels, assignee, maxParallel, providerID, watchBranchOptions{})
+func (a *App) WatchWithProvider(ctx context.Context, rawPath string, daemon bool, labels []string, assignee string, maxParallel int, providerID string, forkMode bool, forkModeProvided bool, forkOwner string, forkOwnerProvided bool) error {
+	return a.watchWithOptions(ctx, rawPath, daemon, labels, assignee, maxParallel, providerID, watchBranchOptions{}, forkMode, forkModeProvided, forkOwner, forkOwnerProvided)
 }
 
-func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []string, assignee string, maxParallel int, providerID string, branchOptions watchBranchOptions) error {
-	a.logger.Info("watch start", "raw_path", rawPath, "assignee", assignee, "max_parallel", maxParallel)
+func (a *App) watchWithOptions(ctx context.Context, rawPath string, daemon bool, labels []string, assignee string, maxParallel int, providerID string, branchOptions watchBranchOptions, forkMode bool, forkModeProvided bool, forkOwner string, forkOwnerProvided bool) error {
+	a.logger.Info("watch start", "raw_path", rawPath, "daemon", daemon, "assignee", assignee, "max_parallel", maxParallel)
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
 	}
@@ -969,6 +980,9 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []str
 	}
 	if branchOptions.branchFlagSet && branchOptions.pinnedBranch == "" {
 		return errors.New("branch cannot be empty")
+	}
+	if strings.TrimSpace(forkOwner) != "" {
+		forkMode = true
 	}
 	if strings.TrimSpace(providerID) != "" {
 		resolvedProvider, err := provider.Resolve(providerID)
@@ -1012,6 +1026,10 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []str
 			} else if targets[i].Assignee == "" {
 				targets[i].Assignee = defaultAssigneeFilter
 			}
+			if forkModeProvided || forkOwnerProvided {
+				targets[i].ForkMode = forkMode
+				targets[i].ForkOwner = strings.TrimSpace(forkOwner)
+			}
 			if maxParallel >= 0 {
 				targets[i].MaxParallel = maxParallel
 			}
@@ -1049,6 +1067,8 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []str
 			Repo:           info.Repo,
 			BranchMode:     state.BranchModeAuto,
 			Branch:         info.Branch,
+			ForkMode:       forkMode,
+			ForkOwner:      strings.TrimSpace(forkOwner),
 			Classification: info.Classification,
 			Provider:       provider.DefaultID,
 			Labels:         labels,
@@ -1108,6 +1128,57 @@ func (a *App) printWatchRuntimeGuidance(ctx context.Context) {
 		fmt.Fprintln(a.stdout, "managed service is not installed.")
 		fmt.Fprintln(a.stdout, "next step: run `vigilante setup` to install it, or `vigilante daemon run` to process the watchlist in the foreground.")
 	}
+}
+
+func (a *App) prepareForkMode(ctx context.Context, target state.WatchTarget) (string, error) {
+	if !target.ForkMode {
+		return target.Repo, nil
+	}
+
+	forkRepo, created, err := ghcli.EnsureFork(ctx, a.env.Runner, target.Repo, target.ForkOwner)
+	if err != nil {
+		return "", err
+	}
+	if err := ensureGitRemote(ctx, a.env.Runner, target.Path, worktree.DefaultForkRemoteName, cloneURLForRepo(forkRepo)); err != nil {
+		return "", err
+	}
+	a.state.AppendDaemonLog("fork mode prepared repo=%s fork_repo=%s remote=%s created=%t", target.Repo, forkRepo, worktree.DefaultForkRemoteName, created)
+	return forkRepo, nil
+}
+
+func configureIssueBranchPushRemote(ctx context.Context, runner environment.Runner, worktreePath string, branch string, remote string) error {
+	remote = strings.TrimSpace(remote)
+	if strings.TrimSpace(branch) == "" || remote == "" || remote == worktree.DefaultBaseRemoteName {
+		return nil
+	}
+	if _, err := runner.Run(ctx, worktreePath, "git", "config", "branch."+branch+".remote", remote); err != nil {
+		return err
+	}
+	if _, err := runner.Run(ctx, worktreePath, "git", "config", "branch."+branch+".merge", "refs/heads/"+branch); err != nil {
+		return err
+	}
+	_, err := runner.Run(ctx, worktreePath, "git", "config", "branch."+branch+".pushRemote", remote)
+	return err
+}
+
+func ensureGitRemote(ctx context.Context, runner environment.Runner, repoPath string, remote string, url string) error {
+	currentURL, err := runner.Run(ctx, repoPath, "git", "remote", "get-url", remote)
+	if err == nil {
+		if strings.TrimSpace(currentURL) == strings.TrimSpace(url) {
+			return nil
+		}
+		_, err = runner.Run(ctx, repoPath, "git", "remote", "set-url", remote, url)
+		return err
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "exit status 2") && !strings.Contains(strings.ToLower(err.Error()), "not a git repository") && !strings.Contains(strings.ToLower(err.Error()), "no such remote") && !strings.Contains(strings.ToLower(err.Error()), "exit status 1") {
+		return err
+	}
+	_, err = runner.Run(ctx, repoPath, "git", "remote", "add", remote, url)
+	return err
+}
+
+func cloneURLForRepo(repo string) string {
+	return fmt.Sprintf("https://github.com/%s.git", strings.TrimSpace(repo))
 }
 
 func (a *App) Unwatch(rawPath string) error {
@@ -1400,8 +1471,39 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				}
 				target.Branch = resolvedBranch
 
+				pushRepo, err := a.prepareForkMode(issueCtx, *target)
+				if err != nil {
+					session := blockedIssueSessionForDispatchFailure(*target, next, selectedProvider, err, a.clock())
+					previous, _ := findSession(sessions, target.Repo, next.Number)
+					a.commentDispatchFailure(ctx, previous, &session, "dispatch")
+					a.logger.Info("scan repo dispatch blocked", "repo", target.Repo, "issue", next.Number, "err", err)
+					sessions = upsertSession(sessions, session)
+					if err := a.state.SaveSessions(sessions); err != nil {
+						return err
+					}
+					a.emitSessionTransition(previous.Status, session, "dispatch")
+					a.syncSessionIssueLabelsBestEffort(ctx, &session, nil, nil, issueDetailsCache)
+					fmt.Fprintf(a.stdout, "repo: %s blocked issue #%d: %s\n", target.Repo, next.Number, summarizeText(err.Error()))
+					continue
+				}
+
 				wt, err := worktree.CreateIssueWorktree(issueCtx, a.env.Runner, *target, next.Number, next.Title)
 				if err != nil {
+					session := blockedIssueSessionForDispatchFailure(*target, next, selectedProvider, err, a.clock())
+					previous, _ := findSession(sessions, target.Repo, next.Number)
+					a.commentDispatchFailure(ctx, previous, &session, "dispatch")
+					a.logger.Info("scan repo dispatch blocked", "repo", target.Repo, "issue", next.Number, "err", err)
+					sessions = upsertSession(sessions, session)
+					if err := a.state.SaveSessions(sessions); err != nil {
+						return err
+					}
+					a.emitSessionTransition(previous.Status, session, "dispatch")
+					a.syncSessionIssueLabelsBestEffort(ctx, &session, nil, nil, issueDetailsCache)
+					fmt.Fprintf(a.stdout, "repo: %s blocked issue #%d: %s\n", target.Repo, next.Number, summarizeText(err.Error()))
+					continue
+				}
+				if err := configureIssueBranchPushRemote(issueCtx, a.env.Runner, wt.Path, wt.Branch, worktree.PushRemoteName(*target)); err != nil {
+					_ = worktree.CleanupIssueArtifacts(ctx, a.env.Runner, target.Path, wt.Path, wt.Branch)
 					session := blockedIssueSessionForDispatchFailure(*target, next, selectedProvider, err, a.clock())
 					previous, _ := findSession(sessions, target.Repo, next.Number)
 					a.commentDispatchFailure(ctx, previous, &session, "dispatch")
@@ -1447,6 +1549,9 @@ func (a *App) ScanOnce(ctx context.Context) error {
 					IssueTitle:         next.Title,
 					IssueURL:           next.URL,
 					BaseBranch:         target.Branch,
+					BaseRemoteName:     worktree.BaseRemoteName(*target),
+					PushRemoteName:     worktree.PushRemoteName(*target),
+					PushRepo:           pushRepo,
 					Branch:             wt.Branch,
 					WorktreePath:       wt.Path,
 					ReusedRemoteBranch: wt.ReusedRemoteBranch,
@@ -1782,7 +1887,7 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 			continue
 		}
 
-		pr, err := ghcli.FindPullRequestForBranch(sessionCtx, a.env.Runner, session.Repo, session.Branch)
+		pr, err := ghcli.FindPullRequestForHeadRef(sessionCtx, a.env.Runner, session.Repo, pullRequestHeadRef(*session))
 		if err != nil {
 			session.LastMaintenanceError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
@@ -1809,7 +1914,7 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 				session.UpdatedAt = a.clock().Format(time.RFC3339)
 				a.logger.Error("pr maintenance failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "branch", session.Branch, "err", err)
 				if shouldCommentMaintenanceFailure(*session, err) {
-					blocked := classifyBlockedReason("pr_maintenance", "git fetch origin main", err)
+					blocked := classifyBlockedReason("pr_maintenance", fmt.Sprintf("git fetch %s %s", sessionBaseRemoteName(*session), pullRequestBaseBranch(*session)), err)
 					previousStatus := session.Status
 					markSessionBlocked(session, "pr_maintenance", blocked, a.clock())
 					a.emitSessionTransition(previousStatus, *session, "pr_maintenance")
@@ -1972,8 +2077,9 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 		return nil, nil, errors.New("pull request base branch is unavailable")
 	}
 	session.PullRequestBaseBranch = baseBranch
-
-	if _, err := a.env.Runner.Run(ctx, session.WorktreePath, "git", "fetch", "origin", baseBranch); err != nil {
+	baseRemote := sessionBaseRemoteName(*session)
+	pushRemote := sessionPushRemoteName(*session)
+	if _, err := a.env.Runner.Run(ctx, session.WorktreePath, "git", "fetch", baseRemote, baseBranch); err != nil {
 		return nil, nil, err
 	}
 
@@ -2018,7 +2124,7 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 		return details, issueDetails, a.dispatchConflictResolution(ctx, session, *details, loadedIssueDetails)
 	}
 
-	baseRef := "origin/" + baseBranch
+	baseRef := baseRemote + "/" + baseBranch
 	rebaseOutput, err := a.env.Runner.Run(ctx, session.WorktreePath, "git", "rebase", baseRef)
 	rebased := rebaseChangedHistory(rebaseOutput)
 	if err != nil {
@@ -2051,7 +2157,7 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 	if _, err := a.env.Runner.Run(ctx, session.WorktreePath, "go", "test", "./..."); err != nil {
 		return nil, issueDetails, err
 	}
-	if _, err := a.env.Runner.Run(ctx, session.WorktreePath, "git", "push", "--force-with-lease", "origin", "HEAD:"+session.Branch); err != nil {
+	if _, err := a.env.Runner.Run(ctx, session.WorktreePath, "git", "push", "--force-with-lease", pushRemote, "HEAD:"+session.Branch); err != nil {
 		return nil, issueDetails, err
 	}
 
@@ -2061,7 +2167,7 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 		Percent:    90,
 		ETAMinutes: 5,
 		Items: []string{
-			fmt.Sprintf("Rebased PR #%d onto the latest `origin/%s`.", pr.Number, baseBranch),
+			fmt.Sprintf("Rebased PR #%d onto the latest `%s/%s`.", pr.Number, baseRemote, baseBranch),
 			"Reran `go test ./...` after the rebase.",
 			fmt.Sprintf("Pushed the updated branch `%s`.", session.Branch),
 		},
@@ -2812,8 +2918,17 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 		return err
 	}
 
+	pushRepo, err := a.prepareForkMode(ctx, target)
+	if err != nil {
+		return err
+	}
+
 	wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, target, selectedIssue.Number, selectedIssue.Title)
 	if err != nil {
+		return err
+	}
+	if err := configureIssueBranchPushRemote(ctx, a.env.Runner, wt.Path, wt.Branch, worktree.PushRemoteName(target)); err != nil {
+		_ = worktree.CleanupIssueArtifacts(ctx, a.env.Runner, target.Path, wt.Path, wt.Branch)
 		return err
 	}
 
@@ -2825,6 +2940,10 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 		IssueNumber:     selectedIssue.Number,
 		IssueTitle:      selectedIssue.Title,
 		IssueURL:        selectedIssue.URL,
+		BaseBranch:      target.Branch,
+		BaseRemoteName:  worktree.BaseRemoteName(target),
+		PushRemoteName:  worktree.PushRemoteName(target),
+		PushRepo:        pushRepo,
 		Branch:          wt.Branch,
 		WorktreePath:    wt.Path,
 		Status:          state.SessionStatusRunning,
@@ -3260,7 +3379,7 @@ func (a *App) preflightResume(ctx context.Context, session state.Session) error 
 
 func (a *App) resumeBlockedMaintenance(ctx context.Context, session *state.Session) error {
 	ctx = withSessionAccessLogContext(ctx, "maintenance", *session)
-	pr, err := ghcli.FindPullRequestForBranch(ctx, a.env.Runner, session.Repo, session.Branch)
+	pr, err := ghcli.FindPullRequestForHeadRef(ctx, a.env.Runner, session.Repo, pullRequestHeadRef(*session))
 	if err != nil {
 		return err
 	}
@@ -3325,7 +3444,7 @@ func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Se
 }
 
 func (a *App) resumeBlockedConflictResolution(ctx context.Context, session *state.Session) error {
-	pr, err := ghcli.FindPullRequestForBranch(ctx, a.env.Runner, session.Repo, session.Branch)
+	pr, err := ghcli.FindPullRequestForHeadRef(ctx, a.env.Runner, session.Repo, pullRequestHeadRef(*session))
 	if err != nil {
 		return err
 	}
@@ -3490,7 +3609,7 @@ func shouldAutoRecoverBlockedSession(session state.Session) bool {
 }
 
 func (a *App) autoRecoverBlockedMaintenanceSession(ctx context.Context, session *state.Session, timeout time.Duration) error {
-	pr, err := ghcli.FindPullRequestForBranch(ctx, a.env.Runner, session.Repo, session.Branch)
+	pr, err := ghcli.FindPullRequestForHeadRef(ctx, a.env.Runner, session.Repo, pullRequestHeadRef(*session))
 	if err != nil {
 		return err
 	}
@@ -3529,7 +3648,7 @@ func (a *App) autoRecoverBlockedMaintenanceSession(ctx context.Context, session 
 		return err
 	}
 
-	if err := worktree.RecreateBranchWorktree(ctx, a.env.Runner, session.RepoPath, session.WorktreePath, session.Branch); err != nil {
+	if err := worktree.RecreateBranchWorktree(ctx, a.env.Runner, session.RepoPath, session.WorktreePath, sessionPushRemoteName(*session), session.Branch); err != nil {
 		blocked := classifyBlockedReason(previousStage, previousOperation, err)
 		markSessionBlocked(session, fallbackText(previousStage, "pr_maintenance"), blocked, a.clock())
 		session.LastError = fmt.Sprintf("automatic recovery failed: %s", err)
@@ -3770,6 +3889,7 @@ func updatePullRequestTrackingFromLookup(session *state.Session, pr ghcli.PullRe
 	session.PullRequestNumber = pr.Number
 	session.PullRequestURL = strings.TrimSpace(pr.URL)
 	session.PullRequestState = strings.TrimSpace(pr.State)
+	session.PullRequestHeadRef = pullRequestHeadRef(*session)
 	session.PullRequestHeadBranch = strings.TrimSpace(session.Branch)
 	if baseRef := strings.TrimSpace(pr.BaseRefName); baseRef != "" {
 		session.PullRequestBaseBranch = baseRef
@@ -3842,13 +3962,39 @@ func (a *App) fallbackWatchTargetForSession(session state.Session) state.WatchTa
 	}
 }
 
+func pullRequestHeadRef(session state.Session) string {
+	pushRepo := strings.TrimSpace(session.PushRepo)
+	pushOwner := ghcli.RepositoryOwner(pushRepo)
+	if pushOwner == "" || pushRepo == strings.TrimSpace(session.Repo) {
+		return strings.TrimSpace(session.Branch)
+	}
+	return pushOwner + ":" + strings.TrimSpace(session.Branch)
+}
+
+func sessionBaseRemoteName(session state.Session) string {
+	if remote := strings.TrimSpace(session.BaseRemoteName); remote != "" {
+		return remote
+	}
+	return worktree.DefaultBaseRemoteName
+}
+
+func sessionPushRemoteName(session state.Session) string {
+	if remote := strings.TrimSpace(session.PushRemoteName); remote != "" {
+		return remote
+	}
+	if pushRepo := strings.TrimSpace(session.PushRepo); pushRepo != "" && pushRepo != strings.TrimSpace(session.Repo) {
+		return worktree.DefaultForkRemoteName
+	}
+	return worktree.DefaultBaseRemoteName
+}
+
 func pullRequestStatusFingerprint(session state.Session, pr ghcli.PullRequest) string {
 	failingChecks := formatFailingChecksSummary(failingStatusChecks(pr.StatusCheckRollup))
 	labels := pullRequestLabelNames(pr.Labels)
 	parts := []string{
 		fmt.Sprintf("pr:%d", pr.Number),
 		"state:" + fallbackText(strings.TrimSpace(pr.State), "UNKNOWN"),
-		"head:" + fallbackText(strings.TrimSpace(session.Branch), "UNKNOWN"),
+		"head:" + fallbackText(pullRequestHeadRef(session), "UNKNOWN"),
 		"base:" + pullRequestBaseBranch(session),
 		"mergeable:" + fallbackText(strings.TrimSpace(pr.Mergeable), "UNKNOWN"),
 		"merge_state:" + fallbackText(strings.TrimSpace(pr.MergeStateStatus), "UNKNOWN"),

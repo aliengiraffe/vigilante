@@ -350,14 +350,14 @@ func TestEnsureRepositoryLabelsSurfacesProvisioningFailure(t *testing.T) {
 	}
 }
 
-func TestFindPullRequestForBranch(t *testing.T) {
+func TestFindPullRequestForHeadRef(t *testing.T) {
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh pr list --repo owner/repo --head vigilante/issue-7 --state all --json number,url,state,mergedAt": `[{"number":17,"url":"https://github.com/owner/repo/pull/17","state":"MERGED","mergedAt":"2026-03-10T14:00:00Z"}]`,
+			"gh pr list --repo owner/repo --head nicobot:vigilante/issue-7 --state all --json number,url,state,mergedAt": `[{"number":17,"url":"https://github.com/owner/repo/pull/17","state":"MERGED","mergedAt":"2026-03-10T14:00:00Z"}]`,
 		},
 	}
 
-	pr, err := FindPullRequestForBranch(context.Background(), runner, "owner/repo", "vigilante/issue-7")
+	pr, err := FindPullRequestForHeadRef(context.Background(), runner, "owner/repo", "nicobot:vigilante/issue-7")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -372,6 +372,39 @@ func TestFindPullRequestForBranch(t *testing.T) {
 	}
 	if pr.MergedAt == nil || !pr.MergedAt.Equal(time.Date(2026, 3, 10, 14, 0, 0, 0, time.UTC)) {
 		t.Fatalf("unexpected merged time: %#v", pr.MergedAt)
+	}
+}
+
+func TestEnsureForkCreatesForkWhenMissing(t *testing.T) {
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh repo fork owner/repo --remote=false --clone=false --default-branch-only --org octobot": "https://github.com/octobot/repo",
+		},
+		Errors: map[string]error{
+			"gh api repos/octobot/repo --jq .full_name": context.DeadlineExceeded,
+		},
+	}
+
+	_, _, err := EnsureFork(context.Background(), runner, "owner/repo", "octobot")
+	if err == nil {
+		t.Fatal("expected non-exit-status-one errors to fail")
+	}
+
+	runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh repo fork owner/repo --remote=false --clone=false --default-branch-only --org octobot": "https://github.com/octobot/repo",
+		},
+		Errors: map[string]error{
+			"gh api repos/octobot/repo --jq .full_name": errors.New("exit status 1"),
+		},
+	}
+
+	forkRepo, created, err := EnsureFork(context.Background(), runner, "owner/repo", "octobot")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if forkRepo != "octobot/repo" || !created {
+		t.Fatalf("unexpected fork result: repo=%s created=%t", forkRepo, created)
 	}
 }
 

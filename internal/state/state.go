@@ -21,6 +21,8 @@ type WatchTarget struct {
 	Repo           string              `json:"repo"`
 	BranchMode     BranchMode          `json:"branch_mode,omitempty"`
 	Branch         string              `json:"branch"`
+	ForkMode       bool                `json:"fork_mode,omitempty"`
+	ForkOwner      string              `json:"fork_owner,omitempty"`
 	Classification repo.Classification `json:"classification,omitempty"`
 	Provider       string              `json:"provider,omitempty"`
 	Labels         []string            `json:"labels,omitempty"`
@@ -80,6 +82,9 @@ type Session struct {
 	IssueBody                      string        `json:"issue_body,omitempty"`
 	IssueURL                       string        `json:"issue_url,omitempty"`
 	BaseBranch                     string        `json:"base_branch,omitempty"`
+	BaseRemoteName                 string        `json:"base_remote_name,omitempty"`
+	PushRemoteName                 string        `json:"push_remote_name,omitempty"`
+	PushRepo                       string        `json:"push_repo,omitempty"`
 	Branch                         string        `json:"branch"`
 	WorktreePath                   string        `json:"worktree_path"`
 	ReusedRemoteBranch             string        `json:"reused_remote_branch,omitempty"`
@@ -89,6 +94,7 @@ type Session struct {
 	PullRequestURL                 string        `json:"pull_request_url,omitempty"`
 	PullRequestState               string        `json:"pull_request_state,omitempty"`
 	PullRequestMergedAt            string        `json:"pull_request_merged_at,omitempty"`
+	PullRequestHeadRef             string        `json:"pull_request_head_ref,omitempty"`
 	PullRequestHeadBranch          string        `json:"pull_request_head_branch,omitempty"`
 	PullRequestBaseBranch          string        `json:"pull_request_base_branch,omitempty"`
 	PullRequestMergeable           string        `json:"pull_request_mergeable,omitempty"`

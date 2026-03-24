@@ -58,16 +58,25 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		fmt.Sprintf("Current stage: handing the issue off to the configured coding agent (`%s`) for investigation and implementation.", selectedProvider.DisplayName()),
 		"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
 	}
+	if pushRepo := strings.TrimSpace(session.PushRepo); pushRepo != "" && pushRepo != strings.TrimSpace(session.Repo) {
+		startItems = append(startItems,
+			fmt.Sprintf("Fork mode is active: push remote `%s` targets `%s`, while pull requests still go back to `%s`.", fallbackSessionText(session.PushRemoteName, "vigilante-fork"), pushRepo, session.Repo),
+		)
+	}
 	if strings.TrimSpace(session.ReusedRemoteBranch) != "" {
 		baseBranch := strings.TrimSpace(session.BaseBranch)
 		if baseBranch == "" {
 			baseBranch = "main"
 		}
+		remoteName := fallbackSessionText(session.PushRemoteName, "origin")
 		startItems = []string{
-			fmt.Sprintf("Vigilante launched this implementation session in `%s` from existing remote branch `origin/%s`.", session.WorktreePath, session.ReusedRemoteBranch),
+			fmt.Sprintf("Vigilante launched this implementation session in `%s` from existing remote branch `%s/%s`.", session.WorktreePath, remoteName, session.ReusedRemoteBranch),
 			fmt.Sprintf("Diff summary against `%s`: %s", baseBranch, fallbackSessionText(session.BranchDiffSummary, "diff summary unavailable")),
 			fmt.Sprintf("Current stage: handing the issue off to the configured coding agent (`%s`) to continue the existing implementation.", selectedProvider.DisplayName()),
 			"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
+		}
+		if pushRepo := strings.TrimSpace(session.PushRepo); pushRepo != "" && pushRepo != strings.TrimSpace(session.Repo) {
+			startItems = append(startItems, fmt.Sprintf("Fork mode is active: push remote `%s` targets `%s`, while pull requests still go back to `%s`.", fallbackSessionText(session.PushRemoteName, "vigilante-fork"), pushRepo, session.Repo))
 		}
 	}
 	startBody := ghcli.FormatProgressComment(ghcli.ProgressComment{

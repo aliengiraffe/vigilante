@@ -136,11 +136,78 @@ func ResolveAssignee(ctx context.Context, runner environment.Runner, assignee st
 		return assignee, nil
 	}
 
-	output, err := runner.Run(ctx, "", "gh", "api", "user", "--jq", ".login")
+	login, err := ResolveViewerLogin(ctx, runner)
 	if err != nil {
 		return "", fmt.Errorf("resolve assignee %q: %w", assignee, err)
 	}
+	return login, nil
+}
+
+func ResolveViewerLogin(ctx context.Context, runner environment.Runner) (string, error) {
+	output, err := runner.Run(ctx, "", "gh", "api", "user", "--jq", ".login")
+	if err != nil {
+		return "", err
+	}
 	return strings.TrimSpace(output), nil
+}
+
+func EnsureFork(ctx context.Context, runner environment.Runner, repo string, owner string) (string, bool, error) {
+	repo = strings.TrimSpace(repo)
+	owner = strings.TrimSpace(owner)
+	if repo == "" {
+		return "", false, fmt.Errorf("upstream repository is required")
+	}
+
+	name := RepositoryName(repo)
+	if name == "" {
+		return "", false, fmt.Errorf("could not determine repository name for %q", repo)
+	}
+	if owner == "" {
+		resolvedOwner, err := ResolveViewerLogin(ctx, runner)
+		if err != nil {
+			return "", false, err
+		}
+		owner = resolvedOwner
+	}
+
+	forkRepo := owner + "/" + name
+	if _, err := runner.Run(ctx, "", "gh", "api", "repos/"+forkRepo, "--jq", ".full_name"); err == nil {
+		return forkRepo, false, nil
+	} else if !ghExitStatusOne(err) {
+		return "", false, err
+	}
+
+	args := []string{"repo", "fork", repo, "--remote=false", "--clone=false", "--default-branch-only"}
+	if RepositoryOwner(repo) != owner {
+		args = append(args, "--org", owner)
+	}
+	if _, err := runner.Run(ctx, "", "gh", args...); err != nil {
+		return "", false, err
+	}
+	return forkRepo, true, nil
+}
+
+func RepositoryOwner(repo string) string {
+	parts := strings.Split(strings.TrimSpace(repo), "/")
+	if len(parts) != 2 {
+		return ""
+	}
+	return strings.TrimSpace(parts[0])
+}
+
+func RepositoryName(repo string) string {
+	parts := strings.Split(strings.TrimSpace(repo), "/")
+	if len(parts) != 2 {
+		return ""
+	}
+	return strings.TrimSpace(parts[1])
+}
+
+func ghExitStatusOne(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "exit status 1")
 }
 
 func SelectNextIssue(issues []Issue, sessions []state.Session, target state.WatchTarget) *Issue {
@@ -617,8 +684,8 @@ func isCommentNewerThanClaim(comment IssueComment, claimedAt time.Time, claimedC
 	return comment.ID > claimedCommentID
 }
 
-func FindPullRequestForBranch(ctx context.Context, runner environment.Runner, repo string, branch string) (*PullRequest, error) {
-	output, err := runner.Run(ctx, "", "gh", "pr", "list", "--repo", repo, "--head", branch, "--state", "all", "--json", "number,url,state,mergedAt")
+func FindPullRequestForHeadRef(ctx context.Context, runner environment.Runner, repo string, headRef string) (*PullRequest, error) {
+	output, err := runner.Run(ctx, "", "gh", "pr", "list", "--repo", repo, "--head", headRef, "--state", "all", "--json", "number,url,state,mergedAt")
 	if err != nil {
 		return nil, err
 	}

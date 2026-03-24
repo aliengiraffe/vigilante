@@ -171,6 +171,19 @@ func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue 
 		"Use the issue as the source of truth for the requested behavior and keep the implementation minimal.",
 	)
 	lines = append(lines, commitIdentityPolicyLines()...)
+	if pushRepo := strings.TrimSpace(session.PushRepo); pushRepo != "" && pushRepo != strings.TrimSpace(target.Repo) {
+		headRef := pullRequestHeadRef(session)
+		pushRemote := fallbackPromptText(strings.TrimSpace(session.PushRemoteName), "vigilante-fork")
+		baseRemote := fallbackPromptText(strings.TrimSpace(session.BaseRemoteName), "origin")
+		lines = append(lines,
+			fmt.Sprintf("Fork mode is enabled. Upstream repository: %s", target.Repo),
+			fmt.Sprintf("Fork push repository: %s", pushRepo),
+			fmt.Sprintf("Base remote for fetch/rebase: %s", baseRemote),
+			fmt.Sprintf("Push remote for branch updates: %s", pushRemote),
+			fmt.Sprintf("Open the PR against `%s` with head `%s`.", target.Repo, headRef),
+			"Include a concise `Summary` section and a `Benefits` section in the PR body before the required closing line.",
+		)
+	}
 	if body := strings.TrimSpace(session.IssueBody); body != "" {
 		lines = append(lines,
 			"Full issue body:",
@@ -182,8 +195,9 @@ func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue 
 	}
 	if strings.TrimSpace(session.ReusedRemoteBranch) != "" {
 		baseBranch := promptBaseBranch(target, session)
+		remoteName := fallbackPromptText(strings.TrimSpace(session.PushRemoteName), "origin")
 		lines = append(lines,
-			fmt.Sprintf("Existing remote issue branch detected: origin/%s", session.ReusedRemoteBranch),
+			fmt.Sprintf("Existing remote issue branch detected: %s/%s", remoteName, session.ReusedRemoteBranch),
 			fmt.Sprintf("Base branch for comparison: %s", baseBranch),
 			fmt.Sprintf("Diff summary against `%s`: %s", baseBranch, fallbackPromptText(session.BranchDiffSummary, "Diff analysis was requested but no summary was recorded.")),
 			"Continue from the reused branch state and build on top of the existing diff instead of restarting from scratch.",
@@ -256,6 +270,15 @@ func slicesContains(values []string, want string) bool {
 
 func isBazelMonorepo(classification repo.Classification) bool {
 	return len(classification.ProcessHints.BazelRepoMarkers) > 0 && len(classification.ProcessHints.BazelPackageRoots) > 0
+}
+
+func pullRequestHeadRef(session state.Session) string {
+	pushRepo := strings.TrimSpace(session.PushRepo)
+	owner := ghcli.RepositoryOwner(pushRepo)
+	if owner == "" || pushRepo == strings.TrimSpace(session.Repo) {
+		return strings.TrimSpace(session.Branch)
+	}
+	return owner + ":" + strings.TrimSpace(session.Branch)
 }
 
 func hasWorkspaceConfigFile(classification repo.Classification, name string) bool {

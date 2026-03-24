@@ -160,6 +160,28 @@ func TestCreateIssueWorktreeReusesExistingRemoteBranch(t *testing.T) {
 	}
 }
 
+func TestCreateIssueWorktreeReusesExistingForkRemoteBranch(t *testing.T) {
+	repo := t.TempDir()
+	path := IssueWorktreePath(repo, 9)
+	branch := IssueBranchName(9, "Add daemon status command")
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"git worktree prune": "ok",
+			"git ls-remote --exit-code --heads " + DefaultForkRemoteName + " " + branch: "abcdef\trefs/heads/" + branch,
+			"git fetch " + DefaultForkRemoteName + " " + branch + ":" + branch:          "ok",
+			"git worktree add " + path + " " + branch:                                   "ok",
+		},
+	}
+
+	worktree, err := CreateIssueWorktree(context.Background(), runner, state.WatchTarget{Path: repo, Repo: "owner/repo", Branch: "main", ForkMode: true}, 9, "Add daemon status command")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if worktree.ReusedRemoteBranch != branch {
+		t.Fatalf("expected fork remote branch reuse, got %#v", worktree)
+	}
+}
+
 func TestCreateIssueWorktreePrefersPrimaryRemoteBranchOverLegacyFallback(t *testing.T) {
 	home := t.TempDir()
 	repo := filepath.Join(home, "repo")

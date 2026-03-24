@@ -190,6 +190,34 @@ func TestBuildIssuePromptIncludesIssueBodyAndIterationContext(t *testing.T) {
 	}
 }
 
+func TestBuildIssuePromptIncludesForkContext(t *testing.T) {
+	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
+	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	session := state.Session{
+		Repo:           "owner/repo",
+		WorktreePath:   "/tmp/worktree",
+		Branch:         "vigilante/issue-12-fix-bug",
+		BaseRemoteName: "origin",
+		PushRemoteName: "vigilante-fork",
+		PushRepo:       "octobot/repo",
+		Provider:       "Codex",
+	}
+
+	prompt := BuildIssuePrompt(target, issue, session)
+	for _, text := range []string{
+		"Fork mode is enabled. Upstream repository: owner/repo",
+		"Fork push repository: octobot/repo",
+		"Push remote for branch updates: vigilante-fork",
+		"Open the PR against `owner/repo` with head `octobot:vigilante/issue-12-fix-bug`.",
+		"`Summary` section",
+		"`Benefits` section",
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q: %s", text, prompt)
+		}
+	}
+}
+
 func TestVigilanteSkillNamesIncludesLocalServiceDependencies(t *testing.T) {
 	foundLocalServices := false
 	foundComposeLaunch := false
