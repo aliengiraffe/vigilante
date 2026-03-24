@@ -209,6 +209,44 @@ func TestVigilanteSkillNamesIncludesLocalServiceDependencies(t *testing.T) {
 	}
 }
 
+func TestEnsureInstalledIssueImplementationSkillsIncludeLogsTriageGuidance(t *testing.T) {
+	dir := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	if err := os.Chdir(outside); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = os.Chdir(wd)
+	}()
+
+	if err := EnsureInstalled(RuntimeCodex, dir); err != nil {
+		t.Fatal(err)
+	}
+
+	expectedCommand := "vigilante logs --repo <owner/name> --issue <n>"
+	for _, name := range []string{
+		VigilanteIssueImplementation,
+		VigilanteIssueImplementationOnMonorepo,
+		VigilanteIssueImplementationOnTurborepo,
+		VigilanteIssueImplementationOnRushMonorepo,
+		VigilanteIssueImplementationOnBazelMonorepo,
+		VigilanteIssueImplementationOnGradleMultiProject,
+	} {
+		data, err := os.ReadFile(filepath.Join(dir, "skills", name, "SKILL.md"))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		body := string(data)
+		if !strings.Contains(body, expectedCommand) {
+			t.Fatalf("%s missing logs triage guidance", name)
+		}
+	}
+}
+
 func TestBuildIssuePromptSelectsMonorepoSkill(t *testing.T) {
 	target := state.WatchTarget{
 		Path: "/tmp/repo",
