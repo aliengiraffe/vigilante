@@ -355,6 +355,7 @@ func TestGetPullRequestDetails(t *testing.T) {
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
 			"gh pr view --repo owner/repo 17 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": `{"number":17,"title":"Feature","body":"PR body","url":"https://github.com/owner/repo/pull/17","state":"OPEN","mergedAt":null,"labels":[{"name":"automerge"}],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}]}`,
+			"gh pr view --repo owner/repo 17 --json baseRefName": "{" + `"baseRefName":"develop"` + "}",
 		},
 	}
 
@@ -364,6 +365,9 @@ func TestGetPullRequestDetails(t *testing.T) {
 	}
 	if pr.Number != 17 || pr.Title != "Feature" || pr.Mergeable != "MERGEABLE" || pr.MergeStateStatus != "CLEAN" || pr.ReviewDecision != "APPROVED" {
 		t.Fatalf("unexpected pull request details: %#v", pr)
+	}
+	if pr.BaseRefName != "develop" {
+		t.Fatalf("unexpected pull request base: %#v", pr)
 	}
 	if len(pr.Labels) != 1 || pr.Labels[0].Name != "automerge" {
 		t.Fatalf("expected automerge label, got: %#v", pr.Labels)

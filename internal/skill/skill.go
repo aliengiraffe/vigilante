@@ -179,13 +179,10 @@ func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue 
 		lines = append(lines, iterationContext)
 	}
 	if strings.TrimSpace(session.ReusedRemoteBranch) != "" {
-		baseBranch := strings.TrimSpace(session.BaseBranch)
-		if baseBranch == "" {
-			baseBranch = "main"
-		}
+		baseBranch := promptBaseBranch(target, session)
 		lines = append(lines,
 			fmt.Sprintf("Existing remote issue branch detected: origin/%s", session.ReusedRemoteBranch),
-			fmt.Sprintf("Default branch for comparison: %s", baseBranch),
+			fmt.Sprintf("Base branch for comparison: %s", baseBranch),
 			fmt.Sprintf("Diff summary against `%s`: %s", baseBranch, fallbackPromptText(session.BranchDiffSummary, "Diff analysis was requested but no summary was recorded.")),
 			"Continue from the reused branch state and build on top of the existing diff instead of restarting from scratch.",
 		)
@@ -354,12 +351,9 @@ func monorepoExecutionContextJSON(target state.WatchTarget, selectedSkill string
 }
 
 func BuildIssuePreflightPrompt(target state.WatchTarget, issue ghcli.Issue, session state.Session) string {
-	baselineLine := fmt.Sprintf("Before implementing issue #%d, validate the repository baseline from the current `main`-derived worktree without making any file changes.", issue.Number)
+	baseBranch := promptBaseBranch(target, session)
+	baselineLine := fmt.Sprintf("Before implementing issue #%d, validate the repository baseline from the current `%s`-derived worktree without making any file changes.", issue.Number, baseBranch)
 	if strings.TrimSpace(session.ReusedRemoteBranch) != "" {
-		baseBranch := strings.TrimSpace(session.BaseBranch)
-		if baseBranch == "" {
-			baseBranch = "main"
-		}
 		baselineLine = fmt.Sprintf("Before implementing issue #%d, validate the repository baseline from the current reused issue-branch worktree without making any file changes. This branch is being continued from `origin/%s` and compared against `%s`.", issue.Number, session.ReusedRemoteBranch, baseBranch)
 	}
 	lines := []string{
@@ -424,10 +418,7 @@ func BuildConflictResolutionPromptForRuntime(runtime string, target state.WatchT
 	}
 	baseBranch := strings.TrimSpace(session.BaseBranch)
 	if baseBranch == "" {
-		baseBranch = strings.TrimSpace(target.Branch)
-	}
-	if baseBranch == "" {
-		baseBranch = "main"
+		baseBranch = promptBaseBranch(target, session)
 	}
 	baseRef := "origin/" + baseBranch
 	lines = append(lines,
@@ -455,6 +446,19 @@ func BuildConflictResolutionPromptForRuntime(runtime string, target state.WatchT
 		lines = append(lines, fmt.Sprintf("Existing branch summary: %s", session.BranchDiffSummary))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func promptBaseBranch(target state.WatchTarget, session state.Session) string {
+	if baseBranch := strings.TrimSpace(session.PullRequestBaseBranch); baseBranch != "" {
+		return baseBranch
+	}
+	if baseBranch := strings.TrimSpace(session.BaseBranch); baseBranch != "" {
+		return baseBranch
+	}
+	if baseBranch := strings.TrimSpace(target.Branch); baseBranch != "" {
+		return baseBranch
+	}
+	return "main"
 }
 
 func BuildCIRemediationPrompt(target state.WatchTarget, session state.Session, pr ghcli.PullRequest, checks []ghcli.StatusCheckRoll) string {

@@ -155,7 +155,7 @@ func TestBuildIssuePromptIncludesReusedRemoteBranchContext(t *testing.T) {
 	prompt := BuildIssuePrompt(target, issue, session)
 	for _, text := range []string{
 		"Existing remote issue branch detected: origin/vigilante/issue-12-fix-bug",
-		"Default branch for comparison: main",
+		"Base branch for comparison: main",
 		"Diff summary against `main`: README.md | 2 ++",
 		"Continue from the reused branch state",
 	} {

@@ -102,6 +102,13 @@ type githubRateLimitState struct {
 
 type stringListFlag []string
 
+type watchBranchOptions struct {
+	pinnedBranch        string
+	trackDefaultBranch  bool
+	branchFlagSet       bool
+	trackDefaultFlagSet bool
+}
+
 func (f *stringListFlag) String() string {
 	return strings.Join(*f, ",")
 }
@@ -267,7 +274,7 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 	case "watch":
 		fs := flag.NewFlagSet("watch", flag.ContinueOnError)
 		configureFlagSet(fs, func(w io.Writer) {
-			fmt.Fprintln(w, "usage: vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] [--provider value] <path>")
+			fmt.Fprintln(w, "usage: vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] [--provider value] [--branch value | --track-default-branch] <path>")
 			fmt.Fprintln(w)
 			fmt.Fprintln(w, "Register a local repository for issue monitoring.")
 			fmt.Fprintln(w)
@@ -280,6 +287,8 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		assignee := fs.String("assignee", "", "issue assignee filter (defaults to me)")
 		maxParallel := fs.Int("max-parallel", 0, "maximum concurrent issue sessions for this repository (0 = unlimited)")
 		selectedProvider := fs.String("provider", "", "coding agent provider")
+		branch := fs.String("branch", "", "pin the watched repository to a specific base branch")
+		trackDefaultBranch := fs.Bool("track-default-branch", false, "track the repository default branch automatically")
 		if err := parseFlagSet(fs, args[1:], a.stdout); err != nil {
 			if errors.Is(err, errHelpHandled) {
 				return nil
@@ -287,15 +296,26 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 			return err
 		}
 		if fs.NArg() != 1 {
-			return errors.New("usage: vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] [--provider value] <path>")
+			return errors.New("usage: vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] [--provider value] [--branch value | --track-default-branch] <path>")
 		}
 		parsedMaxParallel := unsetMaxParallel
+		branchOptions := watchBranchOptions{}
 		fs.Visit(func(f *flag.Flag) {
-			if f.Name == "max-parallel" {
+			switch f.Name {
+			case "max-parallel":
 				parsedMaxParallel = *maxParallel
+			case "branch":
+				branchOptions.branchFlagSet = true
+			case "track-default-branch":
+				branchOptions.trackDefaultFlagSet = true
 			}
 		})
-		return a.WatchWithProvider(ctx, fs.Arg(0), *daemon, labels, *assignee, parsedMaxParallel, *selectedProvider)
+		branchOptions.pinnedBranch = strings.TrimSpace(*branch)
+		branchOptions.trackDefaultBranch = *trackDefaultBranch
+		if branchOptions.branchFlagSet && branchOptions.trackDefaultFlagSet {
+			return errors.New("watch accepts either --branch or --track-default-branch, not both")
+		}
+		return a.watchWithOptions(ctx, fs.Arg(0), *daemon, labels, *assignee, parsedMaxParallel, *selectedProvider, branchOptions)
 	case "unwatch":
 		if len(args) != 2 {
 			return errors.New("usage: vigilante unwatch <path>")
@@ -682,12 +702,19 @@ func (a *App) Watch(ctx context.Context, rawPath string, daemon bool, labels []s
 }
 
 func (a *App) WatchWithProvider(ctx context.Context, rawPath string, daemon bool, labels []string, assignee string, maxParallel int, providerID string) error {
+	return a.watchWithOptions(ctx, rawPath, daemon, labels, assignee, maxParallel, providerID, watchBranchOptions{})
+}
+
+func (a *App) watchWithOptions(ctx context.Context, rawPath string, daemon bool, labels []string, assignee string, maxParallel int, providerID string, branchOptions watchBranchOptions) error {
 	a.state.AppendDaemonLog("watch start raw_path=%q daemon=%t assignee=%q max_parallel=%d", rawPath, daemon, assignee, maxParallel)
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
 	}
 	if maxParallel < 0 && maxParallel != unsetMaxParallel {
 		return errors.New("max parallel must be at least 0")
+	}
+	if branchOptions.branchFlagSet && branchOptions.pinnedBranch == "" {
+		return errors.New("branch cannot be empty")
 	}
 	if strings.TrimSpace(providerID) != "" {
 		resolvedProvider, err := provider.Resolve(providerID)
@@ -718,7 +745,6 @@ func (a *App) WatchWithProvider(ctx context.Context, rawPath string, daemon bool
 	for i, target := range targets {
 		if target.Path == info.Path {
 			targets[i].Repo = info.Repo
-			targets[i].Branch = info.Branch
 			targets[i].Classification = info.Classification
 			if strings.TrimSpace(targets[i].Provider) == "" {
 				targets[i].Provider = provider.DefaultID
@@ -736,6 +762,29 @@ func (a *App) WatchWithProvider(ctx context.Context, rawPath string, daemon bool
 				targets[i].MaxParallel = maxParallel
 			}
 			targets[i].DaemonEnabled = daemon
+			switch {
+			case branchOptions.branchFlagSet:
+				targets[i].BranchMode = state.BranchModePinned
+				targets[i].Branch = branchOptions.pinnedBranch
+				resolvedBranch, err := repo.ResolveBranch(ctx, a.env.Runner, info.Path, string(targets[i].EffectiveBranchMode()), targets[i].Branch)
+				if err != nil {
+					return err
+				}
+				targets[i].Branch = resolvedBranch
+			case branchOptions.trackDefaultFlagSet:
+				targets[i].BranchMode = state.BranchModeAuto
+				resolvedBranch, err := repo.ResolveBranch(ctx, a.env.Runner, info.Path, string(targets[i].EffectiveBranchMode()), targets[i].Branch)
+				if err != nil {
+					return err
+				}
+				targets[i].Branch = resolvedBranch
+			case targets[i].EffectiveBranchMode() == state.BranchModeAuto:
+				resolvedBranch, err := repo.ResolveBranch(ctx, a.env.Runner, info.Path, string(targets[i].EffectiveBranchMode()), targets[i].Branch)
+				if err != nil {
+					return err
+				}
+				targets[i].Branch = resolvedBranch
+			}
 			updated = true
 			break
 		}
@@ -745,6 +794,7 @@ func (a *App) WatchWithProvider(ctx context.Context, rawPath string, daemon bool
 		target := state.WatchTarget{
 			Path:           info.Path,
 			Repo:           info.Repo,
+			BranchMode:     state.BranchModeAuto,
 			Branch:         info.Branch,
 			Classification: info.Classification,
 			Provider:       provider.DefaultID,
@@ -756,6 +806,15 @@ func (a *App) WatchWithProvider(ctx context.Context, rawPath string, daemon bool
 		}
 		if providerID != "" {
 			target.Provider = providerID
+		}
+		if branchOptions.branchFlagSet {
+			target.BranchMode = state.BranchModePinned
+			target.Branch = branchOptions.pinnedBranch
+			resolvedBranch, err := repo.ResolveBranch(ctx, a.env.Runner, info.Path, string(target.EffectiveBranchMode()), target.Branch)
+			if err != nil {
+				return err
+			}
+			target.Branch = resolvedBranch
 		}
 		targets = append(targets, target)
 	}
@@ -777,10 +836,12 @@ func (a *App) WatchWithProvider(ctx context.Context, rawPath string, daemon bool
 	}
 
 	if updated {
-		a.state.AppendDaemonLog("watch updated path=%s repo=%s branch=%s assignee=%s max_parallel=%d daemon=%t", info.Path, info.Repo, info.Branch, assigneeOrDefault(findWatchTargetAssignee(targets, info.Path)), findWatchTargetMaxParallel(targets, info.Path), daemon)
+		updatedTarget := findWatchTargetByPath(targets, info.Path)
+		a.state.AppendDaemonLog("watch updated path=%s repo=%s branch=%s branch_mode=%s assignee=%s max_parallel=%d daemon=%t", info.Path, info.Repo, updatedTarget.Branch, updatedTarget.EffectiveBranchMode(), assigneeOrDefault(findWatchTargetAssignee(targets, info.Path)), findWatchTargetMaxParallel(targets, info.Path), daemon)
 		fmt.Fprintln(a.stdout, "updated", info.Path)
 	} else {
-		a.state.AppendDaemonLog("watch added path=%s repo=%s branch=%s assignee=%s max_parallel=%d daemon=%t", info.Path, info.Repo, info.Branch, assigneeOrDefault(assignee), configuredMaxParallel(maxParallel), daemon)
+		addedTarget := findWatchTargetByPath(targets, info.Path)
+		a.state.AppendDaemonLog("watch added path=%s repo=%s branch=%s branch_mode=%s assignee=%s max_parallel=%d daemon=%t", info.Path, info.Repo, addedTarget.Branch, addedTarget.EffectiveBranchMode(), assigneeOrDefault(assignee), configuredMaxParallel(maxParallel), daemon)
 		fmt.Fprintln(a.stdout, "watching", info.Path)
 	}
 	return nil
@@ -976,6 +1037,16 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			}
 			target.MaxParallel = configuredMaxParallel(target.MaxParallel)
 			target.Classification = repo.Classify(target.Path)
+			if target.EffectiveBranchMode() == state.BranchModeAuto {
+				resolvedBranch, err := repo.ResolveBranch(ctx, a.env.Runner, target.Path, string(target.EffectiveBranchMode()), target.Branch)
+				if err != nil {
+					return err
+				}
+				if target.Branch != resolvedBranch {
+					a.state.AppendDaemonLog("watch branch refreshed repo=%s path=%s old=%s new=%s mode=%s", target.Repo, target.Path, target.Branch, resolvedBranch, target.EffectiveBranchMode())
+					target.Branch = resolvedBranch
+				}
+			}
 			var started int
 			sessions, started, err = a.processGitHubIterationRequestsForTarget(ctx, *target, sessions)
 			if err != nil {
@@ -1024,6 +1095,22 @@ func (a *App) ScanOnce(ctx context.Context) error {
 					a.state.AppendDaemonLog("scan repo issue provider override repo=%s issue=%d provider=%s source=label", target.Repo, next.Number, selectedProvider)
 				}
 				a.state.AppendDaemonLog("scan repo issue skill repo=%s issue=%d skill=%s shape=%s", target.Repo, next.Number, skill.IssueImplementationSkill(*target), target.Classification.Shape)
+				resolvedBranch, err := repo.ResolveBranch(ctx, a.env.Runner, target.Path, string(target.EffectiveBranchMode()), target.Branch)
+				if err != nil {
+					session := blockedIssueSessionForDispatchFailure(*target, next, selectedProvider, err, a.clock())
+					previous, _ := findSession(sessions, target.Repo, next.Number)
+					a.commentDispatchFailure(ctx, previous, &session, "dispatch")
+					a.state.AppendDaemonLog("scan repo dispatch blocked repo=%s issue=%d err=%v", target.Repo, next.Number, err)
+					sessions = upsertSession(sessions, session)
+					if err := a.state.SaveSessions(sessions); err != nil {
+						return err
+					}
+					a.emitSessionTransition(previous.Status, session, "dispatch")
+					a.syncSessionIssueLabelsBestEffort(ctx, session, nil)
+					fmt.Fprintf(a.stdout, "repo: %s blocked issue #%d: %s\n", target.Repo, next.Number, summarizeText(err.Error()))
+					continue
+				}
+				target.Branch = resolvedBranch
 
 				wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, *target, next.Number, next.Title)
 				if err != nil {
@@ -1608,8 +1695,17 @@ func (a *App) waitForSessions() {
 func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Session, pr ghcli.PullRequest) error {
 	previousMaintenanceError := session.LastMaintenanceError
 	session.LastMaintenanceError = ""
+	fallbackTarget := a.fallbackWatchTargetForSession(*session)
+	baseBranch := strings.TrimSpace(pr.BaseRefName)
+	if baseBranch == "" {
+		baseBranch = effectiveSessionBaseBranch(*session, fallbackTarget)
+	}
+	if baseBranch == "" {
+		return errors.New("pull request base branch is unavailable")
+	}
+	session.PullRequestBaseBranch = baseBranch
 
-	if _, err := a.env.Runner.Run(ctx, session.WorktreePath, "git", "fetch", "origin", "main"); err != nil {
+	if _, err := a.env.Runner.Run(ctx, session.WorktreePath, "git", "fetch", "origin", baseBranch); err != nil {
 		return err
 	}
 
@@ -1638,10 +1734,6 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 		return a.dispatchConflictResolution(ctx, session, *details)
 	}
 
-	baseBranch := strings.TrimSpace(session.BaseBranch)
-	if baseBranch == "" {
-		baseBranch = "main"
-	}
 	baseRef := "origin/" + baseBranch
 	rebaseOutput, err := a.env.Runner.Run(ctx, session.WorktreePath, "git", "rebase", baseRef)
 	rebased := rebaseChangedHistory(rebaseOutput)
@@ -1681,7 +1773,7 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 		Percent:    90,
 		ETAMinutes: 5,
 		Items: []string{
-			fmt.Sprintf("Rebased PR #%d onto the latest `origin/main`.", pr.Number),
+			fmt.Sprintf("Rebased PR #%d onto the latest `origin/%s`.", pr.Number, baseBranch),
 			"Reran `go test ./...` after the rebase.",
 			fmt.Sprintf("Pushed the updated branch `%s`.", session.Branch),
 		},
@@ -1703,10 +1795,7 @@ func (a *App) dispatchConflictResolution(ctx context.Context, session *state.Ses
 		session.IssueURL = issueDetails.URL
 	}
 
-	baseBranch := strings.TrimSpace(session.BaseBranch)
-	if baseBranch == "" {
-		baseBranch = "main"
-	}
+	baseBranch := pullRequestBaseBranch(*session)
 	body := ghcli.FormatProgressComment(ghcli.ProgressComment{
 		Stage:      "Conflict Resolution Started",
 		Emoji:      "⚔️",
@@ -1723,7 +1812,7 @@ func (a *App) dispatchConflictResolution(ctx context.Context, session *state.Ses
 		a.state.AppendDaemonLog("pr conflict comment failed repo=%s issue=%d pr=%d err=%v", session.Repo, session.IssueNumber, pr.Number, commentErr)
 	}
 
-	target := state.WatchTarget{Path: session.RepoPath, Repo: session.Repo, Branch: baseBranch}
+	target := watchTargetForSession(*session, a.fallbackWatchTargetForSession(*session))
 	if conflictErr := issuerunner.RunConflictResolutionSession(ctx, a.env, a.state, target, *session, pr); conflictErr != nil {
 		return conflictErr
 	}
@@ -1855,7 +1944,7 @@ func (a *App) handleFailingPullRequestChecks(ctx context.Context, session *state
 	})
 	a.commentOnIssueBestEffort(ctx, session.Repo, session.IssueNumber, startBody, "ci remediation start")
 
-	target := state.WatchTarget{Path: session.RepoPath, Repo: session.Repo, Branch: "main"}
+	target := watchTargetForSession(*session, a.fallbackWatchTargetForSession(*session))
 	if err := issuerunner.RunCIRemediationSession(ctx, a.env, a.state, target, *session, pr, failingChecks); err != nil {
 		blocked := classifyBlockedReason("ci_remediation", "coding agent remediation", err)
 		markSessionBlocked(session, "ci_remediation", blocked, a.clock())
@@ -2531,7 +2620,11 @@ func (a *App) preflightResume(ctx context.Context, session state.Session) error 
 	tool := providerRuntimeTool(selectedProvider)
 	switch session.BlockedReason.Kind {
 	case "git_auth":
-		_, err = a.env.Runner.Run(ctx, session.WorktreePath, "git", "fetch", "origin", "main")
+		baseBranch := effectiveSessionBaseBranch(session, a.fallbackWatchTargetForSession(session))
+		if baseBranch == "" {
+			return errors.New("base branch is unavailable for git auth preflight")
+		}
+		_, err = a.env.Runner.Run(ctx, session.WorktreePath, "git", "fetch", "origin", baseBranch)
 		return err
 	case "gh_auth":
 		if _, err := a.env.Runner.Run(ctx, "", "gh", "auth", "status"); err != nil {
@@ -2575,7 +2668,7 @@ func (a *App) resumeBlockedMaintenance(ctx context.Context, session *state.Sessi
 
 func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Session) error {
 	issue := ghcli.Issue{Number: session.IssueNumber, Title: session.IssueTitle, URL: session.IssueURL}
-	target := state.WatchTarget{Path: session.RepoPath, Repo: session.Repo, Branch: "main"}
+	target := watchTargetForSession(*session, a.fallbackWatchTargetForSession(*session))
 	selectedProvider, err := provider.Resolve(session.Provider)
 	if err != nil {
 		return err
@@ -2626,7 +2719,10 @@ func (a *App) resumeBlockedConflictResolution(ctx context.Context, session *stat
 	if pr == nil {
 		return errors.New("no pull request found for blocked conflict-resolution session")
 	}
-	target := state.WatchTarget{Path: session.RepoPath, Repo: session.Repo, Branch: "main"}
+	if strings.TrimSpace(pr.BaseRefName) != "" {
+		session.PullRequestBaseBranch = strings.TrimSpace(pr.BaseRefName)
+	}
+	target := watchTargetForSession(*session, a.fallbackWatchTargetForSession(*session))
 	if err := issuerunner.RunConflictResolutionSession(ctx, a.env, a.state, target, *session, *pr); err != nil {
 		return err
 	}
@@ -3062,7 +3158,11 @@ func updatePullRequestTrackingFromLookup(session *state.Session, pr ghcli.PullRe
 	session.PullRequestURL = strings.TrimSpace(pr.URL)
 	session.PullRequestState = strings.TrimSpace(pr.State)
 	session.PullRequestHeadBranch = strings.TrimSpace(session.Branch)
-	session.PullRequestBaseBranch = pullRequestBaseBranch(*session)
+	if baseRef := strings.TrimSpace(pr.BaseRefName); baseRef != "" {
+		session.PullRequestBaseBranch = baseRef
+	} else {
+		session.PullRequestBaseBranch = pullRequestBaseBranch(*session)
+	}
 	if pr.MergedAt != nil {
 		session.PullRequestMergedAt = pr.MergedAt.UTC().Format(time.RFC3339)
 	}
@@ -3082,11 +3182,52 @@ func updatePullRequestMaintenanceSnapshot(session *state.Session, pr ghcli.PullR
 }
 
 func pullRequestBaseBranch(session state.Session) string {
-	baseBranch := strings.TrimSpace(session.BaseBranch)
-	if baseBranch == "" {
-		return "main"
+	if baseBranch := strings.TrimSpace(session.PullRequestBaseBranch); baseBranch != "" {
+		return baseBranch
 	}
+	baseBranch := strings.TrimSpace(session.BaseBranch)
 	return baseBranch
+}
+
+func effectiveSessionBaseBranch(session state.Session, fallbackTarget state.WatchTarget) string {
+	if baseBranch := pullRequestBaseBranch(session); baseBranch != "" {
+		return baseBranch
+	}
+	if baseBranch := strings.TrimSpace(fallbackTarget.Branch); baseBranch != "" {
+		return baseBranch
+	}
+	return "main"
+}
+
+func watchTargetForSession(session state.Session, fallbackTarget state.WatchTarget) state.WatchTarget {
+	target := state.WatchTarget{
+		Path:           session.RepoPath,
+		Repo:           session.Repo,
+		BranchMode:     state.BranchModePinned,
+		Branch:         effectiveSessionBaseBranch(session, fallbackTarget),
+		Classification: fallbackTarget.Classification,
+		Provider:       fallbackTarget.Provider,
+		Labels:         fallbackTarget.Labels,
+		Assignee:       fallbackTarget.Assignee,
+		MaxParallel:    fallbackTarget.MaxParallel,
+		DaemonEnabled:  fallbackTarget.DaemonEnabled,
+	}
+	return target
+}
+
+func (a *App) fallbackWatchTargetForSession(session state.Session) state.WatchTarget {
+	targets, err := a.state.LoadWatchTargets()
+	if err == nil {
+		if target, ok := findWatchTargetByRepo(targets, session.Repo); ok {
+			return target
+		}
+	}
+	return state.WatchTarget{
+		Path:       session.RepoPath,
+		Repo:       session.Repo,
+		BranchMode: state.BranchModePinned,
+		Branch:     strings.TrimSpace(session.BaseBranch),
+	}
 }
 
 func pullRequestStatusFingerprint(session state.Session, pr ghcli.PullRequest) string {
@@ -4318,7 +4459,7 @@ func isHelpToken(value string) bool {
 func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage:")
 	fmt.Fprintln(w, "  vigilante setup [-d] [--provider value]")
-	fmt.Fprintln(w, "  vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] [--provider value] <path>")
+	fmt.Fprintln(w, "  vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] [--provider value] [--branch value | --track-default-branch] <path>")
 	fmt.Fprintln(w, "  vigilante unwatch <path>")
 	fmt.Fprintln(w, "  vigilante list [--blocked | --running]")
 	fmt.Fprintln(w, "  vigilante status")
@@ -4379,7 +4520,7 @@ _vigilante()
             return
             ;;
         watch)
-            COMPREPLY=( $(compgen -W "-d --label --assignee --max-parallel --provider" -- "$cur") )
+            COMPREPLY=( $(compgen -W "-d --label --assignee --max-parallel --provider --branch --track-default-branch" -- "$cur") )
             return
             ;;
         list)
@@ -4446,6 +4587,8 @@ complete -c vigilante -n '__fish_seen_subcommand_from watch' -l label
 complete -c vigilante -n '__fish_seen_subcommand_from watch' -l assignee
 complete -c vigilante -n '__fish_seen_subcommand_from watch' -l max-parallel
 complete -c vigilante -n '__fish_seen_subcommand_from watch' -l provider
+complete -c vigilante -n '__fish_seen_subcommand_from watch' -l branch
+complete -c vigilante -n '__fish_seen_subcommand_from watch' -l track-default-branch
 complete -c vigilante -n '__fish_seen_subcommand_from watch' -s d
 complete -c vigilante -n '__fish_seen_subcommand_from list' -l blocked
 complete -c vigilante -n '__fish_seen_subcommand_from list' -l running
@@ -4494,7 +4637,7 @@ _vigilante() {
       compadd -- -d --provider
       ;;
     watch)
-      compadd -- -d --label --assignee --max-parallel --provider
+      compadd -- -d --label --assignee --max-parallel --provider --branch --track-default-branch
       ;;
     list)
       compadd -- --blocked --running
@@ -4566,6 +4709,15 @@ func findWatchTargetByRepo(targets []state.WatchTarget, repo string) (state.Watc
 		}
 	}
 	return state.WatchTarget{}, false
+}
+
+func findWatchTargetByPath(targets []state.WatchTarget, path string) state.WatchTarget {
+	for _, target := range targets {
+		if target.Path == path {
+			return target
+		}
+	}
+	return state.WatchTarget{}
 }
 
 func issueMatchesLabelAllowlist(issue ghcli.Issue, allowlist []string) bool {

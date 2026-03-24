@@ -200,7 +200,7 @@ Upgrade later with:
 brew upgrade --cask vigilante
 ```
 
-### `vigilante watch [--assignee <value>] [--max-parallel <value>] [--provider <codex|claude|gemini>] <path>`
+### `vigilante watch [--assignee <value>] [--max-parallel <value>] [--provider <codex|claude|gemini>] [--branch <name> | --track-default-branch] <path>`
 
 Register a local repository for issue monitoring.
 
@@ -209,10 +209,14 @@ Expected behavior:
 - expands `~` and resolves the absolute path
 - validates the folder is a git repository
 - discovers the GitHub remote from git config
+- defaults new watch targets to tracking the repository's current default branch automatically
+- pins the base branch when `--branch <name>` is supplied
+- switches an existing target back to default-branch tracking when `--track-default-branch` is supplied
 - defaults the assignee filter to `me` unless overridden
 - defaults `--max-parallel` to `0` when not configured, where `0` means unlimited
 - defaults `--provider` to `codex` unless overridden
 - resolves `me` to the authenticated GitHub login at runtime before issue queries
+- preserves an existing target's branch mode unless one of the branch flags is supplied
 - stores the target in `~/.vigilante/watchlist.json`
 
 Example:
@@ -241,6 +245,14 @@ vigilante watch --provider claude ~/hello-world-app
 vigilante watch --provider gemini ~/hello-world-app
 ```
 
+```sh
+vigilante watch --branch develop ~/hello-world-app
+```
+
+```sh
+vigilante watch --track-default-branch ~/hello-world-app
+```
+
 ### `vigilante watch -d <path>`
 
 Register a repository and ensure the daemon/service is installed and started.
@@ -263,6 +275,7 @@ Expected fields:
 - daemon status
 - last scan time
 - active issue/session, if any
+- effective base branch and whether it is `auto` or `pinned`
 
 ### `vigilante list --running`
 
@@ -276,7 +289,7 @@ Expected behavior:
 
 - reports a stable `state` value of `running`, `stopped`, or `not-installed`
 - includes the service manager, service identifier, and installed service file path
-- includes a watched-repositories summary with key per-repo metadata such as repo slug, branch, provider, filters or limits, activity, and last scan time
+- includes a watched-repositories summary with key per-repo metadata such as repo slug, branch plus branch mode, provider, filters or limits, activity, and last scan time
 - exits successfully when the service is not installed so operators and scripts can inspect the reported state
 - fails with a clear error on unsupported operating systems or when the underlying service manager cannot be queried
 
@@ -544,6 +557,7 @@ Suggested `watchlist.json` shape:
   {
     "path": "/Users/example/hello-world-app",
     "repo": "owner/hello-world-app",
+    "branch_mode": "auto",
     "branch": "main",
     "assignee": "me",
     "max_parallel_sessions": 0,
@@ -575,7 +589,7 @@ Future policy can expand to richer label filters, assignment rules, and priority
 
 For pull requests tied to an active Vigilante session:
 
-- keep the branch updated against `origin/main` through the existing maintenance loop
+- keep the branch updated against the session or pull request base branch through the existing maintenance loop instead of assuming `main`
 - if either the source issue or the PR has `vigilante:automerge`, attempt a GitHub squash merge only after required checks pass and GitHub reports the PR is mergeable
 - keep the legacy plain `automerge` PR label working as a compatibility alias during migration to the namespaced label
 - never force through branch protection, required reviews, or failing checks
