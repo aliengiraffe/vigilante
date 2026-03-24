@@ -446,6 +446,7 @@ func BuildConflictResolutionPromptForRuntime(runtime string, target state.WatchT
 		fmt.Sprintf("GitHub mergeability: mergeable=%s mergeStateStatus=%s", fallbackPromptText(pr.Mergeable, "UNKNOWN"), fallbackPromptText(pr.MergeStateStatus, "UNKNOWN")),
 		"Conflict-resolution workflow: rebase the branch onto the latest base branch if that has not already started; if a rebase is already in progress, continue it from the current stopped commit.",
 		"Work through the rebase commit by commit. Preserve the meaning of each existing issue-branch commit and keep the original issue specification authoritative.",
+		"If the rebase fails, post-rebase validation fails, or the current session state is unclear, inspect `vigilante logs --repo <owner/name> --issue <n>` before retrying so the session transcript guides the next safe action.",
 		"Do not silently discard commits or issue-specific behavior just to get a clean merge. Prefer the smallest safe conflict fix.",
 		"Use `vigilante gh issue comment` for progress and failures, rerun `go test ./...` after conflict resolution succeeds, and push the updated branch with `vigilante git push` when finished.",
 		"If you cannot preserve the issue intent safely, leave a concise GitHub blocker comment and exit with a non-zero status.",
