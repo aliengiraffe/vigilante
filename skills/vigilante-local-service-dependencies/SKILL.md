@@ -44,6 +44,7 @@ Require or infer these inputs before acting:
 - Keep generated artifacts explicit and local to the session.
 - Surface the exact command used to start services.
 - Wait for readiness when practical; do not claim success immediately after spawning a process if the service is not yet accepting connections.
+- When startup, readiness, or failure classification is unclear, inspect `vigilante logs --repo <owner/name> --issue <n>` before deciding which failure category applies.
 
 ## Structured Output Contract
 When you finish, return a concise structured summary that the parent workflow can reuse. Use this shape in plain text or JSON-like form:
@@ -65,7 +66,9 @@ When service preparation fails, explain which category applies:
 - startup failure
 - readiness or connection failure
 
-Include the failing command, the missing prerequisite or observed error, and the next most reasonable remediation step.
+For startup failures, readiness failures, or ambiguous cases, consult `vigilante logs --repo <owner/name> --issue <n>` so the persisted session transcript informs the diagnosis.
+
+Include the failing command, the missing prerequisite or observed error, the relevant log evidence when logs were checked, and the next most reasonable remediation step.
 
 ## Practical Defaults
 - Prioritize common local databases first: Postgres, MySQL, MariaDB, and MongoDB.
