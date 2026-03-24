@@ -13,9 +13,10 @@ Use this skill after Vigilante has already opened a pull request and a follow-up
 2. Read repository instructions that affect the touched files before editing.
 3. Comment on the issue when conflict resolution begins and again for meaningful milestones or failures.
 4. Resolve only the conflicts needed to complete the rebase cleanly, commit by commit, while preserving the original issue specification and branch intent.
-5. Rerun the requested validation after the rebase succeeds.
-6. Push the updated branch back to GitHub.
-7. Report the final result clearly on the issue, including any remaining blocker if the conflicts cannot be resolved safely.
+5. If the rebase fails, post-rebase validation fails, or the current session state is unclear, inspect `vigilante logs --repo <owner/name> --issue <n>` before retrying so the persisted session transcript becomes the factual source for the next safe action.
+6. After inspecting the log, either continue with the smallest safe fix, rerun the requested validation, or report a blocker on the issue when the transcript shows the branch should not be retried automatically.
+7. Push the updated branch back to GitHub after the rebase and requested validation succeed.
+8. Report the final result clearly on the issue, including any remaining blocker if the conflicts cannot be resolved safely.
 
 ## Guardrails
 - Stay inside the provided worktree.
