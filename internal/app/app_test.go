@@ -3709,6 +3709,7 @@ func TestScanOnceSelectsEligibleIssueAndPersistsSession(t *testing.T) {
 					"Vigilante launched this implementation session in `" + worktreePath + "`.",
 					"Branch: `" + branch + "`.",
 					"Current stage: handing the issue off to the configured coding agent (`Codex`) for investigation and implementation.",
+					"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
 				},
 				Tagline: "Make it simple, but significant.",
 			}): "ok",
@@ -4282,6 +4283,7 @@ func TestScanOnceMaintainedIssueDoesNotConsumeOnlyDispatchSlot(t *testing.T) {
 					"Vigilante launched this implementation session in `" + worktreePath2 + "`.",
 					"Branch: `" + branch2 + "`.",
 					"Current stage: handing the issue off to the configured coding agent (`Codex`) for investigation and implementation.",
+					"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
 				},
 				Tagline: "Make it simple, but significant.",
 			}): "ok",
@@ -6087,6 +6089,7 @@ func TestScanOnceAutoRestartsStaleSessionAfterDelay(t *testing.T) {
 					"Vigilante launched this implementation session in `" + worktreePath + "`.",
 					"Branch: `" + branch + "`.",
 					"Current stage: handing the issue off to the configured coding agent (`Codex`) for investigation and implementation.",
+					"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
 				},
 				Tagline: "Make it simple, but significant.",
 			}): "ok",
@@ -6426,6 +6429,7 @@ func sessionStartCommentCommand(repo string, issueNumber int, worktreePath strin
 		"Vigilante launched this implementation session in `" + worktreePath + "`.",
 		"Branch: `" + session.Branch + "`.",
 		"Current stage: handing the issue off to the configured coding agent (`Codex`) for investigation and implementation.",
+		"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
 	}
 	if session.ReusedRemoteBranch != "" {
 		base := session.BaseBranch
@@ -6436,6 +6440,7 @@ func sessionStartCommentCommand(repo string, issueNumber int, worktreePath strin
 			"Vigilante launched this implementation session in `" + worktreePath + "` from existing remote branch `origin/" + session.ReusedRemoteBranch + "`.",
 			"Diff summary against `" + base + "`: " + session.BranchDiffSummary,
 			"Current stage: handing the issue off to the configured coding agent (`Codex`) to continue the existing implementation.",
+			"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
 		}
 	}
 	return "gh issue comment --repo " + repo + " " + fmt.Sprintf("%d", issueNumber) + " --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
