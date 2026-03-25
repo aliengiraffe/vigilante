@@ -169,6 +169,7 @@ func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue 
 		"Use the same GitHub comment structure for every non-terminal milestone comment: a short header with the current stage and optional emoji, a 10-cell progress bar with percentage, an `ETA: ~N minutes` line, 1-3 concise bullets covering what just happened and what is next, and an optional short playful quote or tagline.",
 		"Use the issue as the source of truth for the requested behavior and keep the implementation minimal.",
 	)
+	lines = append(lines, commitIdentityPolicyLines()...)
 	if body := strings.TrimSpace(session.IssueBody); body != "" {
 		lines = append(lines,
 			"Full issue body:",
@@ -437,6 +438,9 @@ func BuildConflictResolutionPromptForRuntime(runtime string, target state.WatchT
 		fmt.Sprintf("GitHub mergeability: mergeable=%s mergeStateStatus=%s", fallbackPromptText(pr.Mergeable, "UNKNOWN"), fallbackPromptText(pr.MergeStateStatus, "UNKNOWN")),
 		"Conflict-resolution workflow: rebase the branch onto the latest base branch if that has not already started; if a rebase is already in progress, continue it from the current stopped commit.",
 		"Work through the rebase commit by commit. Preserve the meaning of each existing issue-branch commit and keep the original issue specification authoritative.",
+	)
+	lines = append(lines, commitIdentityPolicyLines()...)
+	lines = append(lines,
 		"If the rebase fails, post-rebase validation fails, or the current session state is unclear, inspect `vigilante logs --repo <owner/name> --issue <n>` before retrying so the session transcript guides the next safe action.",
 		"Do not silently discard commits or issue-specific behavior just to get a clean merge. Prefer the smallest safe conflict fix.",
 		"Use `vigilante gh issue comment` for progress and failures, rerun `go test ./...` after conflict resolution succeeds, and push the updated branch with `vigilante git push` when finished.",
@@ -495,6 +499,9 @@ func BuildCIRemediationPromptForRuntime(runtime string, target state.WatchTarget
 	}
 	lines = append(lines,
 		"Investigate the failing CI checks, reproduce the problem locally when practical, and make the minimal code or configuration fix needed to get the PR green again.",
+	)
+	lines = append(lines, commitIdentityPolicyLines()...)
+	lines = append(lines,
 		"Use `vigilante gh issue comment` for progress updates and blockers, push any successful fix to the existing PR branch with `vigilante git push`, and do not open a new pull request.",
 		"If GitHub exposes a failing check summary or log URL during your investigation, use it. At minimum, work from the failing check identifiers listed above.",
 		"If you cannot fix the failure safely, leave a concise GitHub comment explaining the blocker and exit with a non-zero status so Vigilante can stop and hand off to a human.",
@@ -509,6 +516,13 @@ func runtimeUsesInlineSkillHeader(runtime string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func commitIdentityPolicyLines() []string {
+	return []string{
+		"Any commit, amend, rebase rewrite, or conflict-resolution commit must preserve the user's existing git author, committer, and signing configuration. Commit on behalf of the user and do not overwrite `git config` with a coding-agent identity.",
+		"Do not add `Co-authored by:` trailers or any other agent attribution for Codex, Claude, Gemini, or similar coding-agent identities.",
 	}
 }
 
