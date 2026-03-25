@@ -54,6 +54,8 @@ Implement one GitHub issue from Vigilante dispatch through validated code change
 
 6. Commit, push, and open a pull request
 - Commit only issue-relevant changes in the assigned branch.
+- Any commit or amend must preserve the user's existing git author, committer, and signing configuration. Commit on behalf of the user and do not overwrite `git config` with a coding-agent identity.
+- Do not add `Co-authored by:` trailers or any other agent attribution for Codex, Claude, Gemini, or similar coding-agent identities.
 - Push the assigned branch to the remote.
 - Open a pull request targeting the repository default branch unless repository instructions say otherwise.
 

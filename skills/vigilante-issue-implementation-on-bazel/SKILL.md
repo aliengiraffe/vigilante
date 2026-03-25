@@ -12,5 +12,7 @@ description: Implement a GitHub issue end-to-end when Vigilante dispatches work 
 
 ## Workflow
 - Follow the base `vigilante-issue-implementation-on-monorepo` workflow for issue comments, validation, push, and PR creation.
+- Any commit or amend must preserve the user's existing git author, committer, and signing configuration. Commit on behalf of the user and do not overwrite `git config` with a coding-agent identity.
+- Do not add `Co-authored by:` trailers or any other agent attribution for Codex, Claude, Gemini, or similar coding-agent identities.
 - Use Bazel-native target commands when they exist and match the touched code.
 - Keep service startup scoped to the assigned worktree and only for implementation or test dependencies.
