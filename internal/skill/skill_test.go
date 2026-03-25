@@ -134,7 +134,7 @@ func TestBuildIssuePrompt(t *testing.T) {
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 	prompt := BuildIssuePrompt(target, issue, session)
-	for _, text := range []string{"Use the `vigilante-issue-implementation` skill", "Detected repo shape: traditional", `Repo process context JSON: {"shape":"traditional"}`, "Selected issue implementation skill: vigilante-issue-implementation", "Issue: #12 - Fix bug", "Worktree path: /tmp/worktree", "vigilante gh issue comment", "vigilante git push", "vigilante gh pr create", "Closes #12", "Coding Agent Launched: Codex", "10-cell progress bar", "ETA: ~N minutes", "preserve the user's existing git author, committer, and signing configuration", "Do not add `Co-authored by:` trailers"} {
+	for _, text := range []string{"Use the `vigilante-issue-implementation` skill", "Detected repo shape: traditional", `Repo process context JSON: {"shape":"traditional"}`, "Selected issue implementation skill: vigilante-issue-implementation", "Issue: #12 - Fix bug", "Worktree path: /tmp/worktree", "vigilante gh issue comment", "vigilante git push", "vigilante gh pr create", "Closes #12", "Coding Agent Launched: Codex", "@vigilanteai resume", "@vigilanteai cleanup", "issue-comment commands rather than shell commands", "10-cell progress bar", "ETA: ~N minutes", "preserve the user's existing git author, committer, and signing configuration", "Do not add `Co-authored by:` trailers"} {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q: %s", text, prompt)
 		}
@@ -666,7 +666,7 @@ func TestBuildIssuePromptForClaudeInlinesSkillInstructions(t *testing.T) {
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "claude"}
 	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
-	for _, text := range []string{"Follow these `vigilante-issue-implementation` skill instructions directly", "Coding Agent Launched: Claude Code", "Issue: #12 - Fix bug"} {
+	for _, text := range []string{"Follow these `vigilante-issue-implementation` skill instructions directly", "Coding Agent Launched: Claude Code", "@vigilanteai resume", "@vigilanteai cleanup", "Issue: #12 - Fix bug"} {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q: %s", text, prompt)
 		}
@@ -678,7 +678,7 @@ func TestBuildIssuePromptForGeminiInlinesSkillInstructions(t *testing.T) {
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "gemini"}
 	prompt := BuildIssuePromptForRuntime(RuntimeGemini, target, issue, session)
-	for _, text := range []string{"Follow these `vigilante-issue-implementation` skill instructions directly", "Coding Agent Launched: Gemini CLI", "Issue: #12 - Fix bug"} {
+	for _, text := range []string{"Follow these `vigilante-issue-implementation` skill instructions directly", "Coding Agent Launched: Gemini CLI", "@vigilanteai resume", "@vigilanteai cleanup", "Issue: #12 - Fix bug"} {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q: %s", text, prompt)
 		}
