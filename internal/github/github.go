@@ -30,6 +30,7 @@ type PullRequest struct {
 	Body              string            `json:"body"`
 	URL               string            `json:"url"`
 	State             string            `json:"state"`
+	BaseRefName       string            `json:"baseRefName"`
 	MergedAt          *time.Time        `json:"mergedAt"`
 	Labels            []Label           `json:"labels"`
 	IsDraft           bool              `json:"isDraft"`
@@ -612,7 +613,35 @@ func GetPullRequestDetails(ctx context.Context, runner environment.Runner, repo 
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &pr); err != nil {
 		return nil, fmt.Errorf("parse gh pr view output: %w", err)
 	}
+	if baseRefName, err := pullRequestBaseRefName(ctx, runner, repo, number); err == nil {
+		pr.BaseRefName = baseRefName
+	}
 	return &pr, nil
+}
+
+func pullRequestBaseRefName(ctx context.Context, runner environment.Runner, repo string, number int) (string, error) {
+	output, err := runner.Run(
+		ctx,
+		"",
+		"gh",
+		"pr",
+		"view",
+		"--repo",
+		repo,
+		fmt.Sprintf("%d", number),
+		"--json",
+		"baseRefName",
+	)
+	if err != nil {
+		return "", err
+	}
+	var payload struct {
+		BaseRefName string `json:"baseRefName"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
+		return "", fmt.Errorf("parse gh pr base ref output: %w", err)
+	}
+	return strings.TrimSpace(payload.BaseRefName), nil
 }
 
 func MergePullRequestSquash(ctx context.Context, runner environment.Runner, repo string, number int) error {

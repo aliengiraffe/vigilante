@@ -73,11 +73,9 @@ func Discover(ctx context.Context, runner environment.Runner, path string) (Info
 		return Info{}, err
 	}
 
-	branch := "main"
-	if remoteHead, err := runner.Run(ctx, absPath, "git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
-		branch = strings.TrimPrefix(strings.TrimSpace(remoteHead), "origin/")
-	} else if current, err := runner.Run(ctx, absPath, "git", "branch", "--show-current"); err == nil && strings.TrimSpace(current) != "" {
-		branch = strings.TrimSpace(current)
+	branch, err := ResolveDefaultBranch(ctx, runner, absPath, "")
+	if err != nil {
+		return Info{}, err
 	}
 
 	return Info{
@@ -86,6 +84,78 @@ func Discover(ctx context.Context, runner environment.Runner, path string) (Info
 		Branch:         branch,
 		Classification: Classify(absPath),
 	}, nil
+}
+
+func ResolveBranch(ctx context.Context, runner environment.Runner, repoPath string, branchMode string, branch string) (string, error) {
+	switch strings.TrimSpace(branchMode) {
+	case "", "pinned":
+		branch := strings.TrimSpace(branch)
+		if branch == "" {
+			return "", errors.New("pinned branch is not configured")
+		}
+		exists, err := remoteBranchExists(ctx, runner, repoPath, branch)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			return "", fmt.Errorf("pinned base branch %q was not found on origin", branch)
+		}
+		return branch, nil
+	case "auto":
+		return ResolveDefaultBranch(ctx, runner, repoPath, branch)
+	default:
+		return "", fmt.Errorf("unsupported branch mode %q", branchMode)
+	}
+}
+
+func ResolveDefaultBranch(ctx context.Context, runner environment.Runner, repoPath string, fallback string) (string, error) {
+	if branch, err := remoteHEADBranch(ctx, runner, repoPath); err == nil && branch != "" {
+		return branch, nil
+	}
+	if branch, err := localRemoteHEADBranch(ctx, runner, repoPath); err == nil && branch != "" {
+		return branch, nil
+	}
+	fallback = strings.TrimSpace(fallback)
+	if fallback != "" {
+		return fallback, nil
+	}
+	if current, err := runner.Run(ctx, repoPath, "git", "branch", "--show-current"); err == nil && strings.TrimSpace(current) != "" {
+		return strings.TrimSpace(current), nil
+	}
+	return "", errors.New("could not resolve repository default branch")
+}
+
+func remoteHEADBranch(ctx context.Context, runner environment.Runner, repoPath string) (string, error) {
+	output, err := runner.Run(ctx, repoPath, "git", "ls-remote", "--symref", "origin", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(output, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) >= 3 && fields[0] == "ref:" && fields[2] == "HEAD" {
+			return strings.TrimPrefix(fields[1], "refs/heads/"), nil
+		}
+	}
+	return "", errors.New("origin HEAD did not report a branch")
+}
+
+func localRemoteHEADBranch(ctx context.Context, runner environment.Runner, repoPath string) (string, error) {
+	output, err := runner.Run(ctx, repoPath, "git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimPrefix(strings.TrimSpace(output), "origin/"), nil
+}
+
+func remoteBranchExists(ctx context.Context, runner environment.Runner, repoPath string, branch string) (bool, error) {
+	_, err := runner.Run(ctx, repoPath, "git", "ls-remote", "--exit-code", "--heads", "origin", branch)
+	if err == nil {
+		return true, nil
+	}
+	if strings.Contains(err.Error(), "exit status 1") || strings.Contains(err.Error(), "exit status 2") {
+		return false, nil
+	}
+	return false, err
 }
 
 func Classify(path string) Classification {

@@ -18,6 +18,7 @@ import (
 type WatchTarget struct {
 	Path           string              `json:"path"`
 	Repo           string              `json:"repo"`
+	BranchMode     BranchMode          `json:"branch_mode,omitempty"`
 	Branch         string              `json:"branch"`
 	Classification repo.Classification `json:"classification,omitempty"`
 	Provider       string              `json:"provider,omitempty"`
@@ -27,6 +28,22 @@ type WatchTarget struct {
 	DaemonEnabled  bool                `json:"daemon_enabled"`
 	LastScanAt     string              `json:"last_scan_at,omitempty"`
 	AddedAt        string              `json:"added_at,omitempty"`
+}
+
+type BranchMode string
+
+const (
+	BranchModeAuto   BranchMode = "auto"
+	BranchModePinned BranchMode = "pinned"
+)
+
+func (t WatchTarget) EffectiveBranchMode() BranchMode {
+	switch t.BranchMode {
+	case BranchModeAuto:
+		return BranchModeAuto
+	default:
+		return BranchModePinned
+	}
 }
 
 const DefaultMaxParallelSessions = 0

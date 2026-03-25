@@ -420,9 +420,9 @@ func TestStatusCommandShowsWatchedRepositories(t *testing.T) {
 	output := stdout.String()
 	for _, want := range []string{
 		"Watched repositories (2)",
-		"owner/alpha (branch main, provider codex, assignee me, max 2, 1 active, 1 blocked, last scan 2026-03-19 11:55 UTC)",
+		"owner/alpha (branch main (pinned), provider codex, assignee me, max 2, 1 active, 1 blocked, last scan 2026-03-19 11:55 UTC)",
 		"path: /repos/alpha",
-		"owner/beta (branch develop, provider claude, labels to-do,bug, idle, last scan 2026-03-19 11:40 UTC)",
+		"owner/beta (branch develop (pinned), provider claude, labels to-do,bug, idle, last scan 2026-03-19 11:40 UTC)",
 		"path: /repos/beta",
 	} {
 		if !strings.Contains(output, want) {

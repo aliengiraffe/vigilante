@@ -741,6 +741,7 @@ func TestSyncSessionIssueLabelsUsesPullRequestReviewState(t *testing.T) {
 			"gh pr view --repo owner/repo 17 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": `{"number":17,"title":"Demo PR","body":"PR body","url":"https://github.com/owner/repo/pull/17","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}]}`,
 			"gh api repos/owner/repo/issues/7": `{"labels":[{"name":"vigilante:ready-for-review"},{"name":"vigilante:needs-review"}]}`,
 			"gh issue edit --repo owner/repo 7 --add-label vigilante:awaiting-user-validation --remove-label vigilante:needs-review --remove-label vigilante:ready-for-review": "ok",
+			"gh issue edit --repo owner/repo 7 --remove-label vigilante:needs-review":                                                                                          "ok",
 		},
 	}
 
@@ -4042,6 +4043,7 @@ func TestScanOnceReusesExistingRemoteIssueBranchAndPersistsDiffContext(t *testin
 			"gh auth status":          "ok",
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[{"name":"to-do"}]}]`,
+			"git ls-remote --exit-code --heads origin main":                                                                 "abcdef1234567890\trefs/heads/main\n",
 			"git worktree prune":                              "ok",
 			"git fetch origin " + branch + ":" + branch:       "ok",
 			"git worktree add " + worktreePath + " " + branch: "ok",
@@ -4100,6 +4102,7 @@ func TestScanOnceBlocksIssueWhenReusedRemoteBranchDiffAnalysisFails(t *testing.T
 			"gh auth status":          "ok",
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[{"name":"to-do"}]}]`,
+			"git ls-remote --exit-code --heads origin main":                                                                 "abcdef1234567890\trefs/heads/main\n",
 			"git worktree prune":                              "ok",
 			"git fetch origin " + branch + ":" + branch:       "ok",
 			"git worktree add " + worktreePath + " " + branch: "ok",
@@ -6381,6 +6384,7 @@ func TestScanOnceSkipsDuplicateConflictResolutionDispatchWhenPRFingerprintIsUnch
 	if err != nil {
 		t.Fatal(err)
 	}
+	sessions[0].BaseBranch = "main"
 	updatePullRequestMaintenanceSnapshot(&sessions[0], ghcli.PullRequest{
 		Number:            31,
 		Title:             "Test PR",
@@ -6473,10 +6477,11 @@ func failedResumeSession(session state.Session) state.Session {
 
 func freshBaseBranchOutputs(repoPath string, branch string) map[string]string {
 	return map[string]string{
-		"git fetch origin " + branch:                  "ok",
-		"git worktree list --porcelain":               "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/" + branch + "\n",
-		"git status --porcelain --untracked-files=no": "",
-		"git merge --ff-only origin/" + branch:        "Already up to date.\n",
+		"git ls-remote --exit-code --heads origin " + branch: "abcdef1234567890\trefs/heads/" + branch + "\n",
+		"git fetch origin " + branch:                         "ok",
+		"git worktree list --porcelain":                      "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/" + branch + "\n",
+		"git status --porcelain --untracked-files=no":        "",
+		"git merge --ff-only origin/" + branch:               "Already up to date.\n",
 	}
 }
 

@@ -227,7 +227,7 @@ func watchedRepoStatuses(targets []state.WatchTarget, sessions []state.Session) 
 func formatWatchTargetRow(status watchedRepoStatus) string {
 	target := status.Target
 	fields := []string{
-		fmt.Sprintf("branch %s", valueOrUnknown(target.Branch)),
+		fmt.Sprintf("branch %s (%s)", valueOrUnknown(target.Branch), target.EffectiveBranchMode()),
 		fmt.Sprintf("provider %s", valueOrUnknown(target.Provider)),
 	}
 	if assignee := strings.TrimSpace(target.Assignee); assignee != "" {
