@@ -293,6 +293,16 @@ Expected behavior:
 - exits successfully when the service is not installed so operators and scripts can inspect the reported state
 - fails with a clear error on unsupported operating systems or when the underlying service manager cannot be queried
 
+### `vigilante logs [--repo <owner/name>] [--issue <n>]`
+
+Inspect local log files under `~/.vigilante/logs/`.
+
+Expected behavior:
+
+- `vigilante logs` lists the available daemon and per-issue session logs so an operator can see which local evidence exists before choosing a recovery action
+- `vigilante logs --repo <owner/name> --issue <n>` prints the log for one issue session so an operator can inspect the latest local execution details directly
+- logs complement `vigilante list`, `vigilante status`, and GitHub issue comments; they do not replace session state or the remote audit trail
+
 ### `vigilante service restart`
 
 Restart the installed Vigilante user service through the operating system service manager.
@@ -549,6 +559,19 @@ Notes:
 - A blocked session is eligible for automatic local cleanup only after there have been no qualifying user comments on the issue, no session updates, and no worktree updates for longer than the configured timeout.
 - This inactivity cleanup is conservative: it clears local blocked-session artifacts so the issue can be redispatched later, but it does not delete remote pull requests or remote branches automatically.
 - Stale running implementation sessions use a separate recovery path: after Vigilante first confirms the run is stale, it waits 20 minutes before attempting an automatic fresh restart, persists the restart attempt count in session state, and stops after 3 automatic restarts until a human intervenes.
+- When an issue looks blocked or the daemon appears unhealthy, inspect `vigilante logs` alongside `sessions.json`, `vigilante list`, `vigilante status`, and GitHub issue comments so recovery decisions use both local state and remote context.
+
+### Operator Log Triage
+
+Use logs to decide which recovery command fits the evidence already recorded locally.
+
+1. Run `vigilante list --running` or `vigilante status` first to confirm whether the problem is scoped to one issue or the daemon as a whole.
+2. Run `vigilante logs` with no flags when the daemon is stalled, scans are not happening, multiple repositories look affected, or you need to identify the relevant local log file quickly.
+3. Run `vigilante logs --repo <owner/name> --issue <n>` when one issue is blocked, a resume attempt failed, or you need to inspect the latest session-specific failure before deciding what to do next.
+4. If the per-issue log shows the agent can continue from the existing worktree and session state, prefer `vigilante resume --repo <owner/name> --issue <n>`.
+5. If the per-issue log shows corrupted local state, a dead worktree, or a failed run that should be restarted cleanly, use `vigilante redispatch --repo <owner/name> --issue <n>`.
+6. If the log shows the local session artifacts are stale and should be removed without starting new work immediately, use `vigilante cleanup --repo <owner/name> --issue <n>` or repo-wide cleanup as appropriate.
+7. If the daemon log points to service-manager failures, scan-loop problems, or machine-level issues, troubleshoot the daemon with `vigilante service restart`, `vigilante setup -d`, or a foreground `vigilante daemon run --once` check before touching issue sessions.
 
 Suggested `watchlist.json` shape:
 
