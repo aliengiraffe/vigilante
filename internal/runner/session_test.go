@@ -25,7 +25,7 @@ import (
 func TestRunIssueSessionSuccess(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
-	runner := testutil.FakeRunner{
+	baseRunner := testutil.FakeRunner{
 		Outputs: map[string]string{
 			"codex --version": "codex 0.114.0",
 			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
@@ -44,10 +44,16 @@ func TestRunIssueSessionSuccess(t *testing.T) {
 			issuePromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", "vigilante/issue-7"):     "done",
 		},
 	}
-	env := &environment.Environment{OS: "darwin", Runner: runner}
 	store := state.NewStore()
 	if err := store.EnsureLayout(); err != nil {
 		t.Fatal(err)
+	}
+	env := &environment.Environment{
+		OS: "darwin",
+		Runner: environment.LoggingRunner{
+			Base:      baseRunner,
+			AccessLog: store.AppendAccessLogEntry,
+		},
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
 	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
@@ -60,6 +66,17 @@ func TestRunIssueSessionSuccess(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "session succeeded") || !strings.Contains(string(data), "done") {
 		t.Fatalf("unexpected log: %s", string(data))
+	}
+	accessLog, err := os.ReadFile(store.AccessLogPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(accessLog)
+	if !strings.Contains(text, `"context":"session"`) {
+		t.Fatalf("expected session context in access log, got %s", text)
+	}
+	if !strings.Contains(text, `"repo":"owner/repo"`) || !strings.Contains(text, `"issue_number":7`) {
+		t.Fatalf("expected repo and issue metadata in access log, got %s", text)
 	}
 }
 

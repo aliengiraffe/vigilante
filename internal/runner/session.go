@@ -21,6 +21,13 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 	if session.Repo == "" {
 		session.Repo = target.Repo
 	}
+	ctx = environment.WithAccessLogContext(ctx, environment.AccessLogContext{
+		ExecutionContext: "session",
+		Repo:             session.Repo,
+		IssueNumber:      issue.Number,
+		Branch:           session.Branch,
+		WorktreePath:     session.WorktreePath,
+	})
 	logPath := store.SessionLogPath(session.Repo, issue.Number)
 	selectedProvider, err := provider.Resolve(session.Provider)
 	if err != nil {
@@ -187,6 +194,13 @@ func RunConflictResolutionSession(ctx context.Context, env *environment.Environm
 	if repoSlug == "" {
 		repoSlug = target.Repo
 	}
+	ctx = environment.WithAccessLogContext(ctx, environment.AccessLogContext{
+		ExecutionContext: "maintenance",
+		Repo:             repoSlug,
+		IssueNumber:      session.IssueNumber,
+		Branch:           session.Branch,
+		WorktreePath:     session.WorktreePath,
+	})
 	logPath := store.SessionLogPath(repoSlug, session.IssueNumber)
 	selectedProvider, err := provider.Resolve(session.Provider)
 	if err != nil {
@@ -234,6 +248,13 @@ func RunCIRemediationSession(ctx context.Context, env *environment.Environment, 
 	if repoSlug == "" {
 		repoSlug = target.Repo
 	}
+	ctx = environment.WithAccessLogContext(ctx, environment.AccessLogContext{
+		ExecutionContext: "maintenance",
+		Repo:             repoSlug,
+		IssueNumber:      session.IssueNumber,
+		Branch:           session.Branch,
+		WorktreePath:     session.WorktreePath,
+	})
 	logPath := store.SessionLogPath(repoSlug, session.IssueNumber)
 	selectedProvider, err := provider.Resolve(session.Provider)
 	if err != nil {

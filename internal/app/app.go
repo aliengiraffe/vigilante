@@ -138,6 +138,7 @@ func New() *App {
 			Runner: environment.LoggingRunner{
 				Base:             environment.ExecRunner{},
 				CaptureCommand:   telemetry.CaptureInternalCommand,
+				AccessLog:        store.AppendAccessLogEntry,
 				Logf:             store.AppendDaemonLog,
 				LogSuccessOutput: os.Getenv("VIGILANTE_DEBUG_COMMAND_OUTPUT") == "1",
 			},
@@ -577,19 +578,31 @@ func (a *App) runCompletionCommand(args []string) error {
 func (a *App) runLogsCommand(args []string) error {
 	fs := flag.NewFlagSet("logs", flag.ContinueOnError)
 	configureFlagSet(fs, func(w io.Writer) {
-		fmt.Fprintln(w, "usage: vigilante logs [--repo <owner/name>] [--issue <n>]")
+		fmt.Fprintln(w, "usage: vigilante logs [--access] [--repo <owner/name>] [--issue <n>]")
 		fmt.Fprintln(w)
-		fmt.Fprintln(w, "List session log files or show a specific session log.")
+		fmt.Fprintln(w, "List daemon, access, and session log files or show a specific log.")
 		fmt.Fprintln(w)
 		fs.SetOutput(w)
 		fs.PrintDefaults()
 	})
+	accessFlag := fs.Bool("access", false, "show the structured access log")
 	repoFlag := fs.String("repo", "", "repository slug")
 	issueFlag := fs.Int("issue", 0, "issue number")
 	if err := parseFlagSet(fs, args, a.stdout); err != nil {
 		if errors.Is(err, errHelpHandled) {
 			return nil
 		}
+		return err
+	}
+	if *accessFlag {
+		if *repoFlag != "" || *issueFlag > 0 {
+			return errors.New("--access cannot be combined with --repo or --issue")
+		}
+		content, err := os.ReadFile(a.state.AccessLogPath())
+		if err != nil {
+			return errors.New("no access log found")
+		}
+		_, err = fmt.Fprint(a.stdout, string(content))
 		return err
 	}
 
@@ -4463,7 +4476,7 @@ func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  vigilante unwatch <path>")
 	fmt.Fprintln(w, "  vigilante list [--blocked | --running]")
 	fmt.Fprintln(w, "  vigilante status")
-	fmt.Fprintln(w, "  vigilante logs [--repo <owner/name>] [--issue <n>]")
+	fmt.Fprintln(w, "  vigilante logs [--access] [--repo <owner/name>] [--issue <n>]")
 	fmt.Fprintln(w, "  vigilante cleanup --repo <owner/name> [--issue <n>]")
 	fmt.Fprintln(w, "  vigilante cleanup --all")
 	fmt.Fprintln(w, "  vigilante redispatch --repo <owner/name> --issue <n>")

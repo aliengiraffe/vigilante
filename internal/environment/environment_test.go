@@ -130,6 +130,73 @@ func TestLoggingRunnerEmitsTelemetryForTargetedInternalCommandsOnly(t *testing.T
 	}
 }
 
+func TestLoggingRunnerAccessLogDefaultsToDaemonContext(t *testing.T) {
+	var entries []AccessLogEntry
+	runner := LoggingRunner{
+		Base: testutil.FakeRunner{
+			Outputs: map[string]string{
+				"gh api /user -H Authorization: Bearer super-secret --jq .login": "octocat\n",
+			},
+		},
+		AccessLog: func(entry AccessLogEntry) {
+			entries = append(entries, entry)
+		},
+	}
+
+	if _, err := runner.Run(context.Background(), "/tmp/repo", "gh", "api", "/user", "-H", "Authorization: Bearer super-secret", "--jq", ".login"); err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 access log entry, got %d", len(entries))
+	}
+	if got, want := entries[0].ExecutionContext, "daemon"; got != want {
+		t.Fatalf("context = %q, want %q", got, want)
+	}
+	if got := strings.Join(entries[0].Argv, " "); strings.Contains(got, "super-secret") {
+		t.Fatalf("expected sanitized argv, got %q", got)
+	}
+	if got := strings.Join(entries[0].Argv, " "); !strings.Contains(got, "-H <redacted>") {
+		t.Fatalf("expected redacted header, got %q", got)
+	}
+}
+
+func TestLoggingRunnerAccessLogIncludesSessionContext(t *testing.T) {
+	var entries []AccessLogEntry
+	runner := LoggingRunner{
+		Base: testutil.FakeRunner{
+			Outputs: map[string]string{
+				"git status --short": "M README.md\n",
+			},
+		},
+		AccessLog: func(entry AccessLogEntry) {
+			entries = append(entries, entry)
+		},
+	}
+	ctx := WithAccessLogContext(context.Background(), AccessLogContext{
+		ExecutionContext: "session",
+		Repo:             "owner/repo",
+		IssueNumber:      7,
+		Branch:           "vigilante/issue-7",
+		WorktreePath:     "/tmp/worktree",
+	})
+
+	if _, err := runner.Run(ctx, "/tmp/worktree", "git", "status", "--short"); err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 access log entry, got %d", len(entries))
+	}
+	if got, want := entries[0].ExecutionContext, "session"; got != want {
+		t.Fatalf("context = %q, want %q", got, want)
+	}
+	if got, want := entries[0].Repo, "owner/repo"; got != want {
+		t.Fatalf("repo = %q, want %q", got, want)
+	}
+	if got, want := entries[0].IssueNumber, 7; got != want {
+		t.Fatalf("issue = %d, want %d", got, want)
+	}
+}
+
 func sprintf(format string, args ...any) string {
 	return fmt.Sprintf(format, args...)
 }

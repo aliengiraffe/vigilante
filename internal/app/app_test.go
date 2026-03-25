@@ -6576,6 +6576,9 @@ func TestLogsCommandListsFiles(t *testing.T) {
 	if err := os.MkdirAll(logsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(logsDir, "access.jsonl"), []byte("{\"context\":\"daemon\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(logsDir, "vigilante.log"), []byte("daemon log"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -6596,8 +6599,37 @@ func TestLogsCommandListsFiles(t *testing.T) {
 	if !strings.Contains(output, "owner-repo-issue-42.log") {
 		t.Fatalf("expected output to list session log, got %q", output)
 	}
+	if !strings.Contains(output, "access.jsonl") {
+		t.Fatalf("expected output to list access log, got %q", output)
+	}
 	if !strings.Contains(output, "vigilante.log") {
 		t.Fatalf("expected output to list daemon log, got %q", output)
+	}
+}
+
+func TestLogsCommandShowsAccessLog(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	logsDir := filepath.Join(home, ".vigilante", "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logContent := "{\"context\":\"daemon\",\"tool\":\"gh\"}\n"
+	if err := os.WriteFile(filepath.Join(logsDir, "access.jsonl"), []byte(logContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+
+	exitCode := app.Run(context.Background(), []string{"logs", "--access"})
+	if exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d", exitCode)
+	}
+	if stdout.String() != logContent {
+		t.Fatalf("expected access log content %q, got %q", logContent, stdout.String())
 	}
 }
 

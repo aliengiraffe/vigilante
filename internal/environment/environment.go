@@ -20,6 +20,7 @@ type ExecRunner struct{}
 type LoggingRunner struct {
 	Base             Runner
 	CaptureCommand   func(context.Context, string, []string, int, int64)
+	AccessLog        func(AccessLogEntry)
 	Logf             func(format string, args ...any)
 	LogSuccessOutput bool
 }
@@ -54,12 +55,13 @@ func (r LoggingRunner) Run(ctx context.Context, dir string, name string, args ..
 		r.Logf("command start dir=%q cmd=%s", dir, commandString(name, args...))
 	}
 	output, err := r.Base.Run(ctx, dir, name, args...)
-	exitCode := 0
-	if err != nil {
-		exitCode = 1
-	}
+	endedAt := time.Now().UTC()
+	exitCode := exitCodeForError(err)
 	if r.CaptureCommand != nil {
-		r.CaptureCommand(ctx, name, args, exitCode, time.Since(startedAt).Milliseconds())
+		r.CaptureCommand(ctx, name, args, exitCode, endedAt.Sub(startedAt).Milliseconds())
+	}
+	if r.AccessLog != nil {
+		r.AccessLog(buildAccessLogEntry(ctx, dir, name, args, startedAt, endedAt, err))
 	}
 	if r.Logf != nil {
 		if err != nil {

@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nicobistolfi/vigilante/internal/environment"
 	"github.com/nicobistolfi/vigilante/internal/logtime"
 	"github.com/nicobistolfi/vigilante/internal/repo"
 )
@@ -208,6 +209,10 @@ func (s *Store) DaemonLogPath() string {
 	return filepath.Join(s.LogsDir(), "vigilante.log")
 }
 
+func (s *Store) AccessLogPath() string {
+	return filepath.Join(s.LogsDir(), "access.jsonl")
+}
+
 var invalidSessionLogNameChars = regexp.MustCompile(`[^A-Za-z0-9]+`)
 
 func (s *Store) SessionLogPath(repoSlug string, issueNumber int) string {
@@ -377,6 +382,10 @@ func (s *Store) AppendDaemonLog(format string, args ...any) {
 	appendLogFile(s.DaemonLogPath(), fmt.Sprintf(format, args...))
 }
 
+func (s *Store) AppendAccessLogEntry(value environment.AccessLogEntry) {
+	appendJSONLine(s.AccessLogPath(), value)
+}
+
 func appendLogFile(path string, message string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return
@@ -387,6 +396,22 @@ func appendLogFile(path string, message string) {
 	}
 	defer f.Close()
 	_, _ = fmt.Fprintf(f, "[%s] %s\n", logtime.FormatLocal(time.Now()), strings.TrimSpace(message))
+}
+
+func appendJSONLine(path string, value any) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	_, _ = f.Write(append(data, '\n'))
 }
 
 func (s *Store) TryWithScanLock(fn func() error) (bool, error) {
