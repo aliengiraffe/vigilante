@@ -295,13 +295,14 @@ Expected behavior:
 - exits successfully when the service is not installed so operators and scripts can inspect the reported state
 - fails with a clear error on unsupported operating systems or when the underlying service manager cannot be queried
 
-### `vigilante logs [--repo <owner/name>] [--issue <n>]`
+### `vigilante logs [--access] [--repo <owner/name>] [--issue <n>]`
 
 Inspect local log files under `~/.vigilante/logs/`.
 
 Expected behavior:
 
-- `vigilante logs` lists the available daemon and per-issue session logs so an operator can see which local evidence exists before choosing a recovery action
+- `vigilante logs` lists the available daemon, access, and per-issue session logs so an operator can see which local evidence exists before choosing a recovery action
+- `vigilante logs --access` prints the structured access log at `~/.vigilante/logs/access.jsonl`, where each JSON line records one subprocess execution with timing, execution context, repo or issue metadata when available, sanitized argv, and exit status
 - `vigilante logs --repo <owner/name> --issue <n>` prints the log for one issue session so an operator can inspect the latest local execution details directly
 - logs complement `vigilante list`, `vigilante status`, and GitHub issue comments; they do not replace session state or the remote audit trail
 
