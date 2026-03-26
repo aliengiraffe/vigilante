@@ -2111,7 +2111,7 @@ func (a *App) hasPendingIterationComment(ctx context.Context, session *state.Ses
 	if err != nil {
 		return false, err
 	}
-	comments, err := ghcli.ListIssueCommentsForPolling(ctx, a.env.Runner, session.Repo, session.IssueNumber, "iteration_gate", a.state.AppendDaemonLog)
+	comments, err := ghcli.ListIssueCommentsForPolling(ctx, a.env.Runner, session.Repo, session.IssueNumber, "iteration_gate", a.logger)
 	if err != nil {
 		return false, err
 	}
