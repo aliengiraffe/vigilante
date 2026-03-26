@@ -2090,12 +2090,37 @@ func (a *App) tryAutoSquashMerge(ctx context.Context, session *state.Session, pr
 		return nil
 	}
 
+	if pending, checkErr := a.hasPendingIterationComment(ctx, session, issueCache); checkErr != nil {
+		a.state.AppendDaemonLog("automerge iteration check failed repo=%s issue=%d pr=%d err=%v", session.Repo, session.IssueNumber, pr.Number, checkErr)
+	} else if pending {
+		session.LastMaintenanceError = fmt.Sprintf("automerge deferred for PR #%d: a comment-driven iteration request is pending", pr.Number)
+		a.state.AppendDaemonLog("automerge deferred repo=%s issue=%d pr=%d branch=%s reason=pending_iteration", session.Repo, session.IssueNumber, pr.Number, session.Branch)
+		return nil
+	}
+
 	if err := ghcli.MergePullRequestSquash(ctx, a.env.Runner, session.Repo, pr.Number); err != nil {
 		return fmt.Errorf("squash automerge pr #%d: %w", pr.Number, err)
 	}
 
 	a.logger.Info("automerge merged", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "branch", session.Branch)
 	return nil
+}
+
+func (a *App) hasPendingIterationComment(ctx context.Context, session *state.Session, issueCache scanIssueDetailsCache) (bool, error) {
+	details, err := a.loadIssueDetailsForScan(ctx, issueCache, session.Repo, session.IssueNumber)
+	if err != nil {
+		return false, err
+	}
+	comments, err := ghcli.ListIssueCommentsForPolling(ctx, a.env.Runner, session.Repo, session.IssueNumber, "iteration_gate", a.state.AppendDaemonLog)
+	if err != nil {
+		return false, err
+	}
+	comment := ghcli.FindIterationComment(comments, session.LastIterationCommentID)
+	if comment == nil {
+		return false, nil
+	}
+	assignees := assigneeLogins(details.Assignees)
+	return loginMatchesAssignee(comment.User.Login, assignees), nil
 }
 
 func (a *App) automergeEnabled(ctx context.Context, session *state.Session, pr ghcli.PullRequest, issue *ghcli.IssueDetails, issueCache scanIssueDetailsCache) (bool, error) {
