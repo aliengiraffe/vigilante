@@ -362,10 +362,7 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		}
 		return a.List(*blockedOnly, *runningOnly)
 	case "status":
-		if len(args) != 1 {
-			return errors.New("usage: vigilante status")
-		}
-		return a.Status(ctx)
+		return a.runStatusCommand(ctx, args[1:])
 	case "logs":
 		return a.runLogsCommand(args[1:])
 	case "cleanup":
@@ -656,7 +653,38 @@ func (a *App) runLogsCommand(args []string) error {
 }
 
 func (a *App) Status(ctx context.Context) error {
-	return a.statusExpanded(ctx)
+	return a.StatusWithOptions(ctx, false)
+}
+
+func (a *App) StatusWithOptions(ctx context.Context, watch bool) error {
+	if !watch {
+		return a.statusExpanded(ctx)
+	}
+	return a.statusWatch(ctx, time.Second)
+}
+
+func (a *App) runStatusCommand(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	configureFlagSet(fs, func(w io.Writer) {
+		fmt.Fprintln(w, "usage: vigilante status [-w]")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Show service, watch target, and session status.")
+		fmt.Fprintln(w)
+		fs.SetOutput(w)
+		fs.PrintDefaults()
+	})
+	watch := fs.Bool("w", false, "refresh the status view about once per second")
+	fs.BoolVar(watch, "watch", false, "refresh the status view about once per second")
+	if err := parseFlagSet(fs, args, a.stdout); err != nil {
+		if errors.Is(err, errHelpHandled) {
+			return nil
+		}
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: vigilante status [-w]")
+	}
+	return a.StatusWithOptions(ctx, *watch)
 }
 
 func (a *App) statusServiceSection(ctx context.Context) (serviceStatusInfo, error) {
@@ -4613,7 +4641,7 @@ func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--branch value | --track-default-branch] <path>")
 	fmt.Fprintln(w, "  vigilante unwatch <path>")
 	fmt.Fprintln(w, "  vigilante list [--blocked | --running]")
-	fmt.Fprintln(w, "  vigilante status")
+	fmt.Fprintln(w, "  vigilante status [-w]")
 	fmt.Fprintln(w, "  vigilante logs [--access] [--repo <owner/name>] [--issue <n>]")
 	fmt.Fprintln(w, "  vigilante cleanup --repo <owner/name> [--issue <n>]")
 	fmt.Fprintln(w, "  vigilante cleanup --all")
