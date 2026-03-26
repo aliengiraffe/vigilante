@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -21,7 +22,7 @@ type LoggingRunner struct {
 	Base             Runner
 	CaptureCommand   func(context.Context, string, []string, int, int64)
 	AccessLog        func(AccessLogEntry)
-	Logf             func(format string, args ...any)
+	Logger           *slog.Logger
 	LogSuccessOutput bool
 }
 
@@ -51,8 +52,8 @@ func (ExecRunner) LookPath(file string) (string, error) {
 
 func (r LoggingRunner) Run(ctx context.Context, dir string, name string, args ...string) (string, error) {
 	startedAt := time.Now().UTC()
-	if r.Logf != nil {
-		r.Logf("command start dir=%q cmd=%s", dir, commandString(name, args...))
+	if r.Logger != nil {
+		r.Logger.Info("command start", "dir", dir, "cmd", commandString(name, args...))
 	}
 	output, err := r.Base.Run(ctx, dir, name, args...)
 	endedAt := time.Now().UTC()
@@ -63,14 +64,14 @@ func (r LoggingRunner) Run(ctx context.Context, dir string, name string, args ..
 	if r.AccessLog != nil {
 		r.AccessLog(buildAccessLogEntry(ctx, dir, name, args, startedAt, endedAt, err))
 	}
-	if r.Logf != nil {
+	if r.Logger != nil {
 		if err != nil {
-			r.Logf("command failed cmd=%s err=%v output=%s", commandString(name, args...), err, trimForLog(output))
+			r.Logger.Error("command failed", "cmd", commandString(name, args...), "err", err, "output", trimForLog(output))
 		} else {
 			if r.LogSuccessOutput {
-				r.Logf("command ok cmd=%s output=%s", commandString(name, args...), trimForLog(output))
+				r.Logger.Info("command ok", "cmd", commandString(name, args...), "output", trimForLog(output))
 			} else {
-				r.Logf("command ok cmd=%s", commandString(name, args...))
+				r.Logger.Info("command ok", "cmd", commandString(name, args...))
 			}
 		}
 	}
@@ -79,11 +80,11 @@ func (r LoggingRunner) Run(ctx context.Context, dir string, name string, args ..
 
 func (r LoggingRunner) LookPath(file string) (string, error) {
 	path, err := r.Base.LookPath(file)
-	if r.Logf != nil {
+	if r.Logger != nil {
 		if err != nil {
-			r.Logf("lookpath failed binary=%s err=%v", file, err)
+			r.Logger.Error("lookpath failed", "binary", file, "err", err)
 		} else {
-			r.Logf("lookpath ok binary=%s path=%s", file, path)
+			r.Logger.Info("lookpath ok", "binary", file, "path", path)
 		}
 	}
 	return path, err
