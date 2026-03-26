@@ -646,7 +646,7 @@ func TestSyncIssueManagedLabelsQueued(t *testing.T) {
 		},
 	}
 
-	if err := app.syncIssueManagedLabels(context.Background(), "owner/repo", 7, []string{labelQueued}, nil); err != nil {
+	if err := app.syncIssueManagedLabels(context.Background(), "owner/repo", 7, []string{labelQueued}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := shutdownTelemetry(); err != nil {
@@ -678,7 +678,7 @@ func TestSyncIssueManagedLabelsNoopDoesNotEmitTelemetry(t *testing.T) {
 		},
 	}
 
-	if err := app.syncIssueManagedLabels(context.Background(), "owner/repo", 7, []string{labelQueued}, nil); err != nil {
+	if err := app.syncIssueManagedLabels(context.Background(), "owner/repo", 7, []string{labelQueued}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := shutdownTelemetry(); err != nil {
@@ -762,14 +762,52 @@ func TestSyncSessionIssueLabelsUsesPullRequestReviewState(t *testing.T) {
 		},
 	}
 
-	err := app.syncSessionIssueLabels(context.Background(), state.Session{
+	session := state.Session{
 		Repo:              "owner/repo",
 		IssueNumber:       7,
 		Status:            state.SessionStatusSuccess,
 		PullRequestNumber: 17,
-	}, nil, nil)
+	}
+	err := app.syncSessionIssueLabels(context.Background(), &session, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSyncSessionIssueLabelsStopsMonitoringUnavailableIssue(t *testing.T) {
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.clock = func() time.Time { return time.Date(2026, 3, 26, 17, 0, 0, 0, time.UTC) }
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/labels?per_page=100":                `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"git worktree prune":                                         "ok",
+			"git worktree list --porcelain":                              "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n",
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-7": "ok",
+			"git branch -D vigilante/issue-7":                            "Deleted branch vigilante/issue-7\n",
+		},
+		ErrorOutputs: map[string]string{
+			"gh api repos/owner/repo/issues/7": "gh: HTTP 410: Gone (https://api.github.com/repos/owner/repo/issues/7)\n",
+		},
+		Errors: map[string]error{
+			"gh api repos/owner/repo/issues/7": errors.New("gh [api repos/owner/repo/issues/7]: exit status 1"),
+		},
+	}
+
+	session := state.Session{
+		RepoPath:     "/tmp/repo",
+		Repo:         "owner/repo",
+		IssueNumber:  7,
+		Branch:       "vigilante/issue-7",
+		WorktreePath: "/tmp/repo/.worktrees/vigilante/issue-7",
+		Status:       state.SessionStatusSuccess,
+	}
+	if err := app.syncSessionIssueLabels(context.Background(), &session, nil, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if session.Status != state.SessionStatusClosed || session.MonitoringStoppedAt == "" {
+		t.Fatalf("expected unavailable issue to stop monitoring during label sync: %#v", session)
 	}
 }
 
@@ -802,7 +840,7 @@ func TestSyncIssueManagedLabelsProvisionMissingRepositoryLabels(t *testing.T) {
 		},
 	}
 
-	if err := app.syncIssueManagedLabels(context.Background(), "owner/repo", 7, []string{labelQueued}, nil); err != nil {
+	if err := app.syncIssueManagedLabels(context.Background(), "owner/repo", 7, []string{labelQueued}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -5700,6 +5738,63 @@ func TestScanOnceAutoSquashMergesWhenIssueHasVigilanteAutomergeLabel(t *testing.
 	}
 	if sessions[0].LastMaintenanceError != "" {
 		t.Fatalf("unexpected maintenance wait state: %#v", sessions[0])
+	}
+}
+
+func TestScanOnceReusesIssueDetailsAcrossMaintenanceAndLabelSync(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	runner := &countingRunner{
+		base: testutil.FakeRunner{
+			LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+			Outputs: map[string]string{
+				"gh api repos/owner/repo/issues/1":                                                                   `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"open","labels":[{"name":"vigilante:automerge"}]}`,
+				"gh api repos/owner/repo/issues/1/comments":                                                          "[]",
+				"gh api repos/owner/repo/labels?per_page=100":                                                        `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+				"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
+				"git fetch origin main":                                                                              "ok",
+				"git status --porcelain":                                                                             "",
+				"git rebase origin/main":                                                                             "Current branch vigilante/issue-1 is up to date.\n",
+				"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": automergePRDetailsJSON("", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
+				"gh pr merge --repo owner/repo 31 --squash --delete-branch":                        "ok",
+				"gh issue edit --repo owner/repo 1 --add-label vigilante:awaiting-user-validation": "ok",
+				"gh api user --jq .login": "nicobistolfi\n",
+				"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+			},
+		},
+	}
+	app.env.Runner = runner
+
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:     "/tmp/repo",
+		Repo:         "owner/repo",
+		IssueNumber:  1,
+		IssueTitle:   "first",
+		IssueURL:     "https://github.com/owner/repo/issues/1",
+		Branch:       "vigilante/issue-1",
+		WorktreePath: filepath.Join("/tmp/repo", ".worktrees", "vigilante", "issue-1"),
+		Status:       state.SessionStatusSuccess,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := runner.counts["gh api repos/owner/repo/issues/1"]; got != 1 {
+		t.Fatalf("expected a single issue-details lookup per scan, got %d", got)
 	}
 }
 

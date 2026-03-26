@@ -1153,7 +1153,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 						return err
 					}
 					a.emitSessionTransition(previous.Status, session, "dispatch")
-					a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil)
+					a.syncSessionIssueLabelsBestEffort(ctx, &session, nil, nil, issueDetailsCache)
 					fmt.Fprintf(a.stdout, "repo: %s blocked issue #%d: %s\n", target.Repo, next.Number, summarizeText(err.Error()))
 					continue
 				}
@@ -1170,7 +1170,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 						return err
 					}
 					a.emitSessionTransition(previous.Status, session, "dispatch")
-					a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil)
+					a.syncSessionIssueLabelsBestEffort(ctx, &session, nil, nil, issueDetailsCache)
 					fmt.Fprintf(a.stdout, "repo: %s blocked issue #%d: %s\n", target.Repo, next.Number, summarizeText(err.Error()))
 					continue
 				}
@@ -1224,7 +1224,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 					return err
 				}
 				a.emitSessionTransition("", session, "dispatch")
-				a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil)
+				a.syncSessionIssueLabelsBestEffort(ctx, &session, nil, nil, issueDetailsCache)
 				startedCount++
 				fmt.Fprintf(a.stdout, "repo: %s started issue #%d in %s\n", target.Repo, next.Number, wt.Path)
 
@@ -1302,7 +1302,7 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 				session.UpdatedAt = a.clock().Format(time.RFC3339)
 				a.state.AppendDaemonLog("stalled session recovery comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
 			}
-			a.syncSessionIssueLabelsBestEffort(ctx, *session, pr, nil)
+			a.syncSessionIssueLabelsBestEffort(ctx, session, pr, nil, nil)
 			continue
 		}
 
@@ -1348,7 +1348,7 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 				session.UpdatedAt = a.clock().Format(time.RFC3339)
 				a.state.AppendDaemonLog("stalled session auto restart limit comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
 			}
-			a.syncSessionIssueLabelsBestEffort(ctx, *session, nil, nil)
+			a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil, nil)
 			continue
 		}
 
@@ -1374,7 +1374,7 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 				session.UpdatedAt = a.clock().Format(time.RFC3339)
 				a.state.AppendDaemonLog("stalled session cleanup comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, commentErr)
 			}
-			a.syncSessionIssueLabelsBestEffort(ctx, *session, nil, nil)
+			a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil, nil)
 			continue
 		}
 
@@ -1410,7 +1410,7 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 			a.state.AppendDaemonLog("stalled session auto restart comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
 		}
-		a.syncSessionIssueLabelsBestEffort(ctx, *session, nil, nil)
+		a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil, nil)
 	}
 
 	return sessions, nil
@@ -1586,7 +1586,7 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 					continue
 				}
 				a.state.AppendDaemonLog("cleanup complete repo=%s issue=%d pr=%d branch=%s worktree=%s source=pull_request_closed state=%s", session.Repo, session.IssueNumber, pr.Number, session.Branch, session.WorktreePath, pr.State)
-				a.syncSessionIssueLabelsBestEffort(ctx, *session, pr, nil)
+				a.syncSessionIssueLabelsBestEffort(ctx, session, pr, nil, issueCache)
 				continue
 			}
 			detailedPR, issueDetails, err := a.maintainOpenPullRequest(ctx, session, *pr, issueCache)
@@ -1615,10 +1615,10 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 					}
 					session.LastMaintenanceError = err.Error()
 				}
-				a.syncSessionIssueLabelsBestEffort(ctx, *session, pr, nil)
+				a.syncSessionIssueLabelsBestEffort(ctx, session, pr, nil, issueCache)
 				continue
 			}
-			a.syncSessionIssueLabelsBestEffort(ctx, *session, detailedPR, issueDetails)
+			a.syncSessionIssueLabelsBestEffort(ctx, session, detailedPR, issueDetails, issueCache)
 			continue
 		}
 
@@ -1637,7 +1637,7 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 			session.WorktreePath,
 			session.PullRequestMergedAt,
 		)
-		a.syncSessionIssueLabelsBestEffort(ctx, *session, pr, nil)
+		a.syncSessionIssueLabelsBestEffort(ctx, session, pr, nil, issueCache)
 	}
 
 	return sessions, nil
@@ -1676,7 +1676,7 @@ func (a *App) cleanupClosedIssueSessions(ctx context.Context, sessions []state.S
 		session.Status = state.SessionStatusClosed
 		session.UpdatedAt = a.clock().Format(time.RFC3339)
 		a.state.AppendDaemonLog("cleanup complete repo=%s issue=%d branch=%s worktree=%s source=issue_closed status=closed", session.Repo, session.IssueNumber, session.Branch, session.WorktreePath)
-		a.syncSessionIssueLabelsBestEffort(ctx, *session, nil, issue)
+		a.syncSessionIssueLabelsBestEffort(ctx, session, nil, issue, issueCache)
 	}
 
 	return sessions, nil
@@ -1741,7 +1741,7 @@ func (a *App) launchIssueSession(ctx context.Context, target state.WatchTarget, 
 			a.state.AppendDaemonLog("session result save failed repo=%s issue=%d err=%v", target.Repo, issue.Number, err)
 			return
 		}
-		a.syncSessionIssueLabelsBestEffort(ctx, result, nil, nil)
+		a.syncSessionIssueLabelsBestEffort(ctx, &result, nil, nil, nil)
 		a.state.AppendDaemonLog("scan repo session finished repo=%s issue=%d status=%s", target.Repo, issue.Number, result.Status)
 	}()
 }
@@ -1835,7 +1835,7 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 	session.LastMaintainedAt = a.clock().Format(time.RFC3339)
 	session.UpdatedAt = session.LastMaintainedAt
 	if !rebased {
-		return details, issueDetails, a.maintainPullRequestChecks(ctx, session, *details, issueDetails)
+		return details, issueDetails, a.maintainPullRequestChecks(ctx, session, *details, issueDetails, issueCache)
 	}
 
 	if _, err := a.env.Runner.Run(ctx, session.WorktreePath, "go", "test", "./..."); err != nil {
@@ -1905,7 +1905,7 @@ func (a *App) dispatchConflictResolution(ctx context.Context, session *state.Ses
 	return nil
 }
 
-func (a *App) maintainPullRequestChecks(ctx context.Context, session *state.Session, pr ghcli.PullRequest, issueDetails *ghcli.IssueDetails) error {
+func (a *App) maintainPullRequestChecks(ctx context.Context, session *state.Session, pr ghcli.PullRequest, issueDetails *ghcli.IssueDetails, issueCache scanIssueDetailsCache) error {
 	updatePullRequestMaintenanceSnapshot(session, pr)
 	if err := a.handleFailingPullRequestChecks(ctx, session, pr); err != nil {
 		return err
@@ -1913,12 +1913,12 @@ func (a *App) maintainPullRequestChecks(ctx context.Context, session *state.Sess
 	if requiredChecksState(pr.StatusCheckRollup) == "failing" {
 		return nil
 	}
-	return a.tryAutoSquashMerge(ctx, session, pr, issueDetails)
+	return a.tryAutoSquashMerge(ctx, session, pr, issueDetails, issueCache)
 }
 
-func (a *App) tryAutoSquashMerge(ctx context.Context, session *state.Session, pr ghcli.PullRequest, issueDetails *ghcli.IssueDetails) error {
+func (a *App) tryAutoSquashMerge(ctx context.Context, session *state.Session, pr ghcli.PullRequest, issueDetails *ghcli.IssueDetails, issueCache scanIssueDetailsCache) error {
 	checkState := requiredChecksState(pr.StatusCheckRollup)
-	enabled, err := a.automergeEnabled(ctx, session, pr, issueDetails)
+	enabled, err := a.automergeEnabled(ctx, session, pr, issueDetails, issueCache)
 	if err != nil {
 		return err
 	}
@@ -1947,7 +1947,7 @@ func (a *App) tryAutoSquashMerge(ctx context.Context, session *state.Session, pr
 	return nil
 }
 
-func (a *App) automergeEnabled(ctx context.Context, session *state.Session, pr ghcli.PullRequest, issue *ghcli.IssueDetails) (bool, error) {
+func (a *App) automergeEnabled(ctx context.Context, session *state.Session, pr ghcli.PullRequest, issue *ghcli.IssueDetails, issueCache scanIssueDetailsCache) (bool, error) {
 	if ghcli.HasAnyLabel(pr.Labels, automergeLabels...) {
 		return true, nil
 	}
@@ -1957,8 +1957,12 @@ func (a *App) automergeEnabled(ctx context.Context, session *state.Session, pr g
 
 	if issue == nil {
 		var err error
-		issue, err = ghcli.GetIssueDetails(ctx, a.env.Runner, session.Repo, session.IssueNumber)
+		issue, err = a.loadIssueDetailsForScan(ctx, issueCache, session.Repo, session.IssueNumber)
 		if err != nil {
+			if ghcli.IsIssueUnavailableError(err) {
+				a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
+				return false, nil
+			}
 			a.state.AppendDaemonLog("issue automerge label lookup failed repo=%s issue=%d pr=%d err=%v", session.Repo, session.IssueNumber, pr.Number, err)
 			return false, nil
 		}
@@ -2194,7 +2198,7 @@ func (a *App) processGitHubCleanupRequests(ctx context.Context, sessions []state
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 		}
-		a.syncSessionIssueLabelsBestEffort(ctx, *session, nil, nil)
+		a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil, nil)
 	}
 	return sessions, nil
 }
@@ -2236,7 +2240,7 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 				a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), fallbackText(session.BlockedReason.Operation, "resume"), err)
 				a.state.AppendDaemonLog("resume by label failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
 			}
-			a.syncSessionIssueLabelsBestEffort(ctx, *session, nil, nil)
+			a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil, nil)
 			continue
 		}
 
@@ -2262,7 +2266,7 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 			a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), fallbackText(session.BlockedReason.Operation, "resume"), err)
 			a.state.AppendDaemonLog("resume by comment failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
 		}
-		a.syncSessionIssueLabelsBestEffort(ctx, *session, nil, nil)
+		a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil, nil)
 	}
 	return sessions, nil
 }
@@ -2290,7 +2294,7 @@ func (a *App) ResumeAllBlocked(ctx context.Context) error {
 	}
 	for _, session := range sessions {
 		if session.Status == state.SessionStatusSuccess {
-			a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil)
+			a.syncSessionIssueLabelsBestEffort(ctx, &session, nil, nil, nil)
 		}
 	}
 	fmt.Fprintf(a.stdout, "resumed %d blocked session(s)\n", resumed)
@@ -2345,7 +2349,7 @@ func (a *App) CleanupSession(ctx context.Context, repo string, issue int, source
 		return err
 	}
 	if cleanedSession != nil {
-		a.syncSessionIssueLabelsBestEffort(ctx, *cleanedSession, nil, nil)
+		a.syncSessionIssueLabelsBestEffort(ctx, cleanedSession, nil, nil, nil)
 	}
 	if source == "cli" && cleanedSession != nil {
 		a.commentOnIssueBestEffort(ctx, repo, issue, localCleanupResultComment(*cleanedSession), "local cleanup result")
@@ -2390,7 +2394,7 @@ func (a *App) ResumeSession(ctx context.Context, repo string, issue int, source 
 	}
 	for _, session := range sessions {
 		if session.Repo == repo && session.IssueNumber == issue {
-			a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil)
+			a.syncSessionIssueLabelsBestEffort(ctx, &session, nil, nil, nil)
 			break
 		}
 	}
@@ -2495,7 +2499,7 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 		return err
 	}
 	a.emitSessionTransition("", session, source)
-	a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil)
+	a.syncSessionIssueLabelsBestEffort(ctx, &session, nil, nil, nil)
 
 	if source == "cli" {
 		a.commentOnIssueBestEffort(ctx, repoSlug, issue, localRedispatchStartedComment(session), "local redispatch result")
@@ -2544,7 +2548,7 @@ func (a *App) cleanupSessions(ctx context.Context, source string, successFormat 
 	}
 	for _, session := range sessions {
 		if match(session) {
-			a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil)
+			a.syncSessionIssueLabelsBestEffort(ctx, &session, nil, nil, nil)
 		}
 	}
 	fmt.Fprintf(a.stdout, successFormat, append([]any{cleaned}, args...)...)
@@ -2897,7 +2901,7 @@ func (a *App) cleanupInactiveBlockedSessions(ctx context.Context, sessions []sta
 				session.UpdatedAt = a.clock().Format(time.RFC3339)
 				a.state.AppendDaemonLog("blocked session auto recovery failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
 			}
-			a.syncSessionIssueLabelsBestEffort(ctx, *session, nil, nil)
+			a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil, nil)
 			continue
 		}
 
@@ -2909,7 +2913,7 @@ func (a *App) cleanupInactiveBlockedSessions(ctx context.Context, sessions []sta
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 			a.state.AppendDaemonLog("blocked session inactivity comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
 		}
-		a.syncSessionIssueLabelsBestEffort(ctx, *session, nil, nil)
+		a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil, nil)
 	}
 
 	return sessions, nil
@@ -3022,7 +3026,7 @@ func (a *App) autoRecoverBlockedMaintenanceSession(ctx context.Context, session 
 	session.LastResumeSource = autoRecoverySource
 	session.UpdatedAt = now.Format(time.RFC3339)
 	a.emitSessionTransition(previousStatus, *session, autoRecoverySource)
-	a.syncSessionIssueLabelsBestEffort(ctx, *session, pr, nil)
+	a.syncSessionIssueLabelsBestEffort(ctx, session, pr, nil, nil)
 
 	startBody := ghcli.FormatProgressComment(ghcli.ProgressComment{
 		Stage:      "Auto-Recovery In Progress",
@@ -3663,7 +3667,7 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 			sessions = upsertSession(sessions, updated)
 			needsSave = true
 			a.emitSessionTransition(previous.Status, updated, "iteration_dispatch")
-			a.syncSessionIssueLabelsBestEffort(ctx, updated, nil, nil)
+			a.syncSessionIssueLabelsBestEffort(ctx, &updated, nil, nil, issueCache)
 			a.state.AppendDaemonLog("iteration dispatch failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
 			continue
 		}
@@ -3674,7 +3678,7 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 		}
 		needsSave = false
 		a.emitSessionTransition(previous.Status, updated, "iteration_dispatch")
-		a.syncSessionIssueLabelsBestEffort(ctx, updated, nil, nil)
+		a.syncSessionIssueLabelsBestEffort(ctx, &updated, nil, nil, issueCache)
 		a.launchIssueSession(ctx, target, issue, updated)
 		started++
 	}
@@ -3874,19 +3878,22 @@ func reuseExistingIterationSession(target state.WatchTarget, issue ghcli.Issue, 
 }
 
 func (a *App) syncQueuedIssueLabelsBestEffort(ctx context.Context, repo string, issueNumber int) {
-	if err := a.syncIssueManagedLabels(ctx, repo, issueNumber, []string{labelQueued}, nil); err != nil {
+	if err := a.syncIssueManagedLabels(ctx, repo, issueNumber, []string{labelQueued}, nil, nil); err != nil {
 		a.state.AppendDaemonLog("issue label sync failed repo=%s issue=%d err=%v", repo, issueNumber, err)
 	}
 }
 
-func (a *App) syncSessionIssueLabelsBestEffort(ctx context.Context, session state.Session, pr *ghcli.PullRequest, issueDetails *ghcli.IssueDetails) {
-	if err := a.syncSessionIssueLabels(ctx, session, pr, issueDetails); err != nil {
+func (a *App) syncSessionIssueLabelsBestEffort(ctx context.Context, session *state.Session, pr *ghcli.PullRequest, issueDetails *ghcli.IssueDetails, issueCache scanIssueDetailsCache) {
+	if session == nil {
+		return
+	}
+	if err := a.syncSessionIssueLabels(ctx, session, pr, issueDetails, issueCache); err != nil {
 		a.state.AppendDaemonLog("session label sync failed repo=%s issue=%d status=%s err=%v", session.Repo, session.IssueNumber, session.Status, err)
 	}
 }
 
-func (a *App) syncSessionIssueLabels(ctx context.Context, session state.Session, pr *ghcli.PullRequest, issueDetails *ghcli.IssueDetails) error {
-	if strings.TrimSpace(session.Repo) == "" || session.IssueNumber <= 0 {
+func (a *App) syncSessionIssueLabels(ctx context.Context, session *state.Session, pr *ghcli.PullRequest, issueDetails *ghcli.IssueDetails, issueCache scanIssueDetailsCache) error {
+	if session == nil || strings.TrimSpace(session.Repo) == "" || session.IssueNumber <= 0 {
 		return nil
 	}
 	if pr == nil && session.PullRequestNumber > 0 && strings.TrimSpace(session.PullRequestMergedAt) == "" {
@@ -3901,16 +3908,23 @@ func (a *App) syncSessionIssueLabels(ctx context.Context, session state.Session,
 			pr = details
 		}
 	}
-	labels := sessionManagedLabels(session, pr)
-	return a.syncIssueManagedLabels(ctx, session.Repo, session.IssueNumber, labels, issueDetails)
+	labels := sessionManagedLabels(*session, pr)
+	if err := a.syncIssueManagedLabels(ctx, session.Repo, session.IssueNumber, labels, issueDetails, issueCache); err != nil {
+		if ghcli.IsIssueUnavailableError(err) {
+			a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
-func (a *App) syncIssueManagedLabels(ctx context.Context, repo string, issueNumber int, desired []string, issueDetails *ghcli.IssueDetails) error {
+func (a *App) syncIssueManagedLabels(ctx context.Context, repo string, issueNumber int, desired []string, issueDetails *ghcli.IssueDetails, issueCache scanIssueDetailsCache) error {
 	if err := a.ensureRepositoryLabelsProvisioned(ctx, repo); err != nil {
 		return err
 	}
 	if issueDetails == nil {
-		details, err := ghcli.GetIssueDetails(ctx, a.env.Runner, repo, issueNumber)
+		details, err := a.loadIssueDetailsForScan(ctx, issueCache, repo, issueNumber)
 		if err != nil {
 			return err
 		}
