@@ -102,14 +102,17 @@ type rateLimitAPIResource struct {
 }
 
 func ListOpenIssues(ctx context.Context, runner environment.Runner, repo string, assignee string) ([]Issue, error) {
-	resolvedAssignee, err := resolveAssignee(ctx, runner, assignee)
+	resolvedAssignee, err := ResolveAssignee(ctx, runner, assignee)
 	if err != nil {
 		return nil, err
 	}
+	return ListOpenIssuesForAssignee(ctx, runner, repo, resolvedAssignee)
+}
 
+func ListOpenIssuesForAssignee(ctx context.Context, runner environment.Runner, repo string, assignee string) ([]Issue, error) {
 	args := []string{"issue", "list", "--repo", repo, "--state", "open"}
-	if resolvedAssignee != "" {
-		args = append(args, "--assignee", resolvedAssignee)
+	if assignee != "" {
+		args = append(args, "--assignee", assignee)
 	}
 	args = append(args, "--json", "number,title,createdAt,url,labels")
 	output, err := runner.Run(ctx, "", "gh", args...)
@@ -127,7 +130,7 @@ func ListOpenIssues(ctx context.Context, runner environment.Runner, repo string,
 	return issues, nil
 }
 
-func resolveAssignee(ctx context.Context, runner environment.Runner, assignee string) (string, error) {
+func ResolveAssignee(ctx context.Context, runner environment.Runner, assignee string) (string, error) {
 	if assignee != "me" {
 		return assignee, nil
 	}
@@ -603,7 +606,7 @@ func GetPullRequestDetails(ctx context.Context, runner environment.Runner, repo 
 		repo,
 		fmt.Sprintf("%d", number),
 		"--json",
-		"number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup",
+		"number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName",
 	)
 	if err != nil {
 		return nil, err
@@ -613,35 +616,21 @@ func GetPullRequestDetails(ctx context.Context, runner environment.Runner, repo 
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &pr); err != nil {
 		return nil, fmt.Errorf("parse gh pr view output: %w", err)
 	}
-	if baseRefName, err := pullRequestBaseRefName(ctx, runner, repo, number); err == nil {
-		pr.BaseRefName = baseRefName
-	}
 	return &pr, nil
 }
 
-func pullRequestBaseRefName(ctx context.Context, runner environment.Runner, repo string, number int) (string, error) {
-	output, err := runner.Run(
-		ctx,
-		"",
-		"gh",
-		"pr",
-		"view",
-		"--repo",
-		repo,
-		fmt.Sprintf("%d", number),
-		"--json",
-		"baseRefName",
-	)
-	if err != nil {
-		return "", err
+func IsIssueUnavailableError(err error) bool {
+	text := strings.ToLower(strings.TrimSpace(err.Error()))
+	if text == "" {
+		return false
 	}
-	var payload struct {
-		BaseRefName string `json:"baseRefName"`
-	}
-	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &payload); err != nil {
-		return "", fmt.Errorf("parse gh pr base ref output: %w", err)
-	}
-	return strings.TrimSpace(payload.BaseRefName), nil
+	return strings.Contains(text, "http 410") ||
+		strings.Contains(text, "(410)") ||
+		strings.Contains(text, " 410 ") ||
+		strings.Contains(text, "gone") ||
+		strings.Contains(text, "http 404") ||
+		strings.Contains(text, "(404)") ||
+		strings.Contains(text, "not found")
 }
 
 func MergePullRequestSquash(ctx context.Context, runner environment.Runner, repo string, number int) error {

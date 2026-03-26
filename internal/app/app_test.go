@@ -33,6 +33,23 @@ type capturedAnalyticsEvent struct {
 	Properties map[string]any `json:"properties"`
 }
 
+type countingRunner struct {
+	base   testutil.FakeRunner
+	counts map[string]int
+}
+
+func (r *countingRunner) Run(ctx context.Context, dir string, name string, args ...string) (string, error) {
+	if r.counts == nil {
+		r.counts = make(map[string]int)
+	}
+	r.counts[testutil.Key(name, args...)]++
+	return r.base.Run(ctx, dir, name, args...)
+}
+
+func (r *countingRunner) LookPath(file string) (string, error) {
+	return r.base.LookPath(file)
+}
+
 func setupTelemetryCapture(t *testing.T) (*analyticsBatchCapture, func() error) {
 	t.Helper()
 
@@ -738,7 +755,7 @@ func TestSyncSessionIssueLabelsUsesPullRequestReviewState(t *testing.T) {
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
 			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
-			"gh pr view --repo owner/repo 17 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": `{"number":17,"title":"Demo PR","body":"PR body","url":"https://github.com/owner/repo/pull/17","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}]}`,
+			"gh pr view --repo owner/repo 17 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": `{"number":17,"title":"Demo PR","body":"PR body","url":"https://github.com/owner/repo/pull/17","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}],"baseRefName":"main"}`,
 			"gh api repos/owner/repo/issues/7": `{"labels":[{"name":"vigilante:ready-for-review"},{"name":"vigilante:needs-review"}]}`,
 			"gh issue edit --repo owner/repo 7 --add-label vigilante:awaiting-user-validation --remove-label vigilante:needs-review --remove-label vigilante:ready-for-review": "ok",
 			"gh issue edit --repo owner/repo 7 --remove-label vigilante:needs-review":                                                                                          "ok",
@@ -3620,7 +3637,7 @@ func TestScanOnceAutoRecoversStaleBlockedMaintenanceSession(t *testing.T) {
 			"git fetch origin main":                                      "ok",
 			"git status --porcelain":                                     "",
 			"git rebase origin/main":                                     "Current branch vigilante/issue-1 is up to date.\n",
-			"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": `{"number":31,"title":"Test PR","body":"body","url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}]}`,
+			"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": `{"number":31,"title":"Test PR","body":"body","url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}]}`,
 			"gh issue comment --repo owner/repo 1 --body " + successComment:                                                                                          "ok",
 			"gh api repos/owner/repo/labels?per_page=100":                                                                                                            `[{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:queued"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 			"gh api repos/owner/repo/issues/1":                                                                                                                       `{"labels":[{"name":"vigilante:blocked"},{"name":"vigilante:needs-git-fix"}]}`,
@@ -5042,7 +5059,7 @@ func TestScanOnceMaintainsOpenPullRequest(t *testing.T) {
 			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
 			"git fetch origin main":  "ok",
 			"git status --porcelain": "",
-			"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": automergePRDetailsJSON("", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
+			"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": automergePRDetailsJSON("", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
 			"git rebase origin/main": "Successfully rebased and updated refs/heads/vigilante/issue-1.\n",
 			"go test ./...":          "ok",
 			"git push --force-with-lease origin HEAD:vigilante/issue-1": "ok",
@@ -5457,13 +5474,151 @@ func TestScanOnceDoesNotCleanUpOpenIssueSessionWithoutPullRequest(t *testing.T) 
 	}
 }
 
+func TestScanOnceStopsMonitoringDeletedBlockedIssue(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	now := time.Date(2026, 3, 26, 16, 30, 0, 0, time.UTC)
+	app.clock = func() time.Time { return now }
+
+	runner := &countingRunner{
+		base: testutil.FakeRunner{
+			LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+			Outputs: map[string]string{
+				"gh api repos/owner/repo/issues/1/comments": "[]",
+				"git worktree remove --force /tmp/repo/.worktrees/vigilante/issue-1": "ok",
+				"git branch -D vigilante/issue-1":                                   "Deleted branch vigilante/issue-1",
+				"gh api user --jq .login":                                           "nicobistolfi\n",
+				"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+			},
+			Errors: map[string]error{
+				"gh api repos/owner/repo/issues/1": errors.New("HTTP 410 Gone"),
+			},
+		},
+	}
+	app.env.Runner = runner
+
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:     "/tmp/repo",
+		Repo:         "owner/repo",
+		IssueNumber:  1,
+		IssueTitle:   "first",
+		IssueURL:     "https://github.com/owner/repo/issues/1",
+		Branch:       "vigilante/issue-1",
+		WorktreePath: "/tmp/repo/.worktrees/vigilante/issue-1",
+		Status:       state.SessionStatusBlocked,
+		BlockedAt:    now.Add(-30 * time.Minute).Format(time.RFC3339),
+		BlockedStage: "issue_execution",
+		BlockedReason: state.BlockedReason{
+			Kind:      "unknown_operator_action_required",
+			Operation: "gh issue view",
+			Summary:   "resume failed",
+		},
+		ResumeRequired: true,
+		ResumeHint:     "vigilante resume --repo owner/repo --issue 1",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].Status != state.SessionStatusClosed || sessions[0].MonitoringStoppedAt == "" {
+		t.Fatalf("expected deleted issue to stop monitoring: %#v", sessions[0])
+	}
+	if got := runner.counts["gh api repos/owner/repo/issues/1"]; got != 1 {
+		t.Fatalf("expected a single deleted-issue lookup, got %d", got)
+	}
+}
+
+func TestScanOnceDelaysRecentSuccessfulPullRequestPolling(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	now := time.Date(2026, 3, 26, 16, 30, 0, 0, time.UTC)
+	app.clock = func() time.Time { return now }
+
+	runner := &countingRunner{
+		base: testutil.FakeRunner{
+			LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+			Outputs: map[string]string{
+				"gh api repos/owner/repo/issues/1":          `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"open","labels":[]}`,
+				"gh api repos/owner/repo/issues/1/comments": "[]",
+				"gh api user --jq .login":                   "nicobistolfi\n",
+				"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+			},
+		},
+	}
+	app.env.Runner = runner
+
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:            "/tmp/repo",
+		Repo:                "owner/repo",
+		IssueNumber:         1,
+		IssueTitle:          "first",
+		IssueURL:            "https://github.com/owner/repo/issues/1",
+		Branch:              "vigilante/issue-1",
+		WorktreePath:        "/tmp/repo/.worktrees/vigilante/issue-1",
+		Status:              state.SessionStatusSuccess,
+		PullRequestNumber:   31,
+		PullRequestState:    "OPEN",
+		LastMaintainedAt:    now.Add(-1 * time.Minute).Format(time.RFC3339),
+		LastMaintenanceError: "automerge waiting for required checks on PR #31",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].Status != state.SessionStatusSuccess {
+		t.Fatalf("expected recent maintenance session to remain active: %#v", sessions[0])
+	}
+	if got := runner.counts["gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt"]; got != 0 {
+		t.Fatalf("expected no PR polling during the delay window, got %d", got)
+	}
+}
+
 func TestScanOnceAutoSquashMergesLabeledPullRequestAfterChecksPass(t *testing.T) {
 	app, stdout := newPullRequestMaintenanceTestApp(t, map[string]string{
 		"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
 		"git fetch origin main":  "ok",
 		"git status --porcelain": "",
 		"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
-		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": automergePRDetailsJSON("automerge", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
+		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": automergePRDetailsJSON("automerge", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
 		"gh pr merge --repo owner/repo 31 --squash --delete-branch": "ok",
 		"gh api user --jq .login":                                   "nicobistolfi\n",
 		"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
@@ -5492,7 +5647,7 @@ func TestScanOnceAutoSquashMergesPullRequestWithVigilanteAutomergeLabel(t *testi
 		"git fetch origin main":  "ok",
 		"git status --porcelain": "",
 		"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
-		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": automergePRDetailsJSON("vigilante:automerge", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
+		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": automergePRDetailsJSON("vigilante:automerge", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
 		"gh pr merge --repo owner/repo 31 --squash --delete-branch": "ok",
 		"gh api user --jq .login":                                   "nicobistolfi\n",
 		"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
@@ -5518,7 +5673,7 @@ func TestScanOnceAutoSquashMergesWhenIssueHasVigilanteAutomergeLabel(t *testing.
 		"git fetch origin main":  "ok",
 		"git status --porcelain": "",
 		"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
-		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": automergePRDetailsJSON("", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
+		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": automergePRDetailsJSON("", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
 		"gh api repos/owner/repo/issues/1":                          `{"title":"first","body":"Keep the original form state behavior intact.","html_url":"https://github.com/owner/repo/issues/1","labels":[{"name":"vigilante:automerge"}]}`,
 		"gh pr merge --repo owner/repo 31 --squash --delete-branch": "ok",
 		"gh api user --jq .login":                                   "nicobistolfi\n",
@@ -5545,7 +5700,7 @@ func TestScanOnceAutomergeWaitsForPendingChecks(t *testing.T) {
 		"git fetch origin main":  "ok",
 		"git status --porcelain": "",
 		"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
-		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": automergePRDetailsJSON("automerge", "MERGEABLE", "BLOCKED", "APPROVED", "PENDING", ""),
+		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": automergePRDetailsJSON("automerge", "MERGEABLE", "BLOCKED", "APPROVED", "PENDING", ""),
 		"gh api user --jq .login": "nicobistolfi\n",
 		"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
 	})
@@ -5570,7 +5725,7 @@ func TestScanOnceWaitsWhenReplacementCheckRunIsStillInProgress(t *testing.T) {
 		"git fetch origin main":  "ok",
 		"git status --porcelain": "",
 		"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
-		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": `{"number":31,"title":"Test PR","body":"Test PR body","url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"CANCELLED"},{"context":"test","state":"IN_PROGRESS","conclusion":""}]}`,
+		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": `{"number":31,"title":"Test PR","body":"Test PR body","url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"CANCELLED"},{"context":"test","state":"IN_PROGRESS","conclusion":""}]}`,
 		"gh api user --jq .login": "nicobistolfi\n",
 		"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
 	})
@@ -5601,7 +5756,7 @@ func TestScanOnceFailingChecksTriggerCIRemediation(t *testing.T) {
 		"git fetch origin main":  "ok",
 		"git status --porcelain": "",
 		"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
-		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": automergePRDetailsJSON("", "MERGEABLE", "BLOCKED", "APPROVED", "COMPLETED", "FAILURE"),
+		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": automergePRDetailsJSON("", "MERGEABLE", "BLOCKED", "APPROVED", "COMPLETED", "FAILURE"),
 		"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
 			Stage:      "CI Remediation Started",
 			Emoji:      "🛠️",
@@ -5653,7 +5808,7 @@ func TestScanOnceRepeatedIdenticalFailingChecksBlockForManualReview(t *testing.T
 		"git fetch origin main":  "ok",
 		"git status --porcelain": "",
 		"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
-		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": automergePRDetailsJSON("", "MERGEABLE", "BLOCKED", "APPROVED", "COMPLETED", "FAILURE"),
+		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": automergePRDetailsJSON("", "MERGEABLE", "BLOCKED", "APPROVED", "COMPLETED", "FAILURE"),
 		"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
 			Stage:      "CI Needs Manual Review",
 			Emoji:      "🧱",
@@ -5703,7 +5858,7 @@ func TestScanOnceAutomergeWaitsForMergeabilityConstraints(t *testing.T) {
 		"git fetch origin main":  "ok",
 		"git status --porcelain": "",
 		"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
-		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": automergePRDetailsJSON("automerge", "MERGEABLE", "BLOCKED", "REVIEW_REQUIRED", "COMPLETED", "SUCCESS"),
+		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": automergePRDetailsJSON("automerge", "MERGEABLE", "BLOCKED", "REVIEW_REQUIRED", "COMPLETED", "SUCCESS"),
 		"gh api user --jq .login": "nicobistolfi\n",
 		"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
 	})
@@ -5728,7 +5883,7 @@ func TestScanOnceDoesNotAutomergeUnlabeledPullRequest(t *testing.T) {
 		"git fetch origin main":  "ok",
 		"git status --porcelain": "",
 		"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
-		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": automergePRDetailsJSON("", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
+		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": automergePRDetailsJSON("", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
 		"gh api user --jq .login": "nicobistolfi\n",
 		"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
 	})
@@ -5759,7 +5914,8 @@ func newPullRequestMaintenanceTestApp(t *testing.T, outputs map[string]string) (
 	app.stdout = &stdout
 	app.stderr = testutil.IODiscard{}
 	outputs = mergeStringMaps(map[string]string{
-		"gh api repos/owner/repo/issues/1": `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"open","labels":[]}`,
+		"gh api repos/owner/repo/issues/1":          `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"open","labels":[]}`,
+		"gh api repos/owner/repo/issues/1/comments": "[]",
 	}, outputs)
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
@@ -6269,7 +6425,7 @@ func TestScanOnceRecoversStalledSessionIntoPRMaintenance(t *testing.T) {
 			"git fetch origin main":  "ok",
 			"git status --porcelain": "",
 			"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
-			"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": automergePRDetailsJSON("", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
+			"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": automergePRDetailsJSON("", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
 		},
@@ -6324,7 +6480,7 @@ func TestScanOnceRoutesDirtyPullRequestToConflictResolution(t *testing.T) {
 		"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
 		"git fetch origin main":  "ok",
 		"git status --porcelain": "",
-		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": automergePRDetailsJSON("", "CONFLICTING", "DIRTY", "APPROVED", "COMPLETED", "SUCCESS"),
+		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": automergePRDetailsJSON("", "CONFLICTING", "DIRTY", "APPROVED", "COMPLETED", "SUCCESS"),
 		"gh api repos/owner/repo/issues/1": `{"title":"first","body":"Keep the original form state behavior intact.","html_url":"https://github.com/owner/repo/issues/1","labels":[]}`,
 		"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
 			Stage:      "Conflict Resolution Started",
@@ -6378,7 +6534,7 @@ func TestScanOnceSkipsDuplicateConflictResolutionDispatchWhenPRFingerprintIsUnch
 		"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
 		"git fetch origin main":  "ok",
 		"git status --porcelain": "",
-		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": automergePRDetailsJSON("", "CONFLICTING", "DIRTY", "APPROVED", "COMPLETED", "SUCCESS"),
+		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": automergePRDetailsJSON("", "CONFLICTING", "DIRTY", "APPROVED", "COMPLETED", "SUCCESS"),
 		"gh api user --jq .login": "nicobistolfi\n",
 		"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
 	})
