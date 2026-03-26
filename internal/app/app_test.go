@@ -7352,8 +7352,12 @@ func TestLogsCommandShowsAccessLog(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("expected success exit code, got %d", exitCode)
 	}
-	if stdout.String() != logContent {
-		t.Fatalf("expected access log content %q, got %q", logContent, stdout.String())
+	output := stdout.String()
+	if !strings.Contains(output, "[daemon]") {
+		t.Fatalf("expected formatted output with context, got %q", output)
+	}
+	if !strings.Contains(output, "gh") {
+		t.Fatalf("expected formatted output with tool name, got %q", output)
 	}
 }
 
