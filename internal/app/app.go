@@ -667,12 +667,13 @@ func (a *App) statusServiceSection(ctx context.Context) (serviceStatusInfo, erro
 		return serviceStatusInfo{}, err
 	}
 	return serviceStatusInfo{
-		State:     status.State,
-		Manager:   status.Manager,
-		Service:   status.Service,
-		FilePath:  status.FilePath,
-		Installed: status.Installed,
-		Running:   status.Running,
+		State:         status.State,
+		Manager:       status.Manager,
+		Service:       status.Service,
+		FilePath:      status.FilePath,
+		Installed:     status.Installed,
+		Running:       status.Running,
+		DaemonVersion: status.DaemonVersion,
 	}, nil
 }
 

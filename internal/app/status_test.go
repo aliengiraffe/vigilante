@@ -244,7 +244,7 @@ func TestStatusCommandOutputPreservesServiceState(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(unitPath, []byte("unit"), 0o644); err != nil {
+	if err := os.WriteFile(unitPath, []byte("[Service]\nExecStart=/home/test/.local/bin/vigilante daemon run\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -264,6 +264,7 @@ func TestStatusCommandOutputPreservesServiceState(t *testing.T) {
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
 			"systemctl --user show --property=LoadState,ActiveState vigilante.service": "LoadState=loaded\nActiveState=active\n",
+			"/home/test/.local/bin/vigilante --version":                                "vigilante 1.2.3\n",
 		},
 		Errors: map[string]error{
 			"gh api /rate_limit": nil,
@@ -280,10 +281,89 @@ func TestStatusCommandOutputPreservesServiceState(t *testing.T) {
 		"service: vigilante.service",
 		"installed: yes",
 		"running: yes",
+		"daemon version: 1.2.3",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("expected output to contain %q, got:\n%s", want, stdout.String())
 		}
+	}
+}
+
+func TestStatusCommandOutputShowsConfiguredDaemonVersionWhenStopped(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+
+	unitPath := filepath.Join(home, ".config", "systemd", "user", "vigilante.service")
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unitPath, []byte("[Service]\nExecStart=/home/test/.local/bin/vigilante daemon run\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	vigilanteHome := filepath.Join(home, ".vigilante")
+	if err := os.MkdirAll(vigilanteHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vigilanteHome, "sessions.json"), []byte("[]"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.OS = "linux"
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"systemctl --user show --property=LoadState,ActiveState vigilante.service": "LoadState=loaded\nActiveState=inactive\n",
+			"/home/test/.local/bin/vigilante --version":                                "vigilante 1.2.3\n",
+		},
+		Errors: map[string]error{
+			"gh api /rate_limit": nil,
+		},
+	}
+
+	exitCode := app.Run(context.Background(), []string{"status"})
+	if exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d; stdout: %s", exitCode, stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "daemon version: 1.2.3 (configured binary; service not running)") {
+		t.Fatalf("expected stopped daemon version signal, got:\n%s", stdout.String())
+	}
+}
+
+func TestStatusCommandOutputOmitsDaemonVersionWhenServiceIsNotInstalled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+
+	vigilanteHome := filepath.Join(home, ".vigilante")
+	if err := os.MkdirAll(vigilanteHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vigilanteHome, "sessions.json"), []byte("[]"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.OS = "linux"
+	app.env.Runner = testutil.FakeRunner{
+		Errors: map[string]error{
+			"gh api /rate_limit": nil,
+		},
+	}
+
+	exitCode := app.Run(context.Background(), []string{"status"})
+	if exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d; stdout: %s", exitCode, stdout.String())
+	}
+	if strings.Contains(stdout.String(), "daemon version:") {
+		t.Fatalf("expected no daemon version when service is not installed, got:\n%s", stdout.String())
 	}
 }
 
@@ -296,7 +376,7 @@ func TestStatusCommandShowsSessionGroups(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(unitPath, []byte("unit"), 0o644); err != nil {
+	if err := os.WriteFile(unitPath, []byte("[Service]\nExecStart=/home/test/.local/bin/vigilante daemon run\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -360,7 +440,7 @@ func TestStatusCommandShowsWatchedRepositories(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(unitPath, []byte("unit"), 0o644); err != nil {
+	if err := os.WriteFile(unitPath, []byte("[Service]\nExecStart=/home/test/.local/bin/vigilante daemon run\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

@@ -364,13 +364,26 @@ func writeStatusServiceSection(w io.Writer, s serviceStatusInfo) {
 	} else {
 		fmt.Fprintln(w, "  running: no")
 	}
+	if s.Installed {
+		switch {
+		case s.DaemonVersion != "" && s.Running:
+			fmt.Fprintf(w, "  daemon version: %s\n", s.DaemonVersion)
+		case s.DaemonVersion != "":
+			fmt.Fprintf(w, "  daemon version: %s (configured binary; service not running)\n", s.DaemonVersion)
+		case s.Running:
+			fmt.Fprintln(w, "  daemon version: unavailable")
+		default:
+			fmt.Fprintln(w, "  daemon version: unavailable (service not running)")
+		}
+	}
 }
 
 type serviceStatusInfo struct {
-	State     string
-	Manager   string
-	Service   string
-	FilePath  string
-	Installed bool
-	Running   bool
+	State         string
+	Manager       string
+	Service       string
+	FilePath      string
+	Installed     bool
+	Running       bool
+	DaemonVersion string
 }
