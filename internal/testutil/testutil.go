@@ -9,15 +9,16 @@ import (
 )
 
 type FakeRunner struct {
-	Outputs   map[string]string
-	Errors    map[string]error
-	LookPaths map[string]string
+	Outputs      map[string]string
+	ErrorOutputs map[string]string
+	Errors       map[string]error
+	LookPaths    map[string]string
 }
 
 func (f FakeRunner) Run(_ context.Context, _ string, name string, args ...string) (string, error) {
 	cmd := Key(name, args...)
 	if err, ok := f.Errors[cmd]; ok {
-		return "", err
+		return f.ErrorOutputs[cmd], err
 	}
 	if output, ok := f.Outputs[cmd]; ok {
 		return output, nil
