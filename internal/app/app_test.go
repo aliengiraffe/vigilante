@@ -1122,6 +1122,7 @@ func TestSetupCreatesStateLayoutAndInstallsBundledSkillsForAllProviders(t *testi
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 	t.Setenv("CLAUDE_HOME", filepath.Join(home, ".claude"))
 	t.Setenv("GEMINI_HOME", filepath.Join(home, ".gemini"))
+	t.Setenv("SHELL", "")
 
 	app := New()
 	app.stdout = testutil.IODiscard{}
@@ -1134,7 +1135,22 @@ func TestSetupCreatesStateLayoutAndInstallsBundledSkillsForAllProviders(t *testi
 		},
 	}
 
-	if err := app.Setup(context.Background(), false); err != nil {
+	app.env.OS = "linux"
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"codex --version":                                                 "codex 0.114.0",
+			"gh auth status":                                                  "ok",
+			"systemctl --user daemon-reload":                                  "",
+			"systemctl --user enable --now vigilante.service":                 "",
+			`/bin/sh -lc PATH="` + os.Getenv("PATH") + `" command -v 'git'`:   "/usr/bin/git\n",
+			`/bin/sh -lc PATH="` + os.Getenv("PATH") + `" command -v 'gh'`:    "/usr/bin/gh\n",
+			`/bin/sh -lc PATH="` + os.Getenv("PATH") + `" command -v 'codex'`: "/usr/bin/codex\n",
+			`/bin/sh -lc PATH="` + os.Getenv("PATH") + `" 'codex' --version`:  "codex 0.114.0\n",
+		},
+	}
+
+	if err := app.Setup(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1171,19 +1187,27 @@ func TestSetupWithGeminiInstallsBundledSkillsForAllProviders(t *testing.T) {
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 	t.Setenv("CLAUDE_HOME", filepath.Join(home, ".claude"))
 	t.Setenv("GEMINI_HOME", filepath.Join(home, ".gemini"))
+	t.Setenv("SHELL", "")
 
 	app := New()
 	app.stdout = testutil.IODiscard{}
 	app.stderr = testutil.IODiscard{}
+	app.env.OS = "linux"
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "gemini": "/usr/bin/gemini"},
 		Outputs: map[string]string{
-			"gemini --version": "gemini 0.34.0",
-			"gh auth status":   "ok",
+			"gemini --version":                                                 "gemini 0.34.0",
+			"gh auth status":                                                   "ok",
+			"systemctl --user daemon-reload":                                   "",
+			"systemctl --user enable --now vigilante.service":                  "",
+			`/bin/sh -lc PATH="` + os.Getenv("PATH") + `" command -v 'git'`:    "/usr/bin/git\n",
+			`/bin/sh -lc PATH="` + os.Getenv("PATH") + `" command -v 'gh'`:     "/usr/bin/gh\n",
+			`/bin/sh -lc PATH="` + os.Getenv("PATH") + `" command -v 'gemini'`: "/usr/bin/gemini\n",
+			`/bin/sh -lc PATH="` + os.Getenv("PATH") + `" 'gemini' --version`:  "gemini 0.34.0\n",
 		},
 	}
 
-	if err := app.SetupWithProvider(context.Background(), false, "gemini"); err != nil {
+	if err := app.SetupWithProvider(context.Background(), "gemini"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1231,7 +1255,7 @@ func TestWatchListAndUnwatch(t *testing.T) {
 		},
 	}
 
-	if err := app.Watch(context.Background(), repoPath, false, []string{"to-do", "good first issue"}, "", 0); err != nil {
+	if err := app.Watch(context.Background(), repoPath, []string{"to-do", "good first issue"}, "", 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1299,12 +1323,12 @@ func TestWatchUpdatesExistingTarget(t *testing.T) {
 		},
 	}
 
-	if err := app.Watch(context.Background(), repoPath, false, nil, "nicobistolfi", 3); err != nil {
+	if err := app.Watch(context.Background(), repoPath, nil, "nicobistolfi", 3); err != nil {
 		t.Fatal(err)
 	}
 
 	stdout.Reset()
-	if err := app.Watch(context.Background(), repoPath, true, []string{"vibe-code", "vibe-code"}, "", 0); err != nil {
+	if err := app.Watch(context.Background(), repoPath, []string{"vibe-code", "vibe-code"}, "", 0); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(stdout.String(), "updated "+repoPath) {
@@ -1317,9 +1341,6 @@ func TestWatchUpdatesExistingTarget(t *testing.T) {
 	}
 	if len(targets) != 1 {
 		t.Fatalf("unexpected targets: %#v", targets)
-	}
-	if !targets[0].DaemonEnabled {
-		t.Fatalf("expected daemon_enabled to be updated: %#v", targets[0])
 	}
 	if len(targets[0].Labels) != 1 || targets[0].Labels[0] != "vibe-code" {
 		t.Fatalf("expected labels to be updated: %#v", targets[0])
@@ -1352,7 +1373,7 @@ func TestWatchCommandWithoutMaxParallelPreservesExistingTargetValue(t *testing.T
 		},
 	}
 
-	if err := app.Watch(context.Background(), repoPath, false, nil, "", 3); err != nil {
+	if err := app.Watch(context.Background(), repoPath, nil, "", 3); err != nil {
 		t.Fatal(err)
 	}
 	if err := app.runCommand(context.Background(), []string{"watch", repoPath}); err != nil {
@@ -1401,7 +1422,7 @@ func TestWatchWithProviderPersistsClaudeSelection(t *testing.T) {
 		},
 	}
 
-	if err := app.WatchWithProvider(context.Background(), repoPath, false, nil, "", 0, "claude"); err != nil {
+	if err := app.WatchWithProvider(context.Background(), repoPath, nil, "", 0, "claude"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1439,7 +1460,7 @@ func TestWatchPersistsRepoClassification(t *testing.T) {
 		},
 	}
 
-	if err := app.Watch(context.Background(), repoPath, false, nil, "", 0); err != nil {
+	if err := app.Watch(context.Background(), repoPath, nil, "", 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1475,7 +1496,7 @@ func TestWatchWithGeminiProviderPersistsSelection(t *testing.T) {
 		},
 	}
 
-	if err := app.WatchWithProvider(context.Background(), repoPath, false, nil, "", 0, "gemini"); err != nil {
+	if err := app.WatchWithProvider(context.Background(), repoPath, nil, "", 0, "gemini"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1504,9 +1525,148 @@ func TestSetupFailsWhenProviderVersionIsIncompatible(t *testing.T) {
 		},
 	}
 
-	err := app.Setup(context.Background(), false)
+	err := app.Setup(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "codex CLI version 2.0.0 is incompatible") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSetupCommandRejectsLegacyDaemonFlag(t *testing.T) {
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+
+	err := app.runCommand(context.Background(), []string{"setup", "-d"})
+	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -d") {
+		t.Fatalf("expected legacy setup -d flag rejection, got %v", err)
+	}
+}
+
+func TestWatchCommandRejectsLegacyDaemonFlag(t *testing.T) {
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+
+	err := app.runCommand(context.Background(), []string{"watch", "-d", "/tmp/repo"})
+	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -d") {
+		t.Fatalf("expected legacy watch -d flag rejection, got %v", err)
+	}
+}
+
+func TestWatchReportsManagedServiceRunning(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	unitPath := filepath.Join(home, ".config", "systemd", "user", "vigilante.service")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unitPath, []byte("unit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.OS = "linux"
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                  "true\n",
+			testutil.Key("git", "remote", "get-url", "origin"):                         "git@github.com:nicobistolfi/vigilante.git\n",
+			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): "origin/main\n",
+			"systemctl --user show --property=LoadState,ActiveState vigilante.service": "LoadState=loaded\nActiveState=active\n",
+		},
+	}
+
+	if err := app.Watch(context.Background(), repoPath, nil, "", 0); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "managed service is running; this watch target will be picked up automatically.") {
+		t.Fatalf("unexpected output: %s", stdout.String())
+	}
+}
+
+func TestWatchReportsSetupAndManualDaemonWhenServiceMissing(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                  "true\n",
+			testutil.Key("git", "remote", "get-url", "origin"):                         "git@github.com:nicobistolfi/vigilante.git\n",
+			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): "origin/main\n",
+		},
+	}
+
+	if err := app.Watch(context.Background(), repoPath, nil, "", 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"managed service is not installed.",
+		"run `vigilante setup` to install it",
+		"`vigilante daemon run` to process the watchlist in the foreground",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("expected output to contain %q, got %q", want, stdout.String())
+		}
+	}
+}
+
+func TestWatchReportsRestartOrManualDaemonWhenServiceStopped(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	unitPath := filepath.Join(home, ".config", "systemd", "user", "vigilante.service")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unitPath, []byte("unit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.OS = "linux"
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                  "true\n",
+			testutil.Key("git", "remote", "get-url", "origin"):                         "git@github.com:nicobistolfi/vigilante.git\n",
+			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): "origin/main\n",
+			"systemctl --user show --property=LoadState,ActiveState vigilante.service": "LoadState=loaded\nActiveState=inactive\n",
+		},
+	}
+
+	if err := app.Watch(context.Background(), repoPath, nil, "", 0); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"managed service is installed but not running.",
+		"`vigilante service restart`",
+		"`vigilante daemon run`",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("expected output to contain %q, got %q", want, stdout.String())
+		}
 	}
 }
 
