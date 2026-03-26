@@ -219,7 +219,18 @@ func TestServiceStatusReportsLaunchdRunning(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(plistPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(plistPath, []byte("plist"), 0o644); err != nil {
+	if err := os.WriteFile(plistPath, []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/test/.local/bin/vigilante</string>
+    <string>daemon</string>
+    <string>run</string>
+  </array>
+</dict>
+</plist>
+`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -227,7 +238,8 @@ func TestServiceStatusReportsLaunchdRunning(t *testing.T) {
 		OS: "darwin",
 		Runner: testutil.FakeRunner{
 			Outputs: map[string]string{
-				testutil.Key("launchctl", "print", launchdTarget()): "pid = 412\nstate = running\n",
+				testutil.Key("launchctl", "print", launchdTarget()):           "pid = 412\nstate = running\n",
+				testutil.Key("/Users/test/.local/bin/vigilante", "--version"): "vigilante 1.2.3\n",
 			},
 		},
 	}
@@ -241,6 +253,9 @@ func TestServiceStatusReportsLaunchdRunning(t *testing.T) {
 	}
 	if status.Manager != "launchd" || status.Service != launchdLabel || status.FilePath != plistPath {
 		t.Fatalf("unexpected service metadata: %#v", status)
+	}
+	if status.DaemonVersion != "1.2.3" {
+		t.Fatalf("unexpected daemon version: %#v", status)
 	}
 }
 
@@ -280,7 +295,7 @@ func TestServiceStatusReportsSystemdRunning(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(unitPath, []byte("unit"), 0o644); err != nil {
+	if err := os.WriteFile(unitPath, []byte("[Service]\nExecStart=/home/test/.local/bin/vigilante daemon run\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -289,6 +304,7 @@ func TestServiceStatusReportsSystemdRunning(t *testing.T) {
 		Runner: testutil.FakeRunner{
 			Outputs: map[string]string{
 				testutil.Key("systemctl", "--user", "show", "--property=LoadState,ActiveState", systemdUnitName): "LoadState=loaded\nActiveState=active\n",
+				testutil.Key("/home/test/.local/bin/vigilante", "--version"):                                     "vigilante 1.2.3\n",
 			},
 		},
 	}
@@ -299,6 +315,42 @@ func TestServiceStatusReportsSystemdRunning(t *testing.T) {
 	}
 	if !status.Installed || !status.Running || status.State != StatusRunning {
 		t.Fatalf("unexpected status: %#v", status)
+	}
+	if status.DaemonVersion != "1.2.3" {
+		t.Fatalf("unexpected daemon version: %#v", status)
+	}
+}
+
+func TestServiceStatusReportsSystemdStoppedWithConfiguredDaemonVersion(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	unitPath := filepath.Join(home, ".config", "systemd", "user", "vigilante.service")
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unitPath, []byte("[Service]\nExecStart=/home/test/.local/bin/vigilante daemon run\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	env := &environment.Environment{
+		OS: "linux",
+		Runner: testutil.FakeRunner{
+			Outputs: map[string]string{
+				testutil.Key("systemctl", "--user", "show", "--property=LoadState,ActiveState", systemdUnitName): "LoadState=loaded\nActiveState=inactive\n",
+				testutil.Key("/home/test/.local/bin/vigilante", "--version"):                                     "vigilante 1.2.3\n",
+			},
+		},
+	}
+
+	status, err := ServiceStatus(context.Background(), env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.Installed || status.Running || status.State != StatusStopped {
+		t.Fatalf("unexpected status: %#v", status)
+	}
+	if status.DaemonVersion != "1.2.3" {
+		t.Fatalf("unexpected daemon version: %#v", status)
 	}
 }
 
@@ -320,6 +372,9 @@ func TestServiceStatusReportsNotInstalledWhenUnitFileIsMissing(t *testing.T) {
 	}
 	if status.FilePath != filepath.Join(home, ".config", "systemd", "user", "vigilante.service") {
 		t.Fatalf("unexpected service file path: %#v", status)
+	}
+	if status.DaemonVersion != "" {
+		t.Fatalf("expected no daemon version: %#v", status)
 	}
 }
 
