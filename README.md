@@ -57,10 +57,10 @@ Prepare the local machine with your preferred coding-agent provider:
 vigilante setup --provider codex
 ```
 
-Register a repository and install the background service:
+Register a repository after setup installs the background service:
 
 ```sh
-vigilante watch -d ~/path/to/repo
+vigilante watch ~/path/to/repo
 ```
 
 Useful follow-up commands:
@@ -255,16 +255,6 @@ vigilante watch --branch develop ~/hello-world-app
 vigilante watch --track-default-branch ~/hello-world-app
 ```
 
-### `vigilante watch -d <path>`
-
-Register a repository and ensure the daemon/service is installed and started.
-
-Expected behavior:
-
-- adds the target to the watchlist
-- installs the `vigilante` daemon on the current operating system
-- starts or reloads the service
-
 ### `vigilante list`
 
 Show the currently watched repositories and their metadata.
@@ -377,9 +367,9 @@ Expected behavior:
   - `vigilante-create-issue`
   - `vigilante-local-service-dependencies`
   - `docker-compose-launch`
-- installs or updates the daemon definition when requested
+- installs or updates the daemon definition
 
-On macOS, `vigilante setup -d` resolves Homebrew-style symlinks before it prepares the daemon binary. For Homebrew cask installs, Vigilante first clears `com.apple.provenance` and `com.apple.quarantine` recursively from the enclosing Caskroom version directory, then removes those same xattrs from the resolved binary when present, ad-hoc signs that binary, and runs `spctl --assess --type execute -vv` against the resolved path before loading the service.
+On macOS, `vigilante setup` resolves Homebrew-style symlinks before it prepares the daemon binary. For Homebrew cask installs, Vigilante first clears `com.apple.provenance` and `com.apple.quarantine` recursively from the enclosing Caskroom version directory, then removes those same xattrs from the resolved binary when present, ad-hoc signs that binary, and runs `spctl --assess --type execute -vv` against the resolved path before loading the service.
 
 If Gatekeeper still rejects the binary, the error now reports both the assessed path and the invoked path when they differ. A useful manual recovery sequence is:
 
@@ -417,7 +407,7 @@ Primary tasks:
 - `task install` copies the built binary to `~/.local/bin/vigilante`
 - `task setup` runs `./vigilante setup`
 - `task install-setup` runs `~/.local/bin/vigilante setup`
-- `task setup-daemon` runs a small wrapper around `~/.local/bin/vigilante setup -d` that retries once on macOS after cleaning up an existing `launchd` agent
+- `task setup-daemon` runs a small wrapper around `~/.local/bin/vigilante setup` that retries once on macOS after cleaning up an existing `launchd` agent
 
 Recommended loop:
 
@@ -458,14 +448,14 @@ task setup-daemon
 
 On macOS, `task setup-daemon` now performs one explicit recovery attempt when an existing `com.vigilante.agent` launch agent is already present. If the first refresh fails, the task cleans up the existing launch agent, retries once, and prints a short manual `launchctl bootout ...` hint if recovery still fails.
 
-On macOS, `vigilante setup -d` also prepares the installed daemon binary before reloading the LaunchAgent by clearing observed Gatekeeper xattrs from the Homebrew cask install root when applicable, clearing those xattrs from the resolved binary, applying ad-hoc signing, and validating the binary with `spctl`. If macOS still rejects the binary, setup exits with a code-signing error instead of leaving the agent stuck in `OS_REASON_CODESIGNING`.
+On macOS, `vigilante setup` also prepares the installed daemon binary before reloading the LaunchAgent by clearing observed Gatekeeper xattrs from the Homebrew cask install root when applicable, clearing those xattrs from the resolved binary, applying ad-hoc signing, and validating the binary with `spctl`. If macOS still rejects the binary, setup exits with a code-signing error instead of leaving the agent stuck in `OS_REASON_CODESIGNING`.
 
 Notes:
 
 - foreground runs are the quickest way to iterate on scheduler, worktree, and coding-agent execution behavior
 - when `vigilante` runs from a repository checkout, `setup` refreshes installed skills from the local repo `skills/` folder so skill edits are picked up immediately
 - when `vigilante` runs as an installed binary outside the repo checkout, `setup` uses skills embedded in the binary so it works from any directory without depending on the source tree
-- after changing service installation logic on macOS, rerun `setup -d` so the `launchd` plist is regenerated with the current shell-derived PATH
+- after changing service installation logic on macOS, rerun `setup` so the `launchd` plist is regenerated with the current shell-derived PATH
 - the CLI entrypoint lives in `cmd/vigilante/`, while non-exported implementation packages live under `internal/`
 
 ## CI and Releases
@@ -574,7 +564,7 @@ Use logs to decide which recovery command fits the evidence already recorded loc
 4. If the per-issue log shows the agent can continue from the existing worktree and session state, prefer `vigilante resume --repo <owner/name> --issue <n>`.
 5. If the per-issue log shows corrupted local state, a dead worktree, or a failed run that should be restarted cleanly, use `vigilante redispatch --repo <owner/name> --issue <n>`.
 6. If the log shows the local session artifacts are stale and should be removed without starting new work immediately, use `vigilante cleanup --repo <owner/name> --issue <n>` or repo-wide cleanup as appropriate.
-7. If the daemon log points to service-manager failures, scan-loop problems, or machine-level issues, troubleshoot the daemon with `vigilante service restart`, `vigilante setup -d`, or a foreground `vigilante daemon run --once` check before touching issue sessions.
+7. If the daemon log points to service-manager failures, scan-loop problems, or machine-level issues, troubleshoot the daemon with `vigilante service restart`, `vigilante setup`, or a foreground `vigilante daemon run --once` check before touching issue sessions.
 
 Suggested `watchlist.json` shape:
 
@@ -587,7 +577,6 @@ Suggested `watchlist.json` shape:
     "branch": "main",
     "assignee": "me",
     "max_parallel_sessions": 0,
-    "daemon_enabled": true,
     "last_scan_at": "2026-03-10T12:00:00Z"
   }
 ]

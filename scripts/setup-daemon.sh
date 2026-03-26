@@ -16,7 +16,7 @@ current_os() {
 }
 
 run_setup() {
-  "$INSTALL_PATH" setup -d
+  "$INSTALL_PATH" setup
 }
 
 print_interrupted_hint() {
@@ -36,7 +36,7 @@ cleanup_launchd() {
 main() {
   os_name="$(current_os)"
   if [ "$os_name" != "darwin" ]; then
-    exec "$INSTALL_PATH" setup -d
+    exec "$INSTALL_PATH" setup
   fi
 
   run_setup

@@ -275,14 +275,13 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 	case "setup":
 		fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 		configureFlagSet(fs, func(w io.Writer) {
-			fmt.Fprintln(w, "usage: vigilante setup [-d] [--provider value]")
+			fmt.Fprintln(w, "usage: vigilante setup [--provider value]")
 			fmt.Fprintln(w)
 			fmt.Fprintln(w, "Prepare the machine for autonomous execution.")
 			fmt.Fprintln(w)
 			fs.SetOutput(w)
 			fs.PrintDefaults()
 		})
-		installDaemon := fs.Bool("d", false, "install daemon service")
 		selectedProvider := fs.String("provider", provider.DefaultID, "coding agent provider")
 		if err := parseFlagSet(fs, args[1:], a.stdout); err != nil {
 			if errors.Is(err, errHelpHandled) {
@@ -290,18 +289,17 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 			}
 			return err
 		}
-		return a.SetupWithProvider(ctx, *installDaemon, *selectedProvider)
+		return a.SetupWithProvider(ctx, *selectedProvider)
 	case "watch":
 		fs := flag.NewFlagSet("watch", flag.ContinueOnError)
 		configureFlagSet(fs, func(w io.Writer) {
-			fmt.Fprintln(w, "usage: vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] [--provider value] [--branch value | --track-default-branch] <path>")
+			fmt.Fprintln(w, "usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--branch value | --track-default-branch] <path>")
 			fmt.Fprintln(w)
 			fmt.Fprintln(w, "Register a local repository for issue monitoring.")
 			fmt.Fprintln(w)
 			fs.SetOutput(w)
 			fs.PrintDefaults()
 		})
-		daemon := fs.Bool("d", false, "install and start daemon service")
 		var labels stringListFlag
 		fs.Var(&labels, "label", "allow only issues with this label; repeatable")
 		assignee := fs.String("assignee", "", "issue assignee filter (defaults to me)")
@@ -316,7 +314,7 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 			return err
 		}
 		if fs.NArg() != 1 {
-			return errors.New("usage: vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] [--provider value] [--branch value | --track-default-branch] <path>")
+			return errors.New("usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--branch value | --track-default-branch] <path>")
 		}
 		parsedMaxParallel := unsetMaxParallel
 		branchOptions := watchBranchOptions{}
@@ -335,7 +333,7 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		if branchOptions.branchFlagSet && branchOptions.trackDefaultFlagSet {
 			return errors.New("watch accepts either --branch or --track-default-branch, not both")
 		}
-		return a.watchWithOptions(ctx, fs.Arg(0), *daemon, labels, *assignee, parsedMaxParallel, *selectedProvider, branchOptions)
+		return a.watchWithOptions(ctx, fs.Arg(0), labels, *assignee, parsedMaxParallel, *selectedProvider, branchOptions)
 	case "unwatch":
 		if len(args) != 2 {
 			return errors.New("usage: vigilante unwatch <path>")
@@ -685,12 +683,12 @@ func (a *App) RestartService(ctx context.Context) error {
 	return nil
 }
 
-func (a *App) Setup(ctx context.Context, installDaemon bool) error {
-	return a.SetupWithProvider(ctx, installDaemon, provider.DefaultID)
+func (a *App) Setup(ctx context.Context) error {
+	return a.SetupWithProvider(ctx, provider.DefaultID)
 }
 
-func (a *App) SetupWithProvider(ctx context.Context, installDaemon bool, providerID string) error {
-	a.state.AppendDaemonLog("setup start install_daemon=%t", installDaemon)
+func (a *App) SetupWithProvider(ctx context.Context, providerID string) error {
+	a.state.AppendDaemonLog("setup start install_daemon=true")
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
 	}
@@ -704,12 +702,10 @@ func (a *App) SetupWithProvider(ctx context.Context, installDaemon bool, provide
 	if err := a.installBundledSkills(); err != nil {
 		return err
 	}
-	if installDaemon {
-		if err := service.Install(ctx, a.env, a.state, selectedProvider); err != nil {
-			return err
-		}
+	if err := service.Install(ctx, a.env, a.state, selectedProvider); err != nil {
+		return err
 	}
-	a.state.AppendDaemonLog("setup complete install_daemon=%t", installDaemon)
+	a.state.AppendDaemonLog("setup complete install_daemon=true")
 	fmt.Fprintln(a.stdout, "setup complete")
 	return nil
 }
@@ -730,16 +726,16 @@ func (a *App) installBundledSkills() error {
 	return nil
 }
 
-func (a *App) Watch(ctx context.Context, rawPath string, daemon bool, labels []string, assignee string, maxParallel int) error {
-	return a.WatchWithProvider(ctx, rawPath, daemon, labels, assignee, maxParallel, "")
+func (a *App) Watch(ctx context.Context, rawPath string, labels []string, assignee string, maxParallel int) error {
+	return a.WatchWithProvider(ctx, rawPath, labels, assignee, maxParallel, "")
 }
 
-func (a *App) WatchWithProvider(ctx context.Context, rawPath string, daemon bool, labels []string, assignee string, maxParallel int, providerID string) error {
-	return a.watchWithOptions(ctx, rawPath, daemon, labels, assignee, maxParallel, providerID, watchBranchOptions{})
+func (a *App) WatchWithProvider(ctx context.Context, rawPath string, labels []string, assignee string, maxParallel int, providerID string) error {
+	return a.watchWithOptions(ctx, rawPath, labels, assignee, maxParallel, providerID, watchBranchOptions{})
 }
 
-func (a *App) watchWithOptions(ctx context.Context, rawPath string, daemon bool, labels []string, assignee string, maxParallel int, providerID string, branchOptions watchBranchOptions) error {
-	a.state.AppendDaemonLog("watch start raw_path=%q daemon=%t assignee=%q max_parallel=%d", rawPath, daemon, assignee, maxParallel)
+func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []string, assignee string, maxParallel int, providerID string, branchOptions watchBranchOptions) error {
+	a.state.AppendDaemonLog("watch start raw_path=%q assignee=%q max_parallel=%d", rawPath, assignee, maxParallel)
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
 	}
@@ -794,7 +790,6 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, daemon bool,
 			if maxParallel >= 0 {
 				targets[i].MaxParallel = maxParallel
 			}
-			targets[i].DaemonEnabled = daemon
 			switch {
 			case branchOptions.branchFlagSet:
 				targets[i].BranchMode = state.BranchModePinned
@@ -834,7 +829,6 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, daemon bool,
 			Labels:         labels,
 			Assignee:       assigneeOrDefault(assignee),
 			MaxParallel:    configuredMaxParallel(maxParallel),
-			DaemonEnabled:  daemon,
 			AddedAt:        a.clock().Format(time.RFC3339),
 		}
 		if providerID != "" {
@@ -858,26 +852,37 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, daemon bool,
 		return err
 	}
 
-	if daemon {
-		setupProvider := providerID
-		if setupProvider == "" {
-			setupProvider = findWatchTargetProvider(targets, info.Path)
-		}
-		if err := a.SetupWithProvider(ctx, true, setupProvider); err != nil {
-			return err
-		}
-	}
-
 	if updated {
 		updatedTarget := findWatchTargetByPath(targets, info.Path)
-		a.state.AppendDaemonLog("watch updated path=%s repo=%s branch=%s branch_mode=%s assignee=%s max_parallel=%d daemon=%t", info.Path, info.Repo, updatedTarget.Branch, updatedTarget.EffectiveBranchMode(), assigneeOrDefault(findWatchTargetAssignee(targets, info.Path)), findWatchTargetMaxParallel(targets, info.Path), daemon)
+		a.state.AppendDaemonLog("watch updated path=%s repo=%s branch=%s branch_mode=%s assignee=%s max_parallel=%d", info.Path, info.Repo, updatedTarget.Branch, updatedTarget.EffectiveBranchMode(), assigneeOrDefault(findWatchTargetAssignee(targets, info.Path)), findWatchTargetMaxParallel(targets, info.Path))
 		fmt.Fprintln(a.stdout, "updated", info.Path)
 	} else {
 		addedTarget := findWatchTargetByPath(targets, info.Path)
-		a.state.AppendDaemonLog("watch added path=%s repo=%s branch=%s branch_mode=%s assignee=%s max_parallel=%d daemon=%t", info.Path, info.Repo, addedTarget.Branch, addedTarget.EffectiveBranchMode(), assigneeOrDefault(assignee), configuredMaxParallel(maxParallel), daemon)
+		a.state.AppendDaemonLog("watch added path=%s repo=%s branch=%s branch_mode=%s assignee=%s max_parallel=%d", info.Path, info.Repo, addedTarget.Branch, addedTarget.EffectiveBranchMode(), assigneeOrDefault(assignee), configuredMaxParallel(maxParallel))
 		fmt.Fprintln(a.stdout, "watching", info.Path)
 	}
+	a.printWatchRuntimeGuidance(ctx)
 	return nil
+}
+
+func (a *App) printWatchRuntimeGuidance(ctx context.Context) {
+	status, err := service.ServiceStatus(ctx, a.env)
+	if err != nil {
+		fmt.Fprintf(a.stdout, "service status unavailable: %v\n", err)
+		fmt.Fprintln(a.stdout, "next step: run `vigilante setup` to install the managed service, or `vigilante daemon run` to process the watchlist in the foreground.")
+		return
+	}
+
+	switch {
+	case status.Running:
+		fmt.Fprintln(a.stdout, "managed service is running; this watch target will be picked up automatically.")
+	case status.Installed:
+		fmt.Fprintln(a.stdout, "managed service is installed but not running.")
+		fmt.Fprintln(a.stdout, "next step: run `vigilante service restart` to resume automatic processing, or `vigilante daemon run` to process the watchlist in the foreground.")
+	default:
+		fmt.Fprintln(a.stdout, "managed service is not installed.")
+		fmt.Fprintln(a.stdout, "next step: run `vigilante setup` to install it, or `vigilante daemon run` to process the watchlist in the foreground.")
+	}
 }
 
 func (a *App) Unwatch(rawPath string) error {
@@ -3339,7 +3344,6 @@ func watchTargetForSession(session state.Session, fallbackTarget state.WatchTarg
 		Labels:         fallbackTarget.Labels,
 		Assignee:       fallbackTarget.Assignee,
 		MaxParallel:    fallbackTarget.MaxParallel,
-		DaemonEnabled:  fallbackTarget.DaemonEnabled,
 	}
 	return target
 }
@@ -4605,8 +4609,8 @@ func isHelpToken(value string) bool {
 
 func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage:")
-	fmt.Fprintln(w, "  vigilante setup [-d] [--provider value]")
-	fmt.Fprintln(w, "  vigilante watch [-d] [--label value] [--assignee value] [--max-parallel value] [--provider value] [--branch value | --track-default-branch] <path>")
+	fmt.Fprintln(w, "  vigilante setup [--provider value]")
+	fmt.Fprintln(w, "  vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--branch value | --track-default-branch] <path>")
 	fmt.Fprintln(w, "  vigilante unwatch <path>")
 	fmt.Fprintln(w, "  vigilante list [--blocked | --running]")
 	fmt.Fprintln(w, "  vigilante status")
@@ -4663,11 +4667,11 @@ _vigilante()
 
     case "${words[1]}" in
         setup)
-            COMPREPLY=( $(compgen -W "-d --provider" -- "$cur") )
+            COMPREPLY=( $(compgen -W "--provider" -- "$cur") )
             return
             ;;
         watch)
-            COMPREPLY=( $(compgen -W "-d --label --assignee --max-parallel --provider --branch --track-default-branch" -- "$cur") )
+            COMPREPLY=( $(compgen -W "--label --assignee --max-parallel --provider --branch --track-default-branch" -- "$cur") )
             return
             ;;
         list)
@@ -4729,14 +4733,12 @@ complete -c vigilante -f -n '__fish_use_subcommand' -a 'daemon' -d 'Run daemon c
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'completion' -d 'Generate shell completion scripts'
 
 complete -c vigilante -n '__fish_seen_subcommand_from setup' -l provider
-complete -c vigilante -n '__fish_seen_subcommand_from setup' -s d
 complete -c vigilante -n '__fish_seen_subcommand_from watch' -l label
 complete -c vigilante -n '__fish_seen_subcommand_from watch' -l assignee
 complete -c vigilante -n '__fish_seen_subcommand_from watch' -l max-parallel
 complete -c vigilante -n '__fish_seen_subcommand_from watch' -l provider
 complete -c vigilante -n '__fish_seen_subcommand_from watch' -l branch
 complete -c vigilante -n '__fish_seen_subcommand_from watch' -l track-default-branch
-complete -c vigilante -n '__fish_seen_subcommand_from watch' -s d
 complete -c vigilante -n '__fish_seen_subcommand_from list' -l blocked
 complete -c vigilante -n '__fish_seen_subcommand_from list' -l running
 complete -c vigilante -n '__fish_seen_subcommand_from cleanup' -l repo
@@ -4781,10 +4783,10 @@ _vigilante() {
 
   case "$words[2]" in
     setup)
-      compadd -- -d --provider
+      compadd -- --provider
       ;;
     watch)
-      compadd -- -d --label --assignee --max-parallel --provider --branch --track-default-branch
+      compadd -- --label --assignee --max-parallel --provider --branch --track-default-branch
       ;;
     list)
       compadd -- --blocked --running

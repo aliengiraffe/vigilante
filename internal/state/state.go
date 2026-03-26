@@ -26,7 +26,6 @@ type WatchTarget struct {
 	Labels         []string            `json:"labels,omitempty"`
 	Assignee       string              `json:"assignee,omitempty"`
 	MaxParallel    int                 `json:"max_parallel_sessions"`
-	DaemonEnabled  bool                `json:"daemon_enabled"`
 	LastScanAt     string              `json:"last_scan_at,omitempty"`
 	AddedAt        string              `json:"added_at,omitempty"`
 }

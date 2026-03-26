@@ -22,8 +22,11 @@ exit 0
 	if result.exitCode != 0 {
 		t.Fatalf("expected success, got %d with output %s", result.exitCode, result.output)
 	}
-	if !strings.Contains(result.log, "setup -d") {
+	if !strings.Contains(result.log, "setup") {
 		t.Fatalf("expected direct setup invocation, log=%q", result.log)
+	}
+	if strings.Contains(result.log, "setup -d") {
+		t.Fatalf("expected legacy setup -d invocation to be removed, log=%q", result.log)
 	}
 	if strings.Contains(result.log, "launchctl") {
 		t.Fatalf("expected no launchctl cleanup, log=%q", result.log)
