@@ -499,7 +499,7 @@ Nightly install path:
 
 ```sh
 brew tap aliengiraffe/spaceship
-brew install --cask vigilante-nightly
+brew install vigilante-nightly
 ```
 
 Stable installs remain on the tagged release path:
