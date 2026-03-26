@@ -35,6 +35,7 @@ const defaultAssigneeFilter = "me"
 const defaultStalledSessionThreshold = 10 * time.Minute
 const defaultStaleAutoRestartDelay = 20 * time.Minute
 const defaultMaintenanceAutoRecoveryTimeout = 10 * time.Minute
+const defaultSuccessfulSessionPollInterval = 5 * time.Minute
 const staleAutoRestartAttemptLimit = 3
 const githubCoreLowQuotaThreshold = 5
 const unsetMaxParallel = -2147483648
@@ -990,6 +991,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 		if err := a.state.EnsureLayout(); err != nil {
 			return err
 		}
+		resolvedAssignees := make(map[string]string)
 
 		targets, err := a.state.LoadWatchTargets()
 		if err != nil {
@@ -1068,7 +1070,20 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			startedCount += started
 			a.state.AppendDaemonLog("scan repo classified repo=%s shape=%s hints=%d/%d/%d", target.Repo, target.Classification.Shape, len(target.Classification.ProcessHints.WorkspaceConfigFiles), len(target.Classification.ProcessHints.WorkspaceManifestFiles), len(target.Classification.ProcessHints.MultiPackageRoots))
 			a.state.AppendDaemonLog("scan repo start repo=%s path=%s max_parallel=%d", target.Repo, target.Path, target.MaxParallel)
-			issues, err := ghcli.ListOpenIssues(ctx, a.env.Runner, target.Repo, target.Assignee)
+			resolvedAssignee, ok := resolvedAssignees[target.Assignee]
+			if !ok {
+				resolvedAssignee, err = ghcli.ResolveAssignee(ctx, a.env.Runner, target.Assignee)
+				if err == nil {
+					resolvedAssignees[target.Assignee] = resolvedAssignee
+				}
+			}
+			if err != nil {
+				target.LastScanAt = a.clock().Format(time.RFC3339)
+				a.state.AppendDaemonLog("scan repo issues failed repo=%s err=%v", target.Repo, err)
+				fmt.Fprintf(a.stdout, "repo: %s scan failed: %s\n", target.Repo, summarizeText(err.Error()))
+				continue
+			}
+			issues, err := ghcli.ListOpenIssuesForAssignee(ctx, a.env.Runner, target.Repo, resolvedAssignee)
 			target.LastScanAt = a.clock().Format(time.RFC3339)
 			if err != nil {
 				a.state.AppendDaemonLog("scan repo issues failed repo=%s err=%v", target.Repo, err)
@@ -1529,6 +1544,9 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 		if session.Status != state.SessionStatusSuccess || session.CleanupCompletedAt != "" || session.MonitoringStoppedAt != "" {
 			continue
 		}
+		if shouldDelaySuccessfulSessionPoll(*session, a.clock()) {
+			continue
+		}
 
 		pr, err := ghcli.FindPullRequestForBranch(ctx, a.env.Runner, session.Repo, session.Branch)
 		if err != nil {
@@ -1552,7 +1570,8 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 				a.syncSessionIssueLabelsBestEffort(ctx, *session, pr)
 				continue
 			}
-			if err := a.maintainOpenPullRequest(ctx, session, *pr); err != nil {
+			detailedPR, err := a.maintainOpenPullRequest(ctx, session, *pr)
+			if err != nil {
 				session.UpdatedAt = a.clock().Format(time.RFC3339)
 				a.state.AppendDaemonLog("pr maintenance failed repo=%s issue=%d pr=%d branch=%s err=%v", session.Repo, session.IssueNumber, pr.Number, session.Branch, err)
 				if shouldCommentMaintenanceFailure(*session, err) {
@@ -1580,7 +1599,7 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 				a.syncSessionIssueLabelsBestEffort(ctx, *session, pr)
 				continue
 			}
-			a.syncSessionIssueLabelsBestEffort(ctx, *session, pr)
+			a.syncSessionIssueLabelsBestEffort(ctx, *session, detailedPR)
 			continue
 		}
 
@@ -1611,9 +1630,16 @@ func (a *App) cleanupClosedIssueSessions(ctx context.Context, sessions []state.S
 		if session.Status != state.SessionStatusSuccess || session.CleanupCompletedAt != "" || session.MonitoringStoppedAt != "" {
 			continue
 		}
+		if shouldDelaySuccessfulSessionPoll(*session, a.clock()) {
+			continue
+		}
 
 		issue, err := ghcli.GetIssueDetails(ctx, a.env.Runner, session.Repo, session.IssueNumber)
 		if err != nil {
+			if ghcli.IsIssueUnavailableError(err) {
+				a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
+				continue
+			}
 			session.LastMaintenanceError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 			a.state.AppendDaemonLog("issue lookup failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
@@ -1705,7 +1731,7 @@ func (a *App) waitForSessions() {
 	a.sessionWG.Wait()
 }
 
-func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Session, pr ghcli.PullRequest) error {
+func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Session, pr ghcli.PullRequest) (*ghcli.PullRequest, error) {
 	previousMaintenanceError := session.LastMaintenanceError
 	session.LastMaintenanceError = ""
 	fallbackTarget := a.fallbackWatchTargetForSession(*session)
@@ -1714,25 +1740,37 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 		baseBranch = effectiveSessionBaseBranch(*session, fallbackTarget)
 	}
 	if baseBranch == "" {
-		return errors.New("pull request base branch is unavailable")
+		return nil, errors.New("pull request base branch is unavailable")
 	}
 	session.PullRequestBaseBranch = baseBranch
 
 	if _, err := a.env.Runner.Run(ctx, session.WorktreePath, "git", "fetch", "origin", baseBranch); err != nil {
-		return err
+		return nil, err
 	}
 
 	statusOutput, err := a.env.Runner.Run(ctx, session.WorktreePath, "git", "status", "--porcelain")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if strings.TrimSpace(statusOutput) != "" {
-		return errors.New("worktree is not clean before PR maintenance")
+		return nil, errors.New("worktree is not clean before PR maintenance")
 	}
 
 	details, err := ghcli.GetPullRequestDetails(ctx, a.env.Runner, session.Repo, pr.Number)
 	if err != nil {
-		return err
+		return nil, err
+	}
+	var issueDetails *ghcli.IssueDetails
+	loadIssueDetails := func() (*ghcli.IssueDetails, error) {
+		if issueDetails != nil {
+			return issueDetails, nil
+		}
+		loaded, err := ghcli.GetIssueDetails(ctx, a.env.Runner, session.Repo, session.IssueNumber)
+		if err != nil {
+			return nil, err
+		}
+		issueDetails = loaded
+		return issueDetails, nil
 	}
 	previousFingerprint := strings.TrimSpace(session.PullRequestStatusFingerprint)
 	currentFingerprint := updatePullRequestMaintenanceSnapshot(session, *details)
@@ -1742,9 +1780,13 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 			session.LastMaintainedAt = now
 			session.UpdatedAt = now
 			session.LastMaintenanceError = previousMaintenanceError
-			return nil
+			return details, nil
 		}
-		return a.dispatchConflictResolution(ctx, session, *details)
+		loadedIssueDetails, err := loadIssueDetails()
+		if err != nil {
+			return nil, err
+		}
+		return details, a.dispatchConflictResolution(ctx, session, *details, loadedIssueDetails)
 	}
 
 	baseRef := "origin/" + baseBranch
@@ -1752,7 +1794,7 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 	rebased := rebaseChangedHistory(rebaseOutput)
 	if err != nil {
 		if !isRebaseConflict(rebaseOutput, err) {
-			return err
+			return nil, err
 		}
 		details.MergeStateStatus = fallbackText(details.MergeStateStatus, "DIRTY")
 		details.Mergeable = fallbackText(details.Mergeable, "CONFLICTING")
@@ -1762,22 +1804,26 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 			session.LastMaintainedAt = now
 			session.UpdatedAt = now
 			session.LastMaintenanceError = previousMaintenanceError
-			return nil
+			return details, nil
 		}
-		return a.dispatchConflictResolution(ctx, session, *details)
+		loadedIssueDetails, err := loadIssueDetails()
+		if err != nil {
+			return nil, err
+		}
+		return details, a.dispatchConflictResolution(ctx, session, *details, loadedIssueDetails)
 	}
 
 	session.LastMaintainedAt = a.clock().Format(time.RFC3339)
 	session.UpdatedAt = session.LastMaintainedAt
 	if !rebased {
-		return a.maintainPullRequestChecks(ctx, session, pr)
+		return details, a.maintainPullRequestChecks(ctx, session, *details, issueDetails)
 	}
 
 	if _, err := a.env.Runner.Run(ctx, session.WorktreePath, "go", "test", "./..."); err != nil {
-		return err
+		return nil, err
 	}
 	if _, err := a.env.Runner.Run(ctx, session.WorktreePath, "git", "push", "--force-with-lease", "origin", "HEAD:"+session.Branch); err != nil {
-		return err
+		return nil, err
 	}
 
 	body := ghcli.FormatProgressComment(ghcli.ProgressComment{
@@ -1792,13 +1838,16 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 		},
 		Tagline: "Success is where preparation and opportunity meet.",
 	})
-	return a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "validation", "pr_maintenance")
+	return details, a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "validation", "pr_maintenance")
 }
 
-func (a *App) dispatchConflictResolution(ctx context.Context, session *state.Session, pr ghcli.PullRequest) error {
-	issueDetails, err := ghcli.GetIssueDetails(ctx, a.env.Runner, session.Repo, session.IssueNumber)
-	if err != nil {
-		return err
+func (a *App) dispatchConflictResolution(ctx context.Context, session *state.Session, pr ghcli.PullRequest, issueDetails *ghcli.IssueDetails) error {
+	if issueDetails == nil {
+		var err error
+		issueDetails, err = ghcli.GetIssueDetails(ctx, a.env.Runner, session.Repo, session.IssueNumber)
+		if err != nil {
+			return err
+		}
 	}
 	session.IssueBody = strings.TrimSpace(issueDetails.Body)
 	if strings.TrimSpace(issueDetails.Title) != "" {
@@ -1837,24 +1886,20 @@ func (a *App) dispatchConflictResolution(ctx context.Context, session *state.Ses
 	return nil
 }
 
-func (a *App) maintainPullRequestChecks(ctx context.Context, session *state.Session, pr ghcli.PullRequest) error {
-	details, err := ghcli.GetPullRequestDetails(ctx, a.env.Runner, session.Repo, pr.Number)
-	if err != nil {
+func (a *App) maintainPullRequestChecks(ctx context.Context, session *state.Session, pr ghcli.PullRequest, issueDetails *ghcli.IssueDetails) error {
+	updatePullRequestMaintenanceSnapshot(session, pr)
+	if err := a.handleFailingPullRequestChecks(ctx, session, pr); err != nil {
 		return err
 	}
-	updatePullRequestMaintenanceSnapshot(session, *details)
-	if err := a.handleFailingPullRequestChecks(ctx, session, *details); err != nil {
-		return err
-	}
-	if requiredChecksState(details.StatusCheckRollup) == "failing" {
+	if requiredChecksState(pr.StatusCheckRollup) == "failing" {
 		return nil
 	}
-	return a.tryAutoSquashMerge(ctx, session, *details)
+	return a.tryAutoSquashMerge(ctx, session, pr, issueDetails)
 }
 
-func (a *App) tryAutoSquashMerge(ctx context.Context, session *state.Session, pr ghcli.PullRequest) error {
+func (a *App) tryAutoSquashMerge(ctx context.Context, session *state.Session, pr ghcli.PullRequest, issueDetails *ghcli.IssueDetails) error {
 	checkState := requiredChecksState(pr.StatusCheckRollup)
-	enabled, err := a.automergeEnabled(ctx, session, pr)
+	enabled, err := a.automergeEnabled(ctx, session, pr, issueDetails)
 	if err != nil {
 		return err
 	}
@@ -1883,7 +1928,7 @@ func (a *App) tryAutoSquashMerge(ctx context.Context, session *state.Session, pr
 	return nil
 }
 
-func (a *App) automergeEnabled(ctx context.Context, session *state.Session, pr ghcli.PullRequest) (bool, error) {
+func (a *App) automergeEnabled(ctx context.Context, session *state.Session, pr ghcli.PullRequest, issue *ghcli.IssueDetails) (bool, error) {
 	if ghcli.HasAnyLabel(pr.Labels, automergeLabels...) {
 		return true, nil
 	}
@@ -1891,12 +1936,55 @@ func (a *App) automergeEnabled(ctx context.Context, session *state.Session, pr g
 		return false, nil
 	}
 
-	issue, err := ghcli.GetIssueDetails(ctx, a.env.Runner, session.Repo, session.IssueNumber)
-	if err != nil {
-		a.state.AppendDaemonLog("issue automerge label lookup failed repo=%s issue=%d pr=%d err=%v", session.Repo, session.IssueNumber, pr.Number, err)
-		return false, nil
+	if issue == nil {
+		var err error
+		issue, err = ghcli.GetIssueDetails(ctx, a.env.Runner, session.Repo, session.IssueNumber)
+		if err != nil {
+			a.state.AppendDaemonLog("issue automerge label lookup failed repo=%s issue=%d pr=%d err=%v", session.Repo, session.IssueNumber, pr.Number, err)
+			return false, nil
+		}
 	}
 	return ghcli.HasAnyLabel(issue.Labels, automergeLabels...), nil
+}
+
+func shouldDelaySuccessfulSessionPoll(session state.Session, now time.Time) bool {
+	if session.PullRequestNumber <= 0 {
+		return false
+	}
+	switch strings.ToUpper(strings.TrimSpace(session.PullRequestState)) {
+	case "CLOSED", "MERGED":
+		return false
+	}
+	if strings.TrimSpace(session.LastMaintainedAt) == "" {
+		return false
+	}
+	lastMaintainedAt, err := time.Parse(time.RFC3339, session.LastMaintainedAt)
+	if err != nil {
+		return false
+	}
+	return now.Sub(lastMaintainedAt) < defaultSuccessfulSessionPollInterval
+}
+
+func (a *App) stopMonitoringUnavailableIssueSession(ctx context.Context, session *state.Session, source string, issueErr error) {
+	now := a.clock().Format(time.RFC3339)
+	previousStatus := session.Status
+	if err := worktree.CleanupIssueArtifacts(ctx, a.env.Runner, session.RepoPath, session.WorktreePath, session.Branch); err != nil {
+		session.CleanupError = err.Error()
+		a.state.AppendDaemonLog("issue unavailable cleanup failed repo=%s issue=%d branch=%s source=%s err=%v", session.Repo, session.IssueNumber, session.Branch, source, err)
+	} else {
+		session.CleanupCompletedAt = now
+		session.CleanupError = ""
+	}
+	session.Status = state.SessionStatusClosed
+	session.MonitoringStoppedAt = now
+	session.ProcessID = 0
+	session.LastHeartbeatAt = ""
+	session.EndedAt = now
+	session.UpdatedAt = now
+	session.LastMaintenanceError = ""
+	session.LastError = fmt.Sprintf("issue is no longer available on GitHub; monitoring stopped: %s", summarizeMaintenanceError(issueErr))
+	a.emitSessionTransition(previousStatus, *session, source)
+	a.state.AppendDaemonLog("issue monitoring stopped repo=%s issue=%d branch=%s source=%s err=%v", session.Repo, session.IssueNumber, session.Branch, source, issueErr)
 }
 
 func (a *App) handleFailingPullRequestChecks(ctx context.Context, session *state.Session, pr ghcli.PullRequest) error {
@@ -2101,6 +2189,10 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 
 		details, err := ghcli.GetIssueDetails(ctx, a.env.Runner, session.Repo, session.IssueNumber)
 		if err != nil {
+			if ghcli.IsIssueUnavailableError(err) {
+				a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
+				continue
+			}
 			a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), "gh issue view", err)
 			a.state.AppendDaemonLog("resume issue details failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
 			continue
@@ -2671,7 +2763,7 @@ func (a *App) resumeBlockedMaintenance(ctx context.Context, session *state.Sessi
 	if pr.State != "OPEN" {
 		return fmt.Errorf("pull request #%d is not open", pr.Number)
 	}
-	if err := a.maintainOpenPullRequest(ctx, session, *pr); err != nil {
+	if _, err := a.maintainOpenPullRequest(ctx, session, *pr); err != nil {
 		return err
 	}
 	session.Status = state.SessionStatusSuccess
@@ -3477,6 +3569,11 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 
 		details, err := ghcli.GetIssueDetails(ctx, a.env.Runner, session.Repo, session.IssueNumber)
 		if err != nil {
+			if ghcli.IsIssueUnavailableError(err) {
+				a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
+				needsSave = true
+				continue
+			}
 			a.state.AppendDaemonLog("iteration issue details failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)

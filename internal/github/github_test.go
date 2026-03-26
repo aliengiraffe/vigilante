@@ -354,8 +354,7 @@ func TestFindPullRequestForBranch(t *testing.T) {
 func TestGetPullRequestDetails(t *testing.T) {
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh pr view --repo owner/repo 17 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup": `{"number":17,"title":"Feature","body":"PR body","url":"https://github.com/owner/repo/pull/17","state":"OPEN","mergedAt":null,"labels":[{"name":"automerge"}],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}]}`,
-			"gh pr view --repo owner/repo 17 --json baseRefName": "{" + `"baseRefName":"develop"` + "}",
+			"gh pr view --repo owner/repo 17 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": `{"number":17,"title":"Feature","body":"PR body","url":"https://github.com/owner/repo/pull/17","state":"OPEN","mergedAt":null,"labels":[{"name":"automerge"}],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}],"baseRefName":"develop"}`,
 		},
 	}
 
