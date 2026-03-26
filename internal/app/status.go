@@ -18,8 +18,10 @@ const (
 )
 
 type sessionGroup struct {
-	Label    string
-	Sessions []state.Session
+	Label          string
+	Sessions       []state.Session
+	CompletedCount int
+	FailedCount    int
 }
 
 type watchedRepoStatus struct {
@@ -71,10 +73,11 @@ func groupSessions(sessions []state.Session, now time.Time, inactivityTimeout ti
 		groups = append(groups, sessionGroup{Label: "Stale sessions", Sessions: stale})
 	}
 	if len(completed) > 0 || len(failed) > 0 {
-		var summary []state.Session
-		summary = append(summary, completed...)
-		summary = append(summary, failed...)
-		groups = append(groups, sessionGroup{Label: "Completed / failed", Sessions: summary})
+		groups = append(groups, sessionGroup{
+			Label:          "Completed / failed",
+			CompletedCount: len(completed),
+			FailedCount:    len(failed),
+		})
 	}
 	return groups
 }
@@ -160,11 +163,44 @@ func writeSessionGroups(w io.Writer, groups []sessionGroup) {
 		if i > 0 {
 			fmt.Fprintln(w)
 		}
-		fmt.Fprintf(w, "%s (%d)\n", g.Label, len(g.Sessions))
+		total := len(g.Sessions) + g.CompletedCount + g.FailedCount
+		fmt.Fprintf(w, "%s (%d)\n", g.Label, total)
+		if g.CompletedCount > 0 || g.FailedCount > 0 {
+			fmt.Fprintf(w, "  completed: %d\n", g.CompletedCount)
+			fmt.Fprintf(w, "  failed: %d\n", g.FailedCount)
+			continue
+		}
 		for _, s := range g.Sessions {
 			fmt.Fprintln(w, formatSessionRow(s))
 		}
 	}
+}
+
+func (a *App) statusWatch(ctx context.Context, interval time.Duration) error {
+	if err := writeStatusRefreshFrame(a.stdout, func() error { return a.statusExpanded(ctx) }); err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			if err := writeStatusRefreshFrame(a.stdout, func() error { return a.statusExpanded(ctx) }); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func writeStatusRefreshFrame(w io.Writer, render func() error) error {
+	if _, err := io.WriteString(w, "\033[H\033[2J"); err != nil {
+		return err
+	}
+	return render()
 }
 
 func writeRateLimitSection(w io.Writer, snapshot ghcli.RateLimitSnapshot) {

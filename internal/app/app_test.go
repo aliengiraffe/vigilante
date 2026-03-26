@@ -964,6 +964,41 @@ func TestStatusCommandFailsOnUnsupportedOS(t *testing.T) {
 	}
 }
 
+func TestStatusCommandRejectsUnexpectedArgs(t *testing.T) {
+	app := New()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = &stderr
+
+	exitCode := app.Run(context.Background(), []string{"status", "extra"})
+	if exitCode != 1 {
+		t.Fatalf("expected failure exit code, got %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "error: usage: vigilante status [-w]") {
+		t.Fatalf("unexpected stderr: %q", stderr.String())
+	}
+}
+
+func TestStatusCommandHelpIncludesWatchFlag(t *testing.T) {
+	app := New()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = &stderr
+
+	exitCode := app.Run(context.Background(), []string{"status", "--help"})
+	if exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d", exitCode)
+	}
+	if !strings.Contains(stdout.String(), "usage: vigilante status [-w]") {
+		t.Fatalf("unexpected help output: %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "-watch") && !strings.Contains(stdout.String(), "--watch") {
+		t.Fatalf("expected watch flag in help output, got %q", stdout.String())
+	}
+}
+
 func TestServiceRestartCommandRequestsRestart(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

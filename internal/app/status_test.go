@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -117,8 +119,11 @@ func TestGroupSessionsCompletedAndFailed(t *testing.T) {
 	if groups[0].Label != "Completed / failed" {
 		t.Fatalf("expected 'Completed / failed', got %q", groups[0].Label)
 	}
-	if len(groups[0].Sessions) != 2 {
-		t.Fatalf("expected 2 sessions, got %d", len(groups[0].Sessions))
+	if groups[0].CompletedCount != 1 || groups[0].FailedCount != 1 {
+		t.Fatalf("expected 1 completed and 1 failed, got %+v", groups[0])
+	}
+	if len(groups[0].Sessions) != 0 {
+		t.Fatalf("expected completed/failed details to be collapsed, got %d rows", len(groups[0].Sessions))
 	}
 }
 
@@ -135,11 +140,8 @@ func TestGroupSessionsExcludesClosed(t *testing.T) {
 	if groups[0].Label != "Completed / failed" {
 		t.Fatalf("expected 'Completed / failed', got %q", groups[0].Label)
 	}
-	if len(groups[0].Sessions) != 1 {
-		t.Fatalf("expected 1 session, got %d", len(groups[0].Sessions))
-	}
-	if groups[0].Sessions[0].IssueNumber != 71 {
-		t.Fatalf("expected only open operational session to remain visible, got %#v", groups[0].Sessions)
+	if groups[0].CompletedCount != 1 || groups[0].FailedCount != 0 {
+		t.Fatalf("expected only one completed session to remain visible, got %+v", groups[0])
 	}
 }
 
@@ -428,6 +430,31 @@ func TestStatusCommandShowsSessionGroups(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Errorf("expected output to contain %q, got:\n%s", want, output)
 		}
+	}
+}
+
+func TestWriteSessionGroupsCompletedFailedShowsTotalsOnly(t *testing.T) {
+	groups := []sessionGroup{{
+		Label:          "Completed / failed",
+		CompletedCount: 2,
+		FailedCount:    1,
+	}}
+
+	var buf bytes.Buffer
+	writeSessionGroups(&buf, groups)
+	output := buf.String()
+
+	for _, want := range []string{
+		"Completed / failed (3)",
+		"completed: 2",
+		"failed: 1",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected output to contain %q, got:\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "Issue #") {
+		t.Fatalf("expected totals-only completed/failed output, got:\n%s", output)
 	}
 }
 
@@ -777,11 +804,58 @@ func TestStatusCommandExcludesClosedSessionsFromCountsAndGroups(t *testing.T) {
 	if !strings.Contains(output, "Completed / failed (1)") {
 		t.Fatalf("expected only visible operational sessions in completed/failed group, got:\n%s", output)
 	}
+	if !strings.Contains(output, "completed: 1") {
+		t.Fatalf("expected completed subtotal, got:\n%s", output)
+	}
 	if strings.Contains(output, "Issue #70") {
 		t.Fatalf("expected closed session to be hidden from status output, got:\n%s", output)
 	}
-	if !strings.Contains(output, "Issue #71 in owner/repo: success") {
-		t.Fatalf("expected success session to remain visible, got:\n%s", output)
+	if strings.Contains(output, "Issue #71 in owner/repo: success") {
+		t.Fatalf("expected completed section details to be collapsed, got:\n%s", output)
+	}
+}
+
+func TestWriteStatusRefreshFrameClearsBeforeRendering(t *testing.T) {
+	var buf bytes.Buffer
+	if err := writeStatusRefreshFrame(&buf, func() error {
+		_, err := io.WriteString(&buf, "snapshot")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := buf.String(), "\033[H\033[2Jsnapshot"; got != want {
+		t.Fatalf("writeStatusRefreshFrame output = %q, want %q", got, want)
+	}
+}
+
+func TestStatusWatchStopsOnContextCancellation(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+
+	app := New()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.OS = "linux"
+	app.env.Runner = testutil.FakeRunner{}
+
+	if err := app.statusWatch(ctx, time.Hour); err != nil {
+		t.Fatalf("expected watch mode to stop cleanly, got %v", err)
+	}
+	if !strings.HasPrefix(stdout.String(), "\033[H\033[2J") {
+		t.Fatalf("expected watch mode to clear the screen before rendering, got %q", stdout.String())
+	}
+}
+
+func TestStatusWatchReturnsRenderErrors(t *testing.T) {
+	wantErr := errors.New("boom")
+	err := writeStatusRefreshFrame(io.Discard, func() error { return wantErr })
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("writeStatusRefreshFrame error = %v, want %v", err, wantErr)
 	}
 }
 
