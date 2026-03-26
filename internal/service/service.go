@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -32,13 +34,17 @@ const (
 )
 
 type Status struct {
-	Manager   string
-	Service   string
-	FilePath  string
-	State     string
-	Installed bool
-	Running   bool
+	Manager       string
+	Service       string
+	FilePath      string
+	State         string
+	Installed     bool
+	Running       bool
+	DaemonVersion string
 }
+
+var daemonVersionPattern = regexp.MustCompile(`\b(v?\d+\.\d+\.\d+)\b`)
+var launchdProgramArgumentsPattern = regexp.MustCompile(`(?s)<key>\s*ProgramArguments\s*</key>\s*<array>\s*<string>([^<]+)</string>`)
 
 func Install(ctx context.Context, env *environment.Environment, store *state.Store, selectedProvider provider.Provider) error {
 	cfg, err := BuildConfig(ctx, env, selectedProvider)
@@ -209,8 +215,26 @@ func ServiceStatus(ctx context.Context, env *environment.Environment) (Status, e
 	} else {
 		status.State = StatusStopped
 	}
+	status.DaemonVersion = detectConfiguredDaemonVersion(ctx, env, status)
 
 	return status, nil
+}
+
+func detectConfiguredDaemonVersion(ctx context.Context, env *environment.Environment, status Status) string {
+	if !status.Installed {
+		return ""
+	}
+
+	executable, err := daemonExecutableFromServiceDefinition(env.OS, status.FilePath)
+	if err != nil || strings.TrimSpace(executable) == "" {
+		return ""
+	}
+
+	output, err := env.Runner.Run(ctx, "", executable, "--version")
+	if err != nil {
+		return ""
+	}
+	return normalizeDaemonVersionOutput(output)
 }
 
 func Restart(ctx context.Context, env *environment.Environment) error {
@@ -334,6 +358,69 @@ func runtimeTool(selectedProvider provider.Provider) string {
 
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+}
+
+func daemonExecutableFromServiceDefinition(goos string, filePath string) (string, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", err
+	}
+
+	switch goos {
+	case "darwin":
+		return parseLaunchdExecutable(string(content)), nil
+	case "linux":
+		return parseSystemdExecutable(string(content)), nil
+	default:
+		return "", errors.New("unsupported OS")
+	}
+}
+
+func parseLaunchdExecutable(content string) string {
+	matches := launchdProgramArgumentsPattern.FindStringSubmatch(content)
+	if len(matches) != 2 {
+		return ""
+	}
+	return strings.TrimSpace(html.UnescapeString(matches[1]))
+}
+
+func parseSystemdExecutable(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "ExecStart=") {
+			continue
+		}
+		value := strings.TrimSpace(strings.TrimPrefix(line, "ExecStart="))
+		if value == "" {
+			return ""
+		}
+		if idx := strings.Index(value, " daemon run"); idx > 0 {
+			return strings.TrimSpace(value[:idx])
+		}
+		fields := strings.Fields(value)
+		if len(fields) == 0 {
+			return ""
+		}
+		return fields[0]
+	}
+	return ""
+}
+
+func normalizeDaemonVersionOutput(output string) string {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return ""
+	}
+	if match := daemonVersionPattern.FindStringSubmatch(trimmed); len(match) == 2 {
+		return strings.TrimPrefix(match[1], "v")
+	}
+	for _, line := range strings.Split(trimmed, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return line
+		}
+	}
+	return ""
 }
 
 func prepareMacOSDaemonBinary(ctx context.Context, runner environment.Runner, executable string) error {
