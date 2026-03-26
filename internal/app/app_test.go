@@ -1584,7 +1584,7 @@ func TestWatchListAndUnwatch(t *testing.T) {
 		},
 	}
 
-	if err := app.Watch(context.Background(), repoPath, []string{"to-do", "good first issue"}, "", 0); err != nil {
+	if err := app.Watch(context.Background(), repoPath, false, []string{"to-do", "good first issue"}, "", 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1652,12 +1652,12 @@ func TestWatchUpdatesExistingTarget(t *testing.T) {
 		},
 	}
 
-	if err := app.Watch(context.Background(), repoPath, nil, "nicobistolfi", 3); err != nil {
+	if err := app.Watch(context.Background(), repoPath, false, nil, "nicobistolfi", 3); err != nil {
 		t.Fatal(err)
 	}
 
 	stdout.Reset()
-	if err := app.Watch(context.Background(), repoPath, []string{"vibe-code", "vibe-code"}, "", 0); err != nil {
+	if err := app.Watch(context.Background(), repoPath, false, []string{"vibe-code", "vibe-code"}, "", 0); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(stdout.String(), "updated "+repoPath) {
@@ -1702,7 +1702,7 @@ func TestWatchCommandWithoutMaxParallelPreservesExistingTargetValue(t *testing.T
 		},
 	}
 
-	if err := app.Watch(context.Background(), repoPath, nil, "", 3); err != nil {
+	if err := app.Watch(context.Background(), repoPath, false, nil, "", 3); err != nil {
 		t.Fatal(err)
 	}
 	if err := app.runCommand(context.Background(), []string{"watch", repoPath}); err != nil {
@@ -1789,7 +1789,7 @@ func TestWatchPersistsRepoClassification(t *testing.T) {
 		},
 	}
 
-	if err := app.Watch(context.Background(), repoPath, nil, "", 0); err != nil {
+	if err := app.Watch(context.Background(), repoPath, false, nil, "", 0); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1904,14 +1904,14 @@ func TestSetupCommandRejectsLegacyDaemonFlag(t *testing.T) {
 	}
 }
 
-func TestWatchCommandRejectsLegacyDaemonFlag(t *testing.T) {
+func TestWatchCommandAcceptsDaemonFlag(t *testing.T) {
 	app := New()
 	app.stdout = testutil.IODiscard{}
 	app.stderr = testutil.IODiscard{}
 
 	err := app.runCommand(context.Background(), []string{"watch", "-d", "/tmp/repo"})
-	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined: -d") {
-		t.Fatalf("expected legacy watch -d flag rejection, got %v", err)
+	if err == nil || strings.Contains(err.Error(), "flag provided but not defined: -d") {
+		t.Fatalf("expected watch -d to parse and continue, got %v", err)
 	}
 }
 
@@ -1945,7 +1945,7 @@ func TestWatchReportsManagedServiceRunning(t *testing.T) {
 		},
 	}
 
-	if err := app.Watch(context.Background(), repoPath, nil, "", 0); err != nil {
+	if err := app.Watch(context.Background(), repoPath, false, nil, "", 0); err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(stdout.String(), "managed service is running; this watch target will be picked up automatically.") {
@@ -1974,7 +1974,7 @@ func TestWatchReportsSetupAndManualDaemonWhenServiceMissing(t *testing.T) {
 		},
 	}
 
-	if err := app.Watch(context.Background(), repoPath, nil, "", 0); err != nil {
+	if err := app.Watch(context.Background(), repoPath, false, nil, "", 0); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
@@ -2018,7 +2018,7 @@ func TestWatchReportsRestartOrManualDaemonWhenServiceStopped(t *testing.T) {
 		},
 	}
 
-	if err := app.Watch(context.Background(), repoPath, nil, "", 0); err != nil {
+	if err := app.Watch(context.Background(), repoPath, false, nil, "", 0); err != nil {
 		t.Fatal(err)
 	}
 	for _, want := range []string{
