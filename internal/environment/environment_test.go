@@ -171,6 +171,9 @@ func TestLoggingRunnerAccessLogDefaultsToDaemonContext(t *testing.T) {
 	if got, want := entries[0].ExecutionContext, "daemon"; got != want {
 		t.Fatalf("context = %q, want %q", got, want)
 	}
+	if got, want := entries[0].Tool, "gh"; got != want {
+		t.Fatalf("tool = %q, want %q", got, want)
+	}
 	if got := strings.Join(entries[0].Argv, " "); strings.Contains(got, "super-secret") {
 		t.Fatalf("expected sanitized argv, got %q", got)
 	}
@@ -197,6 +200,7 @@ func TestLoggingRunnerAccessLogIncludesSessionContext(t *testing.T) {
 		IssueNumber:      7,
 		Branch:           "vigilante/issue-7",
 		WorktreePath:     "/tmp/worktree",
+		CorrelationID:    "session:owner/repo#7",
 	})
 
 	if _, err := runner.Run(ctx, "/tmp/worktree", "git", "status", "--short"); err != nil {
@@ -213,6 +217,72 @@ func TestLoggingRunnerAccessLogIncludesSessionContext(t *testing.T) {
 	}
 	if got, want := entries[0].IssueNumber, 7; got != want {
 		t.Fatalf("issue = %d, want %d", got, want)
+	}
+	if got, want := entries[0].CorrelationID, "session:owner/repo#7"; got != want {
+		t.Fatalf("correlation_id = %q, want %q", got, want)
+	}
+}
+
+func TestLoggingRunnerAccessLogNormalizesToolNamesAndClassifiesHealthchecks(t *testing.T) {
+	var entries []AccessLogEntry
+	runner := LoggingRunner{
+		Base: testutil.FakeRunner{
+			Outputs: map[string]string{
+				"/home/test/.local/bin/vigilante --version": "vigilante 1.2.3\n",
+			},
+		},
+		AccessLog: func(entry AccessLogEntry) {
+			entries = append(entries, entry)
+		},
+	}
+
+	if _, err := runner.Run(context.Background(), "", "/home/test/.local/bin/vigilante", "--version"); err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 access log entry, got %d", len(entries))
+	}
+	if got, want := entries[0].ExecutionContext, "healthcheck"; got != want {
+		t.Fatalf("context = %q, want %q", got, want)
+	}
+	if got, want := entries[0].Tool, "vigilante"; got != want {
+		t.Fatalf("tool = %q, want %q", got, want)
+	}
+	if got, want := entries[0].ToolPath, "/home/test/.local/bin/vigilante"; got != want {
+		t.Fatalf("tool_path = %q, want %q", got, want)
+	}
+}
+
+func TestLoggingRunnerAccessLogCapturesSanitizedFailureDiagnostics(t *testing.T) {
+	var entries []AccessLogEntry
+	runner := LoggingRunner{
+		Base: testutil.FakeRunner{
+			ErrorOutputs: map[string]string{
+				"gh api /user": "Authorization: Bearer super-secret\n",
+			},
+			Errors: map[string]error{
+				"gh api /user": fmt.Errorf("gh api failed"),
+			},
+		},
+		AccessLog: func(entry AccessLogEntry) {
+			entries = append(entries, entry)
+		},
+	}
+
+	if _, err := runner.Run(context.Background(), "", "gh", "api", "/user"); err == nil {
+		t.Fatal("expected error")
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 access log entry, got %d", len(entries))
+	}
+	if got, want := entries[0].FailureKind, "runtime_error"; got != want {
+		t.Fatalf("failure_kind = %q, want %q", got, want)
+	}
+	if strings.Contains(entries[0].Error, "super-secret") {
+		t.Fatalf("expected sanitized error detail, got %q", entries[0].Error)
+	}
+	if !strings.Contains(entries[0].Error, "<redacted>") {
+		t.Fatalf("expected redacted error detail, got %q", entries[0].Error)
 	}
 }
 
