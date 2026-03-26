@@ -123,6 +123,11 @@ type Session struct {
 	LastCleanupSource              string        `json:"last_cleanup_source,omitempty"`
 	LastCleanupCommentID           int64         `json:"last_cleanup_comment_id,omitempty"`
 	LastCleanupCommentAt           string        `json:"last_cleanup_comment_at,omitempty"`
+	LastRecreateSource             string        `json:"last_recreate_source,omitempty"`
+	LastRecreateCommentID          int64         `json:"last_recreate_comment_id,omitempty"`
+	LastRecreateCommentAt          string        `json:"last_recreate_comment_at,omitempty"`
+	RecreatedAsIssue               int           `json:"recreated_as_issue,omitempty"`
+	RecreatedAsIssueURL            string        `json:"recreated_as_issue_url,omitempty"`
 	StaleAutoRestartAttempts       int           `json:"stale_auto_restart_attempts,omitempty"`
 	StaleAutoRestartPendingSince   string        `json:"stale_auto_restart_pending_since,omitempty"`
 	StaleAutoRestartStoppedAt      string        `json:"stale_auto_restart_stopped_at,omitempty"`

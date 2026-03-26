@@ -369,6 +369,8 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		return a.runCleanupCommand(ctx, args[1:])
 	case "redispatch":
 		return a.runRedispatchCommand(ctx, args[1:])
+	case "recreate":
+		return a.runRecreateCommand(ctx, args[1:])
 	case "resume":
 		return a.runResumeCommand(ctx, args[1:])
 	case "service":
@@ -518,6 +520,31 @@ func (a *App) runCleanupCommand(ctx context.Context, args []string) error {
 	default:
 		return a.CleanupSession(ctx, *repo, *issue, "cli")
 	}
+}
+
+func (a *App) runRecreateCommand(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("recreate", flag.ContinueOnError)
+	configureFlagSet(fs, func(w io.Writer) {
+		fmt.Fprintln(w, "usage: vigilante recreate --repo <owner/name> --issue <n>")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Recreate a stuck issue as a fresh duplicate, close the original as not planned,")
+		fmt.Fprintln(w, "and clean up stale PR/branch/session artifacts.")
+		fmt.Fprintln(w)
+		fs.SetOutput(w)
+		fs.PrintDefaults()
+	})
+	repo := fs.String("repo", "", "repository slug")
+	issue := fs.Int("issue", 0, "issue number")
+	if err := parseFlagSet(fs, args, a.stdout); err != nil {
+		if errors.Is(err, errHelpHandled) {
+			return nil
+		}
+		return err
+	}
+	if *repo == "" || *issue <= 0 {
+		return errors.New("usage: vigilante recreate --repo <owner/name> --issue <n>")
+	}
+	return a.RecreateSession(ctx, *repo, *issue, "cli")
 }
 
 func (a *App) runDaemonCommand(ctx context.Context, args []string) error {
@@ -1069,6 +1096,10 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			return nil
 		}
 		sessions, err = a.processGitHubCleanupRequests(ctx, sessions)
+		if err != nil {
+			return err
+		}
+		sessions, err = a.processGitHubRecreateRequests(ctx, sessions)
 		if err != nil {
 			return err
 		}
@@ -2237,6 +2268,142 @@ func (a *App) processGitHubCleanupRequests(ctx context.Context, sessions []state
 	return sessions, nil
 }
 
+func (a *App) processGitHubRecreateRequests(ctx context.Context, sessions []state.Session) ([]state.Session, error) {
+	for i := range sessions {
+		session := &sessions[i]
+		if session.Status == state.SessionStatusClosed {
+			continue
+		}
+
+		comments, err := ghcli.ListIssueCommentsForPolling(ctx, a.env.Runner, session.Repo, session.IssueNumber, "recreate", a.state.AppendDaemonLog)
+		if err != nil {
+			a.state.AppendDaemonLog("recreate comment lookup failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
+			session.LastError = err.Error()
+			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			continue
+		}
+		comment := ghcli.FindRecreateComment(comments, session.LastRecreateCommentID)
+		if comment == nil {
+			continue
+		}
+		if err := ghcli.AddIssueCommentReaction(ctx, a.env.Runner, session.Repo, comment.ID, "eyes"); err != nil {
+			a.state.AppendDaemonLog("recreate reaction failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
+			session.LastError = err.Error()
+			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			continue
+		}
+		session.LastRecreateCommentID = comment.ID
+		session.LastRecreateCommentAt = comment.CreatedAt.UTC().Format(time.RFC3339)
+
+		// Unlock the session mutex before calling RecreateSession, which acquires it.
+		// Instead, perform the recreate inline to avoid deadlock.
+		repo := session.Repo
+		issueNumber := session.IssueNumber
+
+		// Use a goroutine-free approach: call the core logic directly.
+		recreateErr := a.recreateSessionInline(ctx, session, sessions, "comment")
+
+		if recreateErr != nil {
+			body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Recreate Failed",
+				Emoji:      "❌",
+				Percent:    100,
+				ETAMinutes: 1,
+				Items: []string{
+					"Received `@vigilanteai recreate` for this issue.",
+					fmt.Sprintf("Error: %s.", recreateErr),
+					"The issue was not recreated. Please check the error and try again.",
+				},
+				Tagline: "Better luck next time.",
+			})
+			if err := a.commentOnIssue(ctx, repo, issueNumber, body, "recreate", "github_comment"); err != nil {
+				a.state.AppendDaemonLog("recreate failure comment failed repo=%s issue=%d err=%v", repo, issueNumber, err)
+			}
+		}
+	}
+	return sessions, nil
+}
+
+func (a *App) recreateSessionInline(ctx context.Context, session *state.Session, sessions []state.Session, source string) error {
+	repoSlug := session.Repo
+	issue := session.IssueNumber
+
+	details, err := ghcli.GetIssueDetails(ctx, a.env.Runner, repoSlug, issue)
+	if err != nil {
+		return fmt.Errorf("get issue details: %w", err)
+	}
+
+	var labelNames []string
+	for _, label := range details.Labels {
+		if strings.HasPrefix(label.Name, "vigilante:") {
+			continue
+		}
+		labelNames = append(labelNames, label.Name)
+	}
+	var assigneeLogins []string
+	for _, assignee := range details.Assignees {
+		assigneeLogins = append(assigneeLogins, assignee.Login)
+	}
+
+	newBody := details.Body + fmt.Sprintf("\n\n---\n_Recreated from #%d by Vigilante._", issue)
+	created, err := ghcli.CreateIssue(ctx, a.env.Runner, repoSlug, details.Title, newBody, labelNames, assigneeLogins)
+	if err != nil {
+		return fmt.Errorf("create replacement issue: %w", err)
+	}
+
+	crossLinkBody := fmt.Sprintf("## ♻️ Issue Recreated\n\nThis issue has been recreated as #%d.\n\nThe original issue is being closed as `not planned` and stale artifacts are being cleaned up.\n\nSource: `%s`.", created.Number, source)
+	a.commentOnIssueBestEffort(ctx, repoSlug, issue, crossLinkBody, "recreate cross-link")
+
+	if err := ghcli.CloseIssueNotPlanned(ctx, a.env.Runner, repoSlug, issue); err != nil {
+		return fmt.Errorf("close original issue: %w", err)
+	}
+
+	a.cancelRunningSession(session.Repo, session.IssueNumber)
+
+	var cleanupErrors []string
+
+	if session.PullRequestNumber > 0 {
+		if err := ghcli.ClosePullRequest(ctx, a.env.Runner, repoSlug, session.PullRequestNumber); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Sprintf("close PR #%d: %s", session.PullRequestNumber, err))
+		}
+	}
+
+	if session.Branch != "" {
+		if err := ghcli.DeleteRemoteBranch(ctx, a.env.Runner, session.RepoPath, session.Branch); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Sprintf("delete remote branch %s: %s", session.Branch, err))
+		}
+	}
+
+	branches := worktree.IssueBranchCandidates(session.IssueNumber, session.IssueTitle)
+	if session.Branch != "" && !containsString(branches, session.Branch) {
+		branches = append(branches, session.Branch)
+	}
+	if err := worktree.CleanupIssueArtifactsForBranches(ctx, a.env.Runner, session.RepoPath, session.WorktreePath, branches); err != nil {
+		cleanupErrors = append(cleanupErrors, fmt.Sprintf("local cleanup: %s", err))
+	}
+
+	now := a.clock().Format(time.RFC3339)
+	session.Status = state.SessionStatusClosed
+	session.ProcessID = 0
+	session.LastHeartbeatAt = ""
+	session.EndedAt = now
+	session.UpdatedAt = now
+	session.CleanupCompletedAt = now
+	session.LastCleanupSource = "recreate_" + source
+	session.LastRecreateSource = source
+	session.RecreatedAsIssue = created.Number
+	session.RecreatedAsIssueURL = created.URL
+	session.LastError = fmt.Sprintf("recreated as #%d via %s", created.Number, source)
+
+	body := recreateResultComment(issue, created.Number, created.URL, source, cleanupErrors)
+	if err := a.commentOnIssue(ctx, repoSlug, issue, body, "recreate", "github_comment"); err != nil {
+		a.state.AppendDaemonLog("recreate result comment failed repo=%s issue=%d err=%v", repoSlug, issue, err)
+	}
+
+	a.state.AppendDaemonLog("recreate completed repo=%s old_issue=%d new_issue=%d source=%s", repoSlug, issue, created.Number, source)
+	return nil
+}
+
 func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.Session, issueCache scanIssueDetailsCache) ([]state.Session, error) {
 	for i := range sessions {
 		session := &sessions[i]
@@ -2543,6 +2710,143 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 
 	a.launchIssueSession(ctx, target, *selectedIssue, session)
 	return nil
+}
+
+func (a *App) RecreateSession(ctx context.Context, repoSlug string, issue int, source string) error {
+	if err := a.state.EnsureLayout(); err != nil {
+		return err
+	}
+
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+
+	targets, err := a.state.LoadWatchTargets()
+	if err != nil {
+		return err
+	}
+	if _, ok := findWatchTargetByRepo(targets, repoSlug); !ok {
+		return fmt.Errorf("watch target not found for %s", repoSlug)
+	}
+
+	details, err := ghcli.GetIssueDetails(ctx, a.env.Runner, repoSlug, issue)
+	if err != nil {
+		return fmt.Errorf("get issue details: %w", err)
+	}
+
+	// Collect labels to copy (skip vigilante lifecycle labels).
+	var labelNames []string
+	for _, label := range details.Labels {
+		if strings.HasPrefix(label.Name, "vigilante:") {
+			continue
+		}
+		labelNames = append(labelNames, label.Name)
+	}
+	var assigneeLogins []string
+	for _, assignee := range details.Assignees {
+		assigneeLogins = append(assigneeLogins, assignee.Login)
+	}
+
+	newBody := details.Body + fmt.Sprintf("\n\n---\n_Recreated from #%d by Vigilante._", issue)
+	created, err := ghcli.CreateIssue(ctx, a.env.Runner, repoSlug, details.Title, newBody, labelNames, assigneeLogins)
+	if err != nil {
+		return fmt.Errorf("create replacement issue: %w", err)
+	}
+
+	// Cross-link on the old issue and close it.
+	crossLinkBody := fmt.Sprintf("## ♻️ Issue Recreated\n\nThis issue has been recreated as #%d.\n\nThe original issue is being closed as `not planned` and stale artifacts are being cleaned up.\n\nSource: `%s`.", created.Number, source)
+	a.commentOnIssueBestEffort(ctx, repoSlug, issue, crossLinkBody, "recreate cross-link")
+
+	if err := ghcli.CloseIssueNotPlanned(ctx, a.env.Runner, repoSlug, issue); err != nil {
+		return fmt.Errorf("close original issue: %w", err)
+	}
+
+	// Clean up the PR, remote branch, and local session artifacts.
+	sessions, err := a.state.LoadSessions()
+	if err != nil {
+		return err
+	}
+
+	var cleanupErrors []string
+	for i := range sessions {
+		if sessions[i].Repo != repoSlug || sessions[i].IssueNumber != issue {
+			continue
+		}
+		session := &sessions[i]
+
+		// Cancel running process if any.
+		a.cancelRunningSession(session.Repo, session.IssueNumber)
+
+		// Close PR if one exists.
+		if session.PullRequestNumber > 0 {
+			if err := ghcli.ClosePullRequest(ctx, a.env.Runner, repoSlug, session.PullRequestNumber); err != nil {
+				cleanupErrors = append(cleanupErrors, fmt.Sprintf("close PR #%d: %s", session.PullRequestNumber, err))
+			}
+		}
+
+		// Delete remote branch.
+		if session.Branch != "" {
+			if err := ghcli.DeleteRemoteBranch(ctx, a.env.Runner, session.RepoPath, session.Branch); err != nil {
+				cleanupErrors = append(cleanupErrors, fmt.Sprintf("delete remote branch %s: %s", session.Branch, err))
+			}
+		}
+
+		// Clean up local worktree/branch artifacts.
+		branches := worktree.IssueBranchCandidates(session.IssueNumber, session.IssueTitle)
+		if session.Branch != "" && !containsString(branches, session.Branch) {
+			branches = append(branches, session.Branch)
+		}
+		if err := worktree.CleanupIssueArtifactsForBranches(ctx, a.env.Runner, session.RepoPath, session.WorktreePath, branches); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Sprintf("local cleanup: %s", err))
+		}
+
+		now := a.clock().Format(time.RFC3339)
+		session.Status = state.SessionStatusClosed
+		session.ProcessID = 0
+		session.LastHeartbeatAt = ""
+		session.EndedAt = now
+		session.UpdatedAt = now
+		session.CleanupCompletedAt = now
+		session.LastCleanupSource = "recreate_" + source
+		session.LastRecreateSource = source
+		session.RecreatedAsIssue = created.Number
+		session.RecreatedAsIssueURL = created.URL
+		session.LastError = fmt.Sprintf("recreated as #%d via %s", created.Number, source)
+		break
+	}
+
+	if err := a.state.SaveSessions(sessions); err != nil {
+		return err
+	}
+
+	a.state.AppendDaemonLog("recreate completed repo=%s old_issue=%d new_issue=%d source=%s", repoSlug, issue, created.Number, source)
+
+	if len(cleanupErrors) > 0 {
+		fmt.Fprintf(a.stdout, "recreated %s issue #%d as #%d (%s) with partial cleanup errors: %s\n", repoSlug, issue, created.Number, created.URL, strings.Join(cleanupErrors, "; "))
+	} else {
+		fmt.Fprintf(a.stdout, "recreated %s issue #%d as #%d (%s)\n", repoSlug, issue, created.Number, created.URL)
+	}
+
+	return nil
+}
+
+func recreateResultComment(oldIssue int, newIssueNumber int, newIssueURL string, source string, cleanupErrors []string) string {
+	items := []string{
+		fmt.Sprintf("Created replacement issue #%d.", newIssueNumber),
+		fmt.Sprintf("Closed original issue #%d as `not planned`.", oldIssue),
+	}
+	if len(cleanupErrors) > 0 {
+		items = append(items, fmt.Sprintf("Partial cleanup errors: %s.", strings.Join(cleanupErrors, "; ")))
+	} else {
+		items = append(items, "Cleaned up stale PR, remote branch, and local session artifacts.")
+	}
+	return ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Issue Recreated",
+		Emoji:      "♻️",
+		Percent:    100,
+		ETAMinutes: 1,
+		Items:      items,
+		Tagline:    "Fresh start, clean slate.",
+	})
 }
 
 func (a *App) cleanupSessions(ctx context.Context, source string, successFormat string, match func(state.Session) bool, args ...any) error {
@@ -4646,6 +4950,7 @@ func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  vigilante cleanup --repo <owner/name> [--issue <n>]")
 	fmt.Fprintln(w, "  vigilante cleanup --all")
 	fmt.Fprintln(w, "  vigilante redispatch --repo <owner/name> --issue <n>")
+	fmt.Fprintln(w, "  vigilante recreate --repo <owner/name> --issue <n>")
 	fmt.Fprintln(w, "  vigilante resume --repo <owner/name> --issue <n>")
 	fmt.Fprintln(w, "  vigilante resume --all-blocked")
 	fmt.Fprintln(w, "  vigilante service restart")
@@ -4690,7 +4995,7 @@ _vigilante()
     local cur prev words cword
     _init_completion || return
 
-    local commands="setup watch unwatch list status cleanup redispatch resume service daemon completion"
+    local commands="setup watch unwatch list status cleanup redispatch recreate resume service daemon completion"
     local global_flags="-h --help"
 
     case "${words[1]}" in
@@ -4714,6 +5019,10 @@ _vigilante()
             return
             ;;
         redispatch)
+            COMPREPLY=( $(compgen -W "--repo --issue" -- "$cur") )
+            return
+            ;;
+        recreate)
             COMPREPLY=( $(compgen -W "--repo --issue" -- "$cur") )
             return
             ;;
@@ -4755,6 +5064,7 @@ complete -c vigilante -f -n '__fish_use_subcommand' -a 'list' -d 'Show watched r
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'status' -d 'Show installed service state'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'cleanup' -d 'Clean up running sessions'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'redispatch' -d 'Restart one watched issue in a fresh local worktree'
+complete -c vigilante -f -n '__fish_use_subcommand' -a 'recreate' -d 'Recreate a stuck issue as a fresh duplicate'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'resume' -d 'Resume blocked sessions'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'service' -d 'Run service commands'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'daemon' -d 'Run daemon commands'
@@ -4774,6 +5084,8 @@ complete -c vigilante -n '__fish_seen_subcommand_from cleanup' -l issue
 complete -c vigilante -n '__fish_seen_subcommand_from cleanup' -l all
 complete -c vigilante -n '__fish_seen_subcommand_from redispatch' -l repo
 complete -c vigilante -n '__fish_seen_subcommand_from redispatch' -l issue
+complete -c vigilante -n '__fish_seen_subcommand_from recreate' -l repo
+complete -c vigilante -n '__fish_seen_subcommand_from recreate' -l issue
 complete -c vigilante -n '__fish_seen_subcommand_from resume' -l repo
 complete -c vigilante -n '__fish_seen_subcommand_from resume' -l issue
 complete -c vigilante -n '__fish_seen_subcommand_from resume' -l all-blocked
@@ -4798,6 +5110,7 @@ _vigilante() {
     'status:Show installed service state'
     'cleanup:Clean up running sessions'
     'redispatch:Restart one watched issue in a fresh local worktree'
+    'recreate:Recreate a stuck issue as a fresh duplicate'
     'resume:Resume blocked sessions'
     'service:Run service commands'
     'daemon:Run daemon commands'
@@ -4825,6 +5138,9 @@ _vigilante() {
       compadd -- --repo --issue --all
       ;;
     redispatch)
+      compadd -- --repo --issue
+      ;;
+    recreate)
       compadd -- --repo --issue
       ;;
     resume)

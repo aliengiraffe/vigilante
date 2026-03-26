@@ -485,6 +485,10 @@ func FindCleanupComment(comments []IssueComment, claimedCommentID int64) *IssueC
 	return findCommandComment(comments, "@vigilanteai cleanup", claimedCommentID)
 }
 
+func FindRecreateComment(comments []IssueComment, claimedCommentID int64) *IssueComment {
+	return findCommandComment(comments, "@vigilanteai recreate", claimedCommentID)
+}
+
 func FindIterationComment(comments []IssueComment, claimedCommentID int64) *IssueComment {
 	for i := len(comments) - 1; i >= 0; i-- {
 		if claimedCommentID != 0 && comments[i].ID == claimedCommentID {
@@ -511,7 +515,7 @@ func IsIterationComment(comment IssueComment) bool {
 
 func IsKnownVigilanteCommandComment(body string) bool {
 	switch normalizeVigilanteComment(body) {
-	case "@vigilanteai resume", "@vigilanteai cleanup":
+	case "@vigilanteai resume", "@vigilanteai cleanup", "@vigilanteai recreate":
 		return true
 	default:
 		return false
@@ -639,6 +643,46 @@ func IsIssueUnavailableError(err error) bool {
 
 func MergePullRequestSquash(ctx context.Context, runner environment.Runner, repo string, number int) error {
 	_, err := runner.Run(ctx, "", "gh", "pr", "merge", "--repo", repo, fmt.Sprintf("%d", number), "--squash", "--delete-branch")
+	return err
+}
+
+type CreatedIssue struct {
+	Number int    `json:"number"`
+	URL    string `json:"html_url"`
+}
+
+func CreateIssue(ctx context.Context, runner environment.Runner, repo string, title string, body string, labels []string, assignees []string) (*CreatedIssue, error) {
+	args := []string{"gh", "api", "--method", "POST", "-H", "Accept: application/vnd.github+json", "repos/" + repo + "/issues", "-f", "title=" + title, "-f", "body=" + body}
+	for _, label := range labels {
+		args = append(args, "-f", "labels[]="+label)
+	}
+	for _, assignee := range assignees {
+		args = append(args, "-f", "assignees[]="+assignee)
+	}
+	output, err := runner.Run(ctx, "", args[0], args[1:]...)
+	if err != nil {
+		return nil, fmt.Errorf("create issue: %w", err)
+	}
+	var created CreatedIssue
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &created); err != nil {
+		return nil, fmt.Errorf("parse created issue: %w", err)
+	}
+	return &created, nil
+}
+
+func CloseIssueNotPlanned(ctx context.Context, runner environment.Runner, repo string, number int) error {
+	_, err := runner.Run(ctx, "", "gh", "api", "--method", "PATCH", "-H", "Accept: application/vnd.github+json",
+		issueAPIPath(repo, number), "-f", "state=closed", "-f", "state_reason=not_planned")
+	return err
+}
+
+func ClosePullRequest(ctx context.Context, runner environment.Runner, repo string, number int) error {
+	_, err := runner.Run(ctx, "", "gh", "pr", "close", "--repo", repo, fmt.Sprintf("%d", number))
+	return err
+}
+
+func DeleteRemoteBranch(ctx context.Context, runner environment.Runner, repoPath string, branch string) error {
+	_, err := runner.Run(ctx, repoPath, "git", "push", "origin", "--delete", branch)
 	return err
 }
 

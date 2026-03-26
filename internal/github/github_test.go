@@ -428,6 +428,31 @@ func TestFindCleanupComment(t *testing.T) {
 	}
 }
 
+func TestFindRecreateComment(t *testing.T) {
+	now := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
+	comments := []IssueComment{
+		{ID: 10, Body: "hello", CreatedAt: now.Add(-2 * time.Minute)},
+		{ID: 11, Body: "@vigilanteai recreate", CreatedAt: now.Add(-1 * time.Minute)},
+	}
+
+	comment := FindRecreateComment(comments, 0)
+	if comment == nil || comment.ID != 11 {
+		t.Fatalf("expected recreate comment to be found, got: %#v", comment)
+	}
+	if comment := FindRecreateComment(comments, 11); comment != nil {
+		t.Fatalf("expected claimed recreate comment to be ignored, got: %#v", comment)
+	}
+}
+
+func TestIsKnownVigilanteCommandCommentIncludesRecreate(t *testing.T) {
+	if !IsKnownVigilanteCommandComment("@vigilanteai recreate") {
+		t.Fatal("expected @vigilanteai recreate to be a known command")
+	}
+	if !IsKnownVigilanteCommandComment("  @vigilanteai   recreate  ") {
+		t.Fatal("expected whitespace-padded @vigilanteai recreate to be a known command")
+	}
+}
+
 func TestFindIterationCommentSkipsKnownCommands(t *testing.T) {
 	now := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
 	comments := []IssueComment{
