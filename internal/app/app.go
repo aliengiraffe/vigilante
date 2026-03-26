@@ -174,6 +174,107 @@ func (a *App) loadIssueDetailsForScan(ctx context.Context, cache scanIssueDetail
 	return details, nil
 }
 
+func (a *App) loadPullRequestForSession(ctx context.Context, session state.Session) (*ghcli.PullRequest, error) {
+	if session.PullRequestNumber > 0 {
+		return ghcli.GetPullRequestDetails(ctx, a.env.Runner, session.Repo, session.PullRequestNumber)
+	}
+	if strings.TrimSpace(session.Branch) == "" {
+		return nil, nil
+	}
+	pr, err := ghcli.FindPullRequestForBranch(ctx, a.env.Runner, session.Repo, session.Branch)
+	if err != nil || pr == nil {
+		return pr, err
+	}
+	return ghcli.GetPullRequestDetails(ctx, a.env.Runner, session.Repo, pr.Number)
+}
+
+func (a *App) reconcileStaleRunningSession(ctx context.Context, session *state.Session, issueCache scanIssueDetailsCache, reason string, commentOnRecovery bool) (bool, error) {
+	issue, err := a.loadIssueDetailsForScan(ctx, issueCache, session.Repo, session.IssueNumber)
+	if err != nil {
+		if ghcli.IsIssueUnavailableError(err) {
+			a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
+			resetStaleAutoRestartState(session)
+			return true, nil
+		}
+		return false, err
+	}
+
+	pr, err := a.loadPullRequestForSession(ctx, *session)
+	if err != nil {
+		return false, err
+	}
+
+	nowText := a.clock().Format(time.RFC3339)
+	recover := func(nextStatus state.SessionStatus) {
+		previousStatus := session.Status
+		session.Status = nextStatus
+		session.ProcessID = 0
+		session.LastHeartbeatAt = ""
+		session.EndedAt = nowText
+		session.UpdatedAt = nowText
+		session.RecoveredAt = nowText
+		session.LastError = ""
+		resetStaleAutoRestartState(session)
+		a.emitSessionTransition(previousStatus, *session, "stale_github_reconciliation")
+	}
+
+	if pr != nil {
+		switch {
+		case strings.EqualFold(strings.TrimSpace(pr.State), "OPEN"):
+			recover(state.SessionStatusSuccess)
+			updatePullRequestMaintenanceSnapshot(session, *pr)
+			session.LastMaintainedAt = nowText
+			session.LastMaintenanceError = ""
+			a.logger.Info("stale running session recovered to pr maintenance", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "reason", reason, "pr", pr.Number)
+			if commentOnRecovery {
+				body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+					Stage:      "Implementation In Progress",
+					Emoji:      "🔄",
+					Percent:    70,
+					ETAMinutes: 10,
+					Items: []string{
+						fmt.Sprintf("The previous local session on `%s` stalled (%s).", session.Branch, reason),
+						fmt.Sprintf("An existing PR #%d was found, so Vigilante recovered this issue into PR maintenance.", pr.Number),
+						"Next step: keep the PR merge-ready instead of redispatching a new implementation session.",
+					},
+					Tagline: "Fall seven times, stand up eight.",
+				})
+				if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "progress", "stalled_recovery"); err != nil {
+					session.LastError = err.Error()
+					session.UpdatedAt = a.clock().Format(time.RFC3339)
+					a.logger.Error("stalled session recovery comment failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
+				}
+			}
+			return true, nil
+		case pr.MergedAt != nil:
+			recover(state.SessionStatusSuccess)
+			updatePullRequestMaintenanceSnapshot(session, *pr)
+			session.LastMaintainedAt = nowText
+			session.LastMaintenanceError = ""
+			a.logger.Info("stale running session reconciled to merged pull request", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "pr", pr.Number)
+			return true, nil
+		default:
+			recover(state.SessionStatusClosed)
+			updatePullRequestTrackingFromLookup(session, *pr)
+			session.MonitoringStoppedAt = nowText
+			session.LastMaintainedAt = nowText
+			session.LastMaintenanceError = ""
+			a.logger.Info("stale running session reconciled to closed pull request", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "pr", pr.Number, "state", pr.State)
+			return true, nil
+		}
+	}
+
+	if strings.EqualFold(strings.TrimSpace(issue.State), "closed") || ghcli.HasAnyLabel(issue.Labels, labelDone) {
+		recover(state.SessionStatusClosed)
+		session.MonitoringStoppedAt = nowText
+		session.LastMaintenanceError = ""
+		a.logger.Info("stale running session reconciled to closed issue", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "issue_state", issue.State)
+		return true, nil
+	}
+
+	return false, nil
+}
+
 func (a *App) emitSessionTransition(previous state.SessionStatus, session state.Session, source string) {
 	if previous == session.Status {
 		return
@@ -1112,7 +1213,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		sessions, err = a.recoverStalledSessions(ctx, sessions)
+		sessions, err = a.recoverStalledSessions(ctx, sessions, issueDetailsCache)
 		if err != nil {
 			return err
 		}
@@ -1322,7 +1423,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 	return nil
 }
 
-func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Session) ([]state.Session, error) {
+func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Session, issueCache scanIssueDetailsCache) ([]state.Session, error) {
 	threshold := stalledSessionThreshold()
 	restartDelay := defaultStaleAutoRestartDelay
 
@@ -1342,41 +1443,14 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 			continue
 		}
 
-		pr, err := ghcli.FindPullRequestForBranch(ctx, a.env.Runner, session.Repo, session.Branch)
+		recovered, err := a.reconcileStaleRunningSession(ctx, session, issueCache, reason, true)
 		if err != nil {
-			a.recordSessionFailure(session, "issue_execution", "gh pr list", err)
-			a.logger.Error("stalled session pr lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
+			a.recordSessionFailure(session, "issue_execution", "github stale-session reconciliation", err)
+			a.logger.Error("stalled session github reconciliation failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
 			continue
 		}
-		if pr != nil {
-			previousStatus := session.Status
-			session.Status = state.SessionStatusSuccess
-			session.ProcessID = 0
-			session.LastHeartbeatAt = ""
-			clearStaleAutoRestartPending(session)
-			updatePullRequestTrackingFromLookup(session, *pr)
-			session.LastError = ""
-			session.UpdatedAt = a.clock().Format(time.RFC3339)
-			a.emitSessionTransition(previousStatus, *session, "stalled_recovery")
-			a.logger.Info("stalled session recovered to pr maintenance", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "reason", reason, "pr", pr.Number)
-			body := ghcli.FormatProgressComment(ghcli.ProgressComment{
-				Stage:      "Implementation In Progress",
-				Emoji:      "🔄",
-				Percent:    70,
-				ETAMinutes: 10,
-				Items: []string{
-					fmt.Sprintf("The previous local session on `%s` stalled (%s).", session.Branch, reason),
-					fmt.Sprintf("An existing PR #%d was found, so Vigilante recovered this issue into PR maintenance.", pr.Number),
-					"Next step: keep the PR merge-ready instead of redispatching a new implementation session.",
-				},
-				Tagline: "Fall seven times, stand up eight.",
-			})
-			if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "progress", "stalled_recovery"); err != nil {
-				session.LastError = err.Error()
-				session.UpdatedAt = a.clock().Format(time.RFC3339)
-				a.logger.Error("stalled session recovery comment failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
-			}
-			a.syncSessionIssueLabelsBestEffort(ctx, session, pr, nil, nil)
+		if recovered {
+			a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil, issueCache)
 			continue
 		}
 

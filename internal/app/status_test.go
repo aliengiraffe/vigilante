@@ -815,6 +815,139 @@ func TestStatusCommandExcludesClosedSessionsFromCountsAndGroups(t *testing.T) {
 	}
 }
 
+func TestStatusCommandReconcilesStaleRunningSessionAgainstOpenPullRequest(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+
+	unitPath := filepath.Join(home, ".config", "systemd", "user", "vigilante.service")
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unitPath, []byte("unit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	vigilanteHome := filepath.Join(home, ".vigilante")
+	if err := os.MkdirAll(vigilanteHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 3, 26, 19, 0, 0, 0, time.UTC)
+	sessions := []state.Session{
+		{
+			Repo:            "owner/repo",
+			IssueNumber:     99,
+			IssueTitle:      "stale",
+			IssueURL:        "https://github.com/owner/repo/issues/99",
+			Branch:          "vigilante/issue-99",
+			Status:          state.SessionStatusRunning,
+			StartedAt:       now.Add(-2 * time.Hour).Format(time.RFC3339),
+			LastHeartbeatAt: now.Add(-2 * time.Hour).Format(time.RFC3339),
+			UpdatedAt:       now.Add(-2 * time.Hour).Format(time.RFC3339),
+		},
+	}
+	sessionData, _ := json.Marshal(sessions)
+	if err := os.WriteFile(filepath.Join(vigilanteHome, "sessions.json"), sessionData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.clock = func() time.Time { return now }
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.OS = "linux"
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"systemctl --user show --property=LoadState,ActiveState vigilante.service":                            "LoadState=loaded\nActiveState=active\n",
+			"gh api repos/owner/repo/issues/99":                                                                   `{"title":"stale","body":"body","html_url":"https://github.com/owner/repo/issues/99","state":"closed","labels":[{"name":"vigilante:done"}]}`,
+			"gh pr list --repo owner/repo --head vigilante/issue-99 --state all --json number,url,state,mergedAt": `[{"number":123,"url":"https://github.com/owner/repo/pull/123","state":"OPEN","mergedAt":null}]`,
+			"gh pr view --repo owner/repo 123 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": `{"number":123,"title":"Test PR","body":"Body","url":"https://github.com/owner/repo/pull/123","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[],"baseRefName":"main"}`,
+		},
+	}
+
+	exitCode := app.Run(context.Background(), []string{"status"})
+	if exitCode != 0 {
+		t.Fatalf("expected success, got %d", exitCode)
+	}
+	output := stdout.String()
+	if strings.Contains(output, "Stale sessions (1)") {
+		t.Fatalf("expected stale section to disappear after reconciliation, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Completed / failed (1)") {
+		t.Fatalf("expected reconciled session to move out of stale running, got:\n%s", output)
+	}
+
+	loaded, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded[0].Status != state.SessionStatusSuccess || loaded[0].PullRequestNumber != 123 {
+		t.Fatalf("expected reconciled success session with tracked PR: %#v", loaded[0])
+	}
+}
+
+func TestStatusCommandLeavesStaleRunningSessionWhenGitHubReconciliationFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+
+	unitPath := filepath.Join(home, ".config", "systemd", "user", "vigilante.service")
+	if err := os.MkdirAll(filepath.Dir(unitPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unitPath, []byte("unit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	vigilanteHome := filepath.Join(home, ".vigilante")
+	if err := os.MkdirAll(vigilanteHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 3, 26, 19, 0, 0, 0, time.UTC)
+	sessions := []state.Session{
+		{Repo: "owner/repo", IssueNumber: 99, Branch: "vigilante/issue-99", Status: state.SessionStatusRunning, StartedAt: now.Add(-2 * time.Hour).Format(time.RFC3339), LastHeartbeatAt: now.Add(-2 * time.Hour).Format(time.RFC3339)},
+	}
+	sessionData, _ := json.Marshal(sessions)
+	if err := os.WriteFile(filepath.Join(vigilanteHome, "sessions.json"), sessionData, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.clock = func() time.Time { return now }
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.OS = "linux"
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"systemctl --user show --property=LoadState,ActiveState vigilante.service": "LoadState=loaded\nActiveState=active\n",
+		},
+		Errors: map[string]error{
+			"gh api repos/owner/repo/issues/99": errors.New("gh unavailable"),
+		},
+	}
+
+	exitCode := app.Run(context.Background(), []string{"status"})
+	if exitCode != 0 {
+		t.Fatalf("expected success, got %d", exitCode)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "Stale sessions (1)") {
+		t.Fatalf("expected stale section when github reconciliation fails, got:\n%s", output)
+	}
+
+	loaded, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded[0].Status != state.SessionStatusRunning {
+		t.Fatalf("expected session to remain running after reconciliation failure: %#v", loaded[0])
+	}
+}
+
 func TestWriteStatusRefreshFrameClearsBeforeRendering(t *testing.T) {
 	var buf bytes.Buffer
 	if err := writeStatusRefreshFrame(&buf, func() error {

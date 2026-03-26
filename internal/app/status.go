@@ -349,6 +349,33 @@ func (a *App) statusExpanded(ctx context.Context) error {
 	if err != nil {
 		sessions = nil
 	}
+	cfg, cfgErr := a.state.LoadServiceConfig()
+	inactivityTimeout := state.DefaultBlockedSessionInactivityTimeout
+	if cfgErr == nil {
+		if parsed, parseErr := time.ParseDuration(cfg.BlockedSessionInactivityTimeout); parseErr == nil && parsed > 0 {
+			inactivityTimeout = parsed
+		}
+	}
+	issueCache := make(scanIssueDetailsCache)
+	sessionsChanged := false
+	for i := range sessions {
+		if sessions[i].Status != state.SessionStatusRunning || !isStale(sessions[i], a.clock(), time.Duration(staleBlockedMultiplier)*inactivityTimeout) {
+			continue
+		}
+		recovered, err := a.reconcileStaleRunningSession(ctx, &sessions[i], issueCache, "heartbeat exceeded stale threshold", false)
+		if err != nil {
+			a.logger.Error("status stale-session reconciliation failed", "repo", sessions[i].Repo, "issue", sessions[i].IssueNumber, "branch", sessions[i].Branch, "err", err)
+			continue
+		}
+		if recovered {
+			sessionsChanged = true
+		}
+	}
+	if sessionsChanged {
+		if err := a.state.SaveSessions(sessions); err != nil {
+			a.logger.Error("status session save failed after stale-session reconciliation", "err", err)
+		}
+	}
 
 	visibleSessions := visibleStatusSessions(sessions)
 
@@ -359,14 +386,6 @@ func (a *App) statusExpanded(ctx context.Context) error {
 	fmt.Fprintf(a.stdout, "Sessions: %d total\n", len(visibleSessions))
 
 	if len(visibleSessions) > 0 {
-		cfg, cfgErr := a.state.LoadServiceConfig()
-		inactivityTimeout := state.DefaultBlockedSessionInactivityTimeout
-		if cfgErr == nil {
-			if parsed, parseErr := time.ParseDuration(cfg.BlockedSessionInactivityTimeout); parseErr == nil && parsed > 0 {
-				inactivityTimeout = parsed
-			}
-		}
-
 		groups := groupSessions(visibleSessions, a.clock(), inactivityTimeout)
 		if len(groups) > 0 {
 			fmt.Fprintln(a.stdout)
