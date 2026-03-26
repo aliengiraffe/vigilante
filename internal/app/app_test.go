@@ -6445,6 +6445,7 @@ func TestScanOnceMarksStaleSessionPendingAutoRestart(t *testing.T) {
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
 		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1": `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"open","labels":[]}`,
 			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": "[]",
 			"gh api user --jq .login": "nicobistolfi\n",
 			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
@@ -6519,6 +6520,7 @@ func TestScanOnceAutoRestartsStaleSessionAfterDelay(t *testing.T) {
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
 		Outputs: mergeStringMaps(freshBaseBranchOutputs(filepath.Join(home, "repo"), "main"), map[string]string{
+			"gh api repos/owner/repo/issues/1": `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"open","labels":[]}`,
 			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": "[]",
 			"git worktree prune":                                         "ok",
 			"git worktree list --porcelain":                              "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n",
@@ -6626,6 +6628,7 @@ func TestScanOnceStopsAutoRestartAfterAttemptLimit(t *testing.T) {
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
 		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1": `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"open","labels":[]}`,
 			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": "[]",
 			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
 				Stage:      "Manual Intervention Required",
@@ -6712,6 +6715,7 @@ func TestScanOnceRecoversStalledSessionIntoPRMaintenance(t *testing.T) {
 	app.env.Runner = testutil.FakeRunner{
 		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
 		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1": `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"open","labels":[]}`,
 			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
 			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
 				Stage:      "Implementation In Progress",
@@ -6775,6 +6779,140 @@ func TestScanOnceRecoversStalledSessionIntoPRMaintenance(t *testing.T) {
 	}
 	if sessions[0].PullRequestNumber != 31 || sessions[0].LastMaintainedAt == "" {
 		t.Fatalf("expected PR maintenance tracking after recovery: %#v", sessions[0])
+	}
+}
+
+func TestScanOnceReconcilesStaleRunningSessionAgainstClosedIssueAndMergedPullRequest(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	var stdout bytes.Buffer
+	app := New()
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	now := time.Date(2026, 3, 26, 18, 0, 0, 0, time.UTC)
+	app.clock = func() time.Time { return now }
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1": `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"closed","labels":[{"name":"vigilante:done"}]}`,
+			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt":                                                                 `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"MERGED","mergedAt":"2026-03-26T17:30:00Z"}]`,
+			"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": `{"number":31,"title":"Test PR","body":"Body","url":"https://github.com/owner/repo/pull/31","state":"MERGED","mergedAt":"2026-03-26T17:30:00Z","labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[],"baseRefName":"main"}`,
+			"git worktree prune":                                         "ok",
+			"git worktree list --porcelain":                              "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n",
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-1": "ok",
+			"git branch -D vigilante/issue-1":                            "Deleted branch vigilante/issue-1\n",
+			"gh api user --jq .login":                                    "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:        "/tmp/repo",
+		Repo:            "owner/repo",
+		IssueNumber:     1,
+		IssueTitle:      "first",
+		IssueURL:        "https://github.com/owner/repo/issues/1",
+		Branch:          "vigilante/issue-1",
+		WorktreePath:    filepath.Join("/tmp/repo", ".worktrees", "vigilante", "issue-1"),
+		Status:          state.SessionStatusRunning,
+		ProcessID:       999999,
+		StartedAt:       now.Add(-2 * time.Hour).Format(time.RFC3339),
+		LastHeartbeatAt: now.Add(-2 * time.Hour).Format(time.RFC3339),
+		UpdatedAt:       now.Add(-2 * time.Hour).Format(time.RFC3339),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+	if sessions[0].Status != state.SessionStatusClosed {
+		t.Fatalf("expected closed session after reconciliation and cleanup: %#v", sessions[0])
+	}
+	if sessions[0].PullRequestState != "MERGED" || sessions[0].PullRequestMergedAt != "2026-03-26T17:30:00Z" {
+		t.Fatalf("expected merged pull request state to be tracked: %#v", sessions[0])
+	}
+	if sessions[0].CleanupCompletedAt == "" || sessions[0].LastCleanupSource != "issue_closed" {
+		t.Fatalf("expected closed-issue cleanup after recovery: %#v", sessions[0])
+	}
+}
+
+func TestScanOnceStopsMonitoringStaleRunningSessionWhenIssueIsUnavailable(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	now := time.Date(2026, 3, 26, 18, 0, 0, 0, time.UTC)
+	app.clock = func() time.Time { return now }
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"git worktree prune":                                         "ok",
+			"git worktree list --porcelain":                              "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n",
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-1": "ok",
+			"git branch -D vigilante/issue-1":                            "Deleted branch vigilante/issue-1\n",
+			"gh api user --jq .login":                                    "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+		Errors: map[string]error{
+			"gh api repos/owner/repo/issues/1": errors.New("HTTP 404: Not Found"),
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:        "/tmp/repo",
+		Repo:            "owner/repo",
+		IssueNumber:     1,
+		Branch:          "vigilante/issue-1",
+		WorktreePath:    filepath.Join("/tmp/repo", ".worktrees", "vigilante", "issue-1"),
+		Status:          state.SessionStatusRunning,
+		ProcessID:       999999,
+		StartedAt:       now.Add(-2 * time.Hour).Format(time.RFC3339),
+		LastHeartbeatAt: now.Add(-2 * time.Hour).Format(time.RFC3339),
+		UpdatedAt:       now.Add(-2 * time.Hour).Format(time.RFC3339),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+	if sessions[0].Status != state.SessionStatusClosed || sessions[0].MonitoringStoppedAt == "" {
+		t.Fatalf("expected monitoring to stop for unavailable issue: %#v", sessions[0])
+	}
+	if sessions[0].CleanupCompletedAt == "" {
+		t.Fatalf("expected cleanup for unavailable issue: %#v", sessions[0])
 	}
 }
 
