@@ -166,6 +166,7 @@ func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue 
 		"Use `vigilante gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch with `vigilante git push`, open a pull request with `vigilante gh pr create`, and report any execution failure back to the issue.",
 		fmt.Sprintf("When you open the pull request, the final PR body must include `Closes #%d` even if you write a custom summary or the summary is otherwise minimal.", issue.Number),
 		fmt.Sprintf("For the coding-agent start comment, use `## 🕹️ Coding Agent Launched: %s` instead of a generic session-start title.", displayProviderName(session.Provider)),
+		"For the coding-agent start comment, include a short GitHub issue-command hint block with at least `@vigilanteai resume` and `@vigilanteai cleanup`, and make clear that they are issue-comment commands rather than shell commands.",
 		"Use the same GitHub comment structure for every non-terminal milestone comment: a short header with the current stage and optional emoji, a 10-cell progress bar with percentage, an `ETA: ~N minutes` line, 1-3 concise bullets covering what just happened and what is next, and an optional short playful quote or tagline.",
 		"Use the issue as the source of truth for the requested behavior and keep the implementation minimal.",
 	)

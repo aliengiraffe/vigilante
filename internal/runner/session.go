@@ -56,6 +56,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		fmt.Sprintf("Vigilante launched this implementation session in `%s`.", session.WorktreePath),
 		fmt.Sprintf("Branch: `%s`.", session.Branch),
 		fmt.Sprintf("Current stage: handing the issue off to the configured coding agent (`%s`) for investigation and implementation.", selectedProvider.DisplayName()),
+		"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
 	}
 	if strings.TrimSpace(session.ReusedRemoteBranch) != "" {
 		baseBranch := strings.TrimSpace(session.BaseBranch)
@@ -66,6 +67,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 			fmt.Sprintf("Vigilante launched this implementation session in `%s` from existing remote branch `origin/%s`.", session.WorktreePath, session.ReusedRemoteBranch),
 			fmt.Sprintf("Diff summary against `%s`: %s", baseBranch, fallbackSessionText(session.BranchDiffSummary, "diff summary unavailable")),
 			fmt.Sprintf("Current stage: handing the issue off to the configured coding agent (`%s`) to continue the existing implementation.", selectedProvider.DisplayName()),
+			"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
 		}
 	}
 	startBody := ghcli.FormatProgressComment(ghcli.ProgressComment{
