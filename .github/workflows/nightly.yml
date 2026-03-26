@@ -91,6 +91,17 @@ jobs:
             --notes "$release_notes" \
             --prerelease
 
+          gh release edit "$NIGHTLY_TAG" \
+            --draft=false \
+            --prerelease
+
+      - name: Verify nightly release publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NIGHTLY_TAG: ${{ env.NIGHTLY_TAG }}
+          NIGHTLY_VERSION: ${{ env.NIGHTLY_VERSION }}
+        run: bash ./scripts/verify-nightly-release.sh
+
       - name: Check out Homebrew tap
         env:
           TAP_TOKEN: ${{ steps.tap_token.outputs.token }}
