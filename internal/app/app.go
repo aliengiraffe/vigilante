@@ -512,7 +512,11 @@ func isSupportedProxyTool(name string) bool {
 }
 
 func (a *App) runProxyCommand(ctx context.Context, tool string, args []string) error {
-	exitCode, err := a.proxyExec(ctx, a.stdin, a.stdout, a.stderr, tool, args...)
+	sanitizedArgs, sanitizedStdin, err := ghcli.SanitizeProxyInvocation(tool, args, a.stdin)
+	if err != nil {
+		return err
+	}
+	exitCode, err := a.proxyExec(ctx, sanitizedStdin, a.stdout, a.stderr, tool, sanitizedArgs...)
 	if err != nil {
 		return err
 	}

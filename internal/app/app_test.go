@@ -169,6 +169,42 @@ func TestRunProxiesSupportedToolCommands(t *testing.T) {
 	}
 }
 
+func TestRunSanitizesProxyBodyContent(t *testing.T) {
+	app := New()
+	app.stdin = strings.NewReader("PR body\n\nGenerated with Claude Code")
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+
+	var gotName string
+	var gotArgs []string
+	var gotStdin string
+	app.proxyExec = func(_ context.Context, in io.Reader, _ io.Writer, _ io.Writer, name string, args ...string) (int, error) {
+		gotName = name
+		gotArgs = append([]string(nil), args...)
+		if in != nil {
+			body, err := io.ReadAll(in)
+			if err != nil {
+				t.Fatalf("read proxy stdin: %v", err)
+			}
+			gotStdin = string(body)
+		}
+		return 0, nil
+	}
+
+	if exitCode := app.Run(context.Background(), []string{"gh", "pr", "create", "--body-file", "-"}); exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d", exitCode)
+	}
+	if gotName != "gh" {
+		t.Fatalf("proxy tool = %q, want %q", gotName, "gh")
+	}
+	if got, want := strings.Join(gotArgs, " "), "pr create --body-file -"; got != want {
+		t.Fatalf("proxy args = %q, want %q", got, want)
+	}
+	if got, want := gotStdin, "PR body"; got != want {
+		t.Fatalf("proxy stdin = %q, want %q", got, want)
+	}
+}
+
 func TestRunReturnsUnderlyingProxyExitCode(t *testing.T) {
 	app := New()
 	app.stdout = testutil.IODiscard{}
