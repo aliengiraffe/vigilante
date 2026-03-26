@@ -226,7 +226,7 @@ func matchesLabelAllowlist(issue Issue, allowlist []string) bool {
 }
 
 func CommentOnIssue(ctx context.Context, runner environment.Runner, repo string, number int, body string) error {
-	_, err := runner.Run(ctx, "", "gh", "issue", "comment", "--repo", repo, fmt.Sprintf("%d", number), "--body", body)
+	_, err := runner.Run(ctx, "", "gh", "issue", "comment", "--repo", repo, fmt.Sprintf("%d", number), "--body", SanitizeGitHubVisibleText(body))
 	return err
 }
 
@@ -653,7 +653,7 @@ type CreatedIssue struct {
 }
 
 func CreateIssue(ctx context.Context, runner environment.Runner, repo string, title string, body string, labels []string, assignees []string) (*CreatedIssue, error) {
-	args := []string{"gh", "api", "--method", "POST", "-H", "Accept: application/vnd.github+json", "repos/" + repo + "/issues", "-f", "title=" + title, "-f", "body=" + body}
+	args := []string{"gh", "api", "--method", "POST", "-H", "Accept: application/vnd.github+json", "repos/" + repo + "/issues", "-f", "title=" + title, "-f", "body=" + SanitizeGitHubVisibleText(body)}
 	for _, label := range labels {
 		args = append(args, "-f", "labels[]="+label)
 	}

@@ -412,6 +412,19 @@ func TestMergePullRequestSquash(t *testing.T) {
 	}
 }
 
+func TestCommentOnIssueSanitizesAgentBranding(t *testing.T) {
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh issue comment --repo owner/repo 17 --body Clean summary": "ok",
+		},
+	}
+
+	body := "Clean summary\n\nGenerated with Claude Code"
+	if err := CommentOnIssue(context.Background(), runner, "owner/repo", 17, body); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestFindCleanupComment(t *testing.T) {
 	now := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
 	comments := []IssueComment{
