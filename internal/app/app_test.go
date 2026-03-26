@@ -6910,6 +6910,266 @@ func freshBaseBranchOutputs(repoPath string, branch string) map[string]string {
 	}
 }
 
+func TestRecreateSessionSuccess(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-50")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/50": `{"title":"stuck issue","body":"the body","html_url":"https://github.com/owner/repo/issues/50","state":"open","labels":[{"name":"bug"},{"name":"vigilante:running"}],"assignees":[{"login":"nico"}]}`,
+			testutil.Key("gh", "api", "--method", "POST", "-H", "Accept: application/vnd.github+json", "repos/owner/repo/issues", "-f", "title=stuck issue", "-f", "body=the body\n\n---\n_Recreated from #50 by Vigilante._", "-f", "labels[]=bug", "-f", "assignees[]=nico"): `{"number":51,"html_url":"https://github.com/owner/repo/issues/51"}`,
+			"gh issue comment --repo owner/repo 50 --body ## ♻️ Issue Recreated\n\nThis issue has been recreated as #51.\n\nThe original issue is being closed as `not planned` and stale artifacts are being cleaned up.\n\nSource: `cli`.":                                   "ok",
+			testutil.Key("gh", "api", "--method", "PATCH", "-H", "Accept: application/vnd.github+json", "repos/owner/repo/issues/50", "-f", "state=closed", "-f", "state_reason=not_planned"):                                                                                  "ok",
+			"gh pr close --repo owner/repo 10":                            "ok",
+			"git push origin --delete vigilante/issue-50":                 "ok",
+			"git worktree prune":                                          "ok",
+			"git worktree remove --force " + worktreePath:                 "ok",
+			"git worktree list --porcelain":                               "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/main\n",
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-50": "ok",
+			"git branch -D vigilante/issue-50":                            "Deleted branch vigilante/issue-50\n",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{
+		Path: repoPath,
+		Repo: "owner/repo",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:          repoPath,
+		Repo:              "owner/repo",
+		IssueNumber:       50,
+		IssueTitle:        "stuck issue",
+		Status:            state.SessionStatusRunning,
+		Branch:            "vigilante/issue-50",
+		WorktreePath:      worktreePath,
+		PullRequestNumber: 10,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.RecreateSession(context.Background(), "owner/repo", 50, "cli"); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+	if sessions[0].Status != state.SessionStatusClosed {
+		t.Fatalf("expected closed status, got: %s", sessions[0].Status)
+	}
+	if sessions[0].RecreatedAsIssue != 51 {
+		t.Fatalf("expected recreated as issue 51, got: %d", sessions[0].RecreatedAsIssue)
+	}
+	if !strings.Contains(stdout.String(), "recreated owner/repo issue #50 as #51") {
+		t.Fatalf("unexpected output: %s", stdout.String())
+	}
+}
+
+func TestRecreateSessionFailsWhenRepoIsUnwatched(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := app.RecreateSession(context.Background(), "owner/repo", 50, "cli")
+	if err == nil || !strings.Contains(err.Error(), "watch target not found") {
+		t.Fatalf("expected watch target error, got: %v", err)
+	}
+}
+
+func TestRecreateSessionFailsWhenIssueDetailsFail(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Errors: map[string]error{
+			"gh api repos/owner/repo/issues/50": errors.New("not found"),
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{
+		Path: "/tmp/repo",
+		Repo: "owner/repo",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := app.RecreateSession(context.Background(), "owner/repo", 50, "cli")
+	if err == nil || !strings.Contains(err.Error(), "get issue details") {
+		t.Fatalf("expected issue details error, got: %v", err)
+	}
+}
+
+func TestRecreateCommandParsing(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+
+	exitCode := app.Run(context.Background(), []string{"recreate", "--help"})
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0 for --help, got %d", exitCode)
+	}
+	if !strings.Contains(stdout.String(), "vigilante recreate --repo") {
+		t.Fatalf("expected usage text in help output, got: %s", stdout.String())
+	}
+}
+
+func TestRecreateCommandMissingFlags(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	var stderr bytes.Buffer
+	app.stdout = &bytes.Buffer{}
+	app.stderr = &stderr
+
+	exitCode := app.Run(context.Background(), []string{"recreate"})
+	if exitCode != 1 {
+		t.Fatalf("expected exit code 1 for missing flags, got %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "usage: vigilante recreate") {
+		t.Fatalf("expected usage error, got: %s", stderr.String())
+	}
+}
+
+func TestRecreateSessionPartialCleanupErrors(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-60")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/60": `{"title":"partial fail","body":"body","html_url":"https://github.com/owner/repo/issues/60","state":"open","labels":[],"assignees":[]}`,
+			testutil.Key("gh", "api", "--method", "POST", "-H", "Accept: application/vnd.github+json", "repos/owner/repo/issues", "-f", "title=partial fail", "-f", "body=body\n\n---\n_Recreated from #60 by Vigilante._"):                  `{"number":61,"html_url":"https://github.com/owner/repo/issues/61"}`,
+			"gh issue comment --repo owner/repo 60 --body ## ♻️ Issue Recreated\n\nThis issue has been recreated as #61.\n\nThe original issue is being closed as `not planned` and stale artifacts are being cleaned up.\n\nSource: `cli`.": "ok",
+			testutil.Key("gh", "api", "--method", "PATCH", "-H", "Accept: application/vnd.github+json", "repos/owner/repo/issues/60", "-f", "state=closed", "-f", "state_reason=not_planned"):                                                "ok",
+			"git worktree prune":            "ok",
+			"git worktree list --porcelain": "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/main\n",
+		},
+		Errors: map[string]error{
+			"git push origin --delete vigilante/issue-60": errors.New("remote ref not found"),
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{
+		Path: repoPath,
+		Repo: "owner/repo",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:     repoPath,
+		Repo:         "owner/repo",
+		IssueNumber:  60,
+		IssueTitle:   "partial fail",
+		Status:       state.SessionStatusRunning,
+		Branch:       "vigilante/issue-60",
+		WorktreePath: worktreePath,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.RecreateSession(context.Background(), "owner/repo", 60, "cli"); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(stdout.String(), "partial cleanup errors") {
+		t.Fatalf("expected partial cleanup errors in output, got: %s", stdout.String())
+	}
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].Status != state.SessionStatusClosed || sessions[0].RecreatedAsIssue != 61 {
+		t.Fatalf("unexpected session state: %#v", sessions[0])
+	}
+}
+
+func TestRecreateSessionNoExistingSession(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/70": `{"title":"no session","body":"body","html_url":"https://github.com/owner/repo/issues/70","state":"open","labels":[],"assignees":[]}`,
+			testutil.Key("gh", "api", "--method", "POST", "-H", "Accept: application/vnd.github+json", "repos/owner/repo/issues", "-f", "title=no session", "-f", "body=body\n\n---\n_Recreated from #70 by Vigilante._"):                    `{"number":71,"html_url":"https://github.com/owner/repo/issues/71"}`,
+			"gh issue comment --repo owner/repo 70 --body ## ♻️ Issue Recreated\n\nThis issue has been recreated as #71.\n\nThe original issue is being closed as `not planned` and stale artifacts are being cleaned up.\n\nSource: `cli`.": "ok",
+			testutil.Key("gh", "api", "--method", "PATCH", "-H", "Accept: application/vnd.github+json", "repos/owner/repo/issues/70", "-f", "state=closed", "-f", "state_reason=not_planned"):                                                "ok",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{
+		Path: repoPath,
+		Repo: "owner/repo",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.RecreateSession(context.Background(), "owner/repo", 70, "cli"); err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(stdout.String(), "recreated owner/repo issue #70 as #71") {
+		t.Fatalf("unexpected output: %s", stdout.String())
+	}
+}
+
 func mergeStringMaps(maps ...map[string]string) map[string]string {
 	merged := map[string]string{}
 	for _, current := range maps {
