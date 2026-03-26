@@ -47,14 +47,13 @@ Vigilante turns a repository checkout into a controlled autonomous worker instea
 Install with Homebrew:
 
 ```sh
-brew tap aliengiraffe/spaceship
-brew install --cask vigilante
+brew install vigilante
 ```
 
 Prepare the local machine with your preferred coding-agent provider:
 
 ```sh
-vigilante setup --provider codex
+vigilante setup -d --provider codex
 ```
 
 Register a repository after setup installs the background service:
@@ -189,17 +188,16 @@ The proxy preserves the underlying tool's stdout, stderr, and exit status. Telem
 
 ## Installation
 
-Install `vigilante` from the Homebrew tap:
+Install `vigilante` with Homebrew:
 
 ```sh
-brew tap aliengiraffe/spaceship
-brew install --cask vigilante
+brew install vigilante
 ```
 
 Upgrade later with:
 
 ```sh
-brew upgrade --cask vigilante
+brew upgrade vigilante
 ```
 
 ### `vigilante watch [--assignee <value>] [--max-parallel <value>] [--provider <codex|claude|gemini>] [--branch <name> | --track-default-branch] <path>`
@@ -474,7 +472,7 @@ Tagged releases are built and published with GoReleaser. Pushing a version tag t
 - `darwin/arm64`
 - `linux/amd64`
 - a `checksums.txt` file for the published archives
-- an updated Homebrew cask in `aliengiraffe/homebrew-spaceship` so `brew install --cask vigilante` installs the tagged release from `aliengiraffe/spaceship`
+- an updated Homebrew formula in `homebrew/core` so `brew install vigilante` installs the tagged release
 
 The release workflow requires a GitHub App that can write to the tap repository:
 
@@ -495,8 +493,7 @@ brew install vigilante-nightly
 Stable installs remain on the tagged release path:
 
 ```sh
-brew tap aliengiraffe/spaceship
-brew install --cask vigilante
+brew install vigilante
 ```
 
 Recommended release flow:
