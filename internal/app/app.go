@@ -17,9 +17,12 @@ import (
 	"syscall"
 	"time"
 
+	"log/slog"
+
 	"github.com/nicobistolfi/vigilante/internal/blocking"
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
+	"github.com/nicobistolfi/vigilante/internal/logging"
 	"github.com/nicobistolfi/vigilante/internal/provider"
 	"github.com/nicobistolfi/vigilante/internal/repo"
 	issuerunner "github.com/nicobistolfi/vigilante/internal/runner"
@@ -81,6 +84,7 @@ type App struct {
 	stdout io.Writer
 	stderr io.Writer
 	state  *state.Store
+	logger *slog.Logger
 	clock  func() time.Time
 	env    *environment.Environment
 
@@ -127,11 +131,16 @@ func (f *stringListFlag) Set(value string) error {
 
 func New() *App {
 	store := state.NewStore()
+	logger, err := logging.NewDaemonLogger(store.DaemonLogPath())
+	if err != nil {
+		logger = logging.Discard()
+	}
 	return &App{
 		stdin:                     os.Stdin,
 		stdout:                    os.Stdout,
 		stderr:                    os.Stderr,
 		state:                     store,
+		logger:                    logger,
 		clock:                     time.Now().UTC,
 		cancels:                   make(map[string]context.CancelFunc),
 		repoLabelsProvisionedOnce: make(map[string]bool),
@@ -142,7 +151,7 @@ func New() *App {
 				Base:             environment.ExecRunner{},
 				CaptureCommand:   telemetry.CaptureInternalCommand,
 				AccessLog:        store.AppendAccessLogEntry,
-				Logf:             store.AppendDaemonLog,
+				Logger:           logger,
 				LogSuccessOutput: os.Getenv("VIGILANTE_DEBUG_COMMAND_OUTPUT") == "1",
 			},
 		},
@@ -743,7 +752,7 @@ func (a *App) Setup(ctx context.Context) error {
 }
 
 func (a *App) SetupWithProvider(ctx context.Context, providerID string) error {
-	a.state.AppendDaemonLog("setup start install_daemon=true")
+	a.logger.Info("setup start install_daemon=true")
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
 	}
@@ -760,7 +769,7 @@ func (a *App) SetupWithProvider(ctx context.Context, providerID string) error {
 	if err := service.Install(ctx, a.env, a.state, selectedProvider); err != nil {
 		return err
 	}
-	a.state.AppendDaemonLog("setup complete install_daemon=true")
+	a.logger.Info("setup complete install_daemon=true")
 	fmt.Fprintln(a.stdout, "setup complete")
 	return nil
 }
@@ -790,7 +799,7 @@ func (a *App) WatchWithProvider(ctx context.Context, rawPath string, labels []st
 }
 
 func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []string, assignee string, maxParallel int, providerID string, branchOptions watchBranchOptions) error {
-	a.state.AppendDaemonLog("watch start raw_path=%q assignee=%q max_parallel=%d", rawPath, assignee, maxParallel)
+	a.logger.Info("watch start", "raw_path", rawPath, "assignee", assignee, "max_parallel", maxParallel)
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
 	}
@@ -909,11 +918,11 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []str
 
 	if updated {
 		updatedTarget := findWatchTargetByPath(targets, info.Path)
-		a.state.AppendDaemonLog("watch updated path=%s repo=%s branch=%s branch_mode=%s assignee=%s max_parallel=%d", info.Path, info.Repo, updatedTarget.Branch, updatedTarget.EffectiveBranchMode(), assigneeOrDefault(findWatchTargetAssignee(targets, info.Path)), findWatchTargetMaxParallel(targets, info.Path))
+		a.logger.Info("watch updated", "path", info.Path, "repo", info.Repo, "branch", updatedTarget.Branch, "branch_mode", updatedTarget.EffectiveBranchMode(), "assignee", assigneeOrDefault(findWatchTargetAssignee(targets, info.Path)), "max_parallel", findWatchTargetMaxParallel(targets, info.Path))
 		fmt.Fprintln(a.stdout, "updated", info.Path)
 	} else {
 		addedTarget := findWatchTargetByPath(targets, info.Path)
-		a.state.AppendDaemonLog("watch added path=%s repo=%s branch=%s branch_mode=%s assignee=%s max_parallel=%d", info.Path, info.Repo, addedTarget.Branch, addedTarget.EffectiveBranchMode(), assigneeOrDefault(assignee), configuredMaxParallel(maxParallel))
+		a.logger.Info("watch added", "path", info.Path, "repo", info.Repo, "branch", addedTarget.Branch, "branch_mode", addedTarget.EffectiveBranchMode(), "assignee", assigneeOrDefault(assignee), "max_parallel", configuredMaxParallel(maxParallel))
 		fmt.Fprintln(a.stdout, "watching", info.Path)
 	}
 	a.printWatchRuntimeGuidance(ctx)
@@ -941,7 +950,7 @@ func (a *App) printWatchRuntimeGuidance(ctx context.Context) {
 }
 
 func (a *App) Unwatch(rawPath string) error {
-	a.state.AppendDaemonLog("unwatch start raw_path=%q", rawPath)
+	a.logger.Info("unwatch start", "raw_path", rawPath)
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
 	}
@@ -971,7 +980,7 @@ func (a *App) Unwatch(rawPath string) error {
 	if err := a.state.SaveWatchTargets(filtered); err != nil {
 		return err
 	}
-	a.state.AppendDaemonLog("unwatch removed path=%s", path)
+	a.logger.Info("unwatch removed", "path", path)
 	fmt.Fprintln(a.stdout, "removed", path)
 	return nil
 }
@@ -1004,7 +1013,7 @@ func (a *App) DaemonRun(ctx context.Context, interval time.Duration, once bool) 
 		return errors.New("interval must be positive")
 	}
 	startedAt := time.Now().UTC()
-	a.state.AppendDaemonLog("daemon run start once=%t interval=%s", once, interval)
+	a.logger.Info("daemon run start", "once", once, "interval", interval)
 	telemetry.CaptureWorkflowEvent("daemon_execution_started", map[string]any{
 		"feature_area":     "daemon",
 		"invocation":       "daemon",
@@ -1045,7 +1054,7 @@ func (a *App) DaemonRun(ctx context.Context, interval time.Duration, once bool) 
 
 	for {
 		if err := a.ScanOnce(ctx); err != nil {
-			a.state.AppendDaemonLog("scan error err=%v", err)
+			a.logger.Error("scan error", "err", err)
 			fmt.Fprintln(a.stderr, "scan error:", err)
 		}
 
@@ -1065,7 +1074,7 @@ func daemonMode(once bool) string {
 }
 
 func (a *App) ScanOnce(ctx context.Context) error {
-	a.state.AppendDaemonLog("scan start")
+	a.logger.Info("scan start")
 	locked, err := a.state.TryWithScanLock(func() error {
 		if err := a.state.EnsureLayout(); err != nil {
 			return err
@@ -1092,7 +1101,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				return err
 			}
 			fmt.Fprintln(a.stdout, "scan paused: GitHub REST core quota is below the low-quota threshold")
-			a.state.AppendDaemonLog("scan paused by github rate limit")
+			a.logger.Info("scan paused by github rate limit")
 			return nil
 		}
 		sessions, err = a.processGitHubCleanupRequests(ctx, sessions)
@@ -1142,7 +1151,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 					return err
 				}
 				if target.Branch != resolvedBranch {
-					a.state.AppendDaemonLog("watch branch refreshed repo=%s path=%s old=%s new=%s mode=%s", target.Repo, target.Path, target.Branch, resolvedBranch, target.EffectiveBranchMode())
+					a.logger.Info("watch branch refreshed", "repo", target.Repo, "path", target.Path, "old", target.Branch, "new", resolvedBranch, "mode", target.EffectiveBranchMode())
 					target.Branch = resolvedBranch
 				}
 			}
@@ -1152,8 +1161,8 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				return err
 			}
 			startedCount += started
-			a.state.AppendDaemonLog("scan repo classified repo=%s shape=%s hints=%d/%d/%d", target.Repo, target.Classification.Shape, len(target.Classification.ProcessHints.WorkspaceConfigFiles), len(target.Classification.ProcessHints.WorkspaceManifestFiles), len(target.Classification.ProcessHints.MultiPackageRoots))
-			a.state.AppendDaemonLog("scan repo start repo=%s path=%s max_parallel=%d", target.Repo, target.Path, target.MaxParallel)
+			a.logger.Info("scan repo classified", "repo", target.Repo, "shape", target.Classification.Shape, "hints", len(target.Classification.ProcessHints.WorkspaceConfigFiles))
+			a.logger.Info("scan repo start", "repo", target.Repo, "path", target.Path, "max_parallel", target.MaxParallel)
 			resolvedAssignee, ok := resolvedAssignees[target.Assignee]
 			if !ok {
 				resolvedAssignee, err = ghcli.ResolveAssignee(ctx, a.env.Runner, target.Assignee)
@@ -1163,18 +1172,18 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			}
 			if err != nil {
 				target.LastScanAt = a.clock().Format(time.RFC3339)
-				a.state.AppendDaemonLog("scan repo issues failed repo=%s err=%v", target.Repo, err)
+				a.logger.Error("scan repo issues failed", "repo", target.Repo, "err", err)
 				fmt.Fprintf(a.stdout, "repo: %s scan failed: %s\n", target.Repo, summarizeText(err.Error()))
 				continue
 			}
 			issues, err := ghcli.ListOpenIssuesForAssignee(ctx, a.env.Runner, target.Repo, resolvedAssignee)
 			target.LastScanAt = a.clock().Format(time.RFC3339)
 			if err != nil {
-				a.state.AppendDaemonLog("scan repo issues failed repo=%s err=%v", target.Repo, err)
+				a.logger.Error("scan repo issues failed", "repo", target.Repo, "err", err)
 				fmt.Fprintf(a.stdout, "repo: %s scan failed: %s\n", target.Repo, summarizeText(err.Error()))
 				continue
 			}
-			a.state.AppendDaemonLog("scan repo issues repo=%s open_issues=%d", target.Repo, len(issues))
+			a.logger.Info("scan repo issues", "repo", target.Repo, "open_issues", len(issues))
 
 			activeCount := ghcli.ActiveSessionCount(sessions, *target)
 			eligibleIssues := ghcli.SelectIssues(issues, sessions, *target, len(issues))
@@ -1190,29 +1199,29 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				a.syncQueuedIssueLabelsBestEffort(ctx, target.Repo, queued.Number)
 			}
 			if len(nextIssues) == 0 {
-				a.state.AppendDaemonLog("scan repo no eligible issues repo=%s", target.Repo)
+				a.logger.Info("scan repo no eligible issues", "repo", target.Repo)
 				fmt.Fprintf(a.stdout, "repo: %s no eligible issues (%d open)\n", target.Repo, len(issues))
 				continue
 			}
 			for _, next := range nextIssues {
-				a.state.AppendDaemonLog("scan repo selected issue repo=%s issue=%d title=%q", target.Repo, next.Number, next.Title)
+				a.logger.Info("scan repo selected issue", "repo", target.Repo, "issue", next.Number, "title", next.Title)
 
 				selectedProvider, providerErr := resolveIssueProvider(*target, next)
 				if providerErr != nil {
-					a.state.AppendDaemonLog("scan repo issue provider conflict repo=%s issue=%d err=%v", target.Repo, next.Number, providerErr)
+					a.logger.Info("scan repo issue provider conflict", "repo", target.Repo, "issue", next.Number, "err", providerErr)
 					fmt.Fprintf(a.stdout, "repo: %s skipped issue #%d: %s\n", target.Repo, next.Number, summarizeText(providerErr.Error()))
 					continue
 				}
 				if selectedProvider != target.Provider {
-					a.state.AppendDaemonLog("scan repo issue provider override repo=%s issue=%d provider=%s source=label", target.Repo, next.Number, selectedProvider)
+					a.logger.Info("scan repo issue provider override", "repo", target.Repo, "issue", next.Number, "provider", selectedProvider)
 				}
-				a.state.AppendDaemonLog("scan repo issue skill repo=%s issue=%d skill=%s shape=%s", target.Repo, next.Number, skill.IssueImplementationSkill(*target), target.Classification.Shape)
+				a.logger.Info("scan repo issue skill", "repo", target.Repo, "issue", next.Number, "skill", skill.IssueImplementationSkill(*target), "shape", target.Classification.Shape)
 				resolvedBranch, err := repo.ResolveBranch(ctx, a.env.Runner, target.Path, string(target.EffectiveBranchMode()), target.Branch)
 				if err != nil {
 					session := blockedIssueSessionForDispatchFailure(*target, next, selectedProvider, err, a.clock())
 					previous, _ := findSession(sessions, target.Repo, next.Number)
 					a.commentDispatchFailure(ctx, previous, &session, "dispatch")
-					a.state.AppendDaemonLog("scan repo dispatch blocked repo=%s issue=%d err=%v", target.Repo, next.Number, err)
+					a.logger.Info("scan repo dispatch blocked", "repo", target.Repo, "issue", next.Number, "err", err)
 					sessions = upsertSession(sessions, session)
 					if err := a.state.SaveSessions(sessions); err != nil {
 						return err
@@ -1229,7 +1238,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 					session := blockedIssueSessionForDispatchFailure(*target, next, selectedProvider, err, a.clock())
 					previous, _ := findSession(sessions, target.Repo, next.Number)
 					a.commentDispatchFailure(ctx, previous, &session, "dispatch")
-					a.state.AppendDaemonLog("scan repo dispatch blocked repo=%s issue=%d err=%v", target.Repo, next.Number, err)
+					a.logger.Info("scan repo dispatch blocked", "repo", target.Repo, "issue", next.Number, "err", err)
 					sessions = upsertSession(sessions, session)
 					if err := a.state.SaveSessions(sessions); err != nil {
 						return err
@@ -1239,7 +1248,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 					fmt.Fprintf(a.stdout, "repo: %s blocked issue #%d: %s\n", target.Repo, next.Number, summarizeText(err.Error()))
 					continue
 				}
-				a.state.AppendDaemonLog("scan repo worktree ready repo=%s issue=%d path=%s branch=%s reused_remote=%t", target.Repo, next.Number, wt.Path, wt.Branch, wt.ReusedRemoteBranch != "")
+				a.logger.Info("scan repo worktree ready", "repo", target.Repo, "issue", next.Number, "path", wt.Path, "branch", wt.Branch, "reused_remote", wt.ReusedRemoteBranch != "")
 
 				diffSummary := ""
 				if strings.TrimSpace(wt.ReusedRemoteBranch) != "" {
@@ -1251,7 +1260,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 						session.BaseBranch = target.Branch
 						session.WorktreePath = wt.Path
 						session.ReusedRemoteBranch = wt.ReusedRemoteBranch
-						a.state.AppendDaemonLog("scan repo dispatch blocked repo=%s issue=%d branch=%s err=%v", target.Repo, next.Number, wt.Branch, err)
+						a.logger.Info("scan repo dispatch blocked", "repo", target.Repo, "issue", next.Number, "branch", wt.Branch, "err", err)
 						sessions = upsertSession(sessions, session)
 						if err := a.state.SaveSessions(sessions); err != nil {
 							return err
@@ -1260,7 +1269,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 						fmt.Fprintf(a.stdout, "repo: %s blocked issue #%d: %s\n", target.Repo, next.Number, summarizeText(session.LastError))
 						continue
 					}
-					a.state.AppendDaemonLog("scan repo reused remote issue branch repo=%s issue=%d branch=%s base=%s diff=%s", target.Repo, next.Number, wt.Branch, target.Branch, summarizeText(diffSummary))
+					a.logger.Info("scan repo reused remote issue branch", "repo", target.Repo, "issue", next.Number, "branch", wt.Branch, "base", target.Branch, "diff", summarizeText(diffSummary))
 				}
 
 				session := state.Session{
@@ -1298,7 +1307,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 		}
 
 		fmt.Fprintf(a.stdout, "scanned %d watch target(s), started %d issue session(s)\n", len(targets), startedCount)
-		a.state.AppendDaemonLog("scan complete targets=%d started=%d", len(targets), startedCount)
+		a.logger.Info("scan complete", "targets", len(targets), "started", startedCount)
 
 		return a.state.SaveWatchTargets(targets)
 	})
@@ -1306,7 +1315,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 		return err
 	}
 	if !locked {
-		a.state.AppendDaemonLog("scan skipped; another daemon process holds the scan lock")
+		a.logger.Info("scan skipped; another daemon process holds the scan lock")
 		fmt.Fprintln(a.stdout, "scan skipped: another vigilante daemon is already scanning")
 		return nil
 	}
@@ -1336,7 +1345,7 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 		pr, err := ghcli.FindPullRequestForBranch(ctx, a.env.Runner, session.Repo, session.Branch)
 		if err != nil {
 			a.recordSessionFailure(session, "issue_execution", "gh pr list", err)
-			a.state.AppendDaemonLog("stalled session pr lookup failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
+			a.logger.Error("stalled session pr lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
 			continue
 		}
 		if pr != nil {
@@ -1349,7 +1358,7 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 			session.LastError = ""
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 			a.emitSessionTransition(previousStatus, *session, "stalled_recovery")
-			a.state.AppendDaemonLog("stalled session recovered to pr maintenance repo=%s issue=%d branch=%s reason=%q pr=%d", session.Repo, session.IssueNumber, session.Branch, reason, pr.Number)
+			a.logger.Info("stalled session recovered to pr maintenance", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "reason", reason, "pr", pr.Number)
 			body := ghcli.FormatProgressComment(ghcli.ProgressComment{
 				Stage:      "Implementation In Progress",
 				Emoji:      "🔄",
@@ -1365,7 +1374,7 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 			if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "progress", "stalled_recovery"); err != nil {
 				session.LastError = err.Error()
 				session.UpdatedAt = a.clock().Format(time.RFC3339)
-				a.state.AppendDaemonLog("stalled session recovery comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
+				a.logger.Error("stalled session recovery comment failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
 			}
 			a.syncSessionIssueLabelsBestEffort(ctx, session, pr, nil, nil)
 			continue
@@ -1376,11 +1385,11 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 		if !hasPending {
 			session.StaleAutoRestartPendingSince = now.Format(time.RFC3339)
 			session.UpdatedAt = now.Format(time.RFC3339)
-			a.state.AppendDaemonLog("stalled session auto restart pending repo=%s issue=%d branch=%s reason=%q pending_since=%s delay=%s", session.Repo, session.IssueNumber, session.Branch, reason, session.StaleAutoRestartPendingSince, restartDelay)
+			a.logger.Info("stalled session auto restart pending", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "reason", reason, "pending_since", session.StaleAutoRestartPendingSince, "delay", restartDelay)
 			continue
 		}
 		if now.Sub(pendingSince) < restartDelay {
-			a.state.AppendDaemonLog("stalled session auto restart waiting repo=%s issue=%d branch=%s reason=%q pending_since=%s delay=%s", session.Repo, session.IssueNumber, session.Branch, reason, pendingSince.Format(time.RFC3339), restartDelay)
+			a.logger.Info("stalled session auto restart waiting", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "reason", reason, "pending_since", pendingSince.Format(time.RFC3339), "delay", restartDelay)
 			continue
 		}
 		if session.StaleAutoRestartAttempts >= staleAutoRestartAttemptLimit {
@@ -1395,7 +1404,7 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 			session.StaleAutoRestartStoppedAt = nowText
 			clearStaleAutoRestartPending(session)
 			a.emitSessionTransition(previousStatus, *session, "stalled_auto_restart_limit")
-			a.state.AppendDaemonLog("stalled session auto restart limit reached repo=%s issue=%d branch=%s attempts=%d reason=%q", session.Repo, session.IssueNumber, session.Branch, session.StaleAutoRestartAttempts, reason)
+			a.logger.Info("stalled session auto restart limit reached", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "attempts", session.StaleAutoRestartAttempts, "reason", reason)
 			body := ghcli.FormatProgressComment(ghcli.ProgressComment{
 				Stage:      "Manual Intervention Required",
 				Emoji:      "🧯",
@@ -1411,7 +1420,7 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 			if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "blocked", "stalled_auto_restart_limit"); err != nil {
 				session.LastError = err.Error()
 				session.UpdatedAt = a.clock().Format(time.RFC3339)
-				a.state.AppendDaemonLog("stalled session auto restart limit comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
+				a.logger.Error("stalled session auto restart limit comment failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
 			}
 			a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil, nil)
 			continue
@@ -1421,7 +1430,7 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 			session.LastError = fmt.Sprintf("stalled session detected (%s) but cleanup failed: %v", reason, err)
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 			session.CleanupError = err.Error()
-			a.state.AppendDaemonLog("stalled session cleanup failed repo=%s issue=%d branch=%s reason=%q err=%v", session.Repo, session.IssueNumber, session.Branch, reason, err)
+			a.logger.Error("stalled session cleanup failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "reason", reason, "err", err)
 			body := ghcli.FormatProgressComment(ghcli.ProgressComment{
 				Stage:      "Blocked",
 				Emoji:      "🛠️",
@@ -1437,7 +1446,7 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 			if commentErr := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "blocked", "stalled_recovery"); commentErr != nil {
 				session.LastError = commentErr.Error()
 				session.UpdatedAt = a.clock().Format(time.RFC3339)
-				a.state.AppendDaemonLog("stalled session cleanup comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, commentErr)
+				a.logger.Error("stalled session cleanup comment failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", commentErr)
 			}
 			a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil, nil)
 			continue
@@ -1457,7 +1466,7 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 		session.UpdatedAt = nowText
 		session.LastError = fmt.Sprintf("automatic stale-session restart attempt %d/%d triggered: %s", session.StaleAutoRestartAttempts, staleAutoRestartAttemptLimit, reason)
 		a.emitSessionTransition(previousStatus, *session, "stalled_auto_restart")
-		a.state.AppendDaemonLog("stalled session auto restart triggered repo=%s issue=%d branch=%s attempt=%d/%d reason=%q", session.Repo, session.IssueNumber, session.Branch, session.StaleAutoRestartAttempts, staleAutoRestartAttemptLimit, reason)
+		a.logger.Info("stalled session auto restart triggered", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "attempt", session.StaleAutoRestartAttempts, "reason", staleAutoRestartAttemptLimit)
 		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
 			Stage:      "Implementation In Progress",
 			Emoji:      "♻️",
@@ -1473,7 +1482,7 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 		if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "progress", "stalled_auto_restart"); err != nil {
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
-			a.state.AppendDaemonLog("stalled session auto restart comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
+			a.logger.Error("stalled session auto restart comment failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
 		}
 		a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil, nil)
 	}
@@ -1485,14 +1494,14 @@ func (a *App) enforceGitHubRateLimit(ctx context.Context, sessions []state.Sessi
 	now := a.clock()
 	cachedSnapshot, cachedActive, resumed := a.currentGitHubRateLimitState(now)
 	if resumed {
-		a.state.AppendDaemonLog("github rate limit pause expired; refreshing snapshot")
+		a.logger.Info("github rate limit pause expired; refreshing snapshot")
 	}
 
 	snapshot, err := ghcli.GetRateLimitSnapshot(ctx, a.env.Runner)
 	if err != nil {
-		a.state.AppendDaemonLog("github rate limit fetch failed err=%v", err)
+		a.logger.Error("github rate limit fetch failed", "err", err)
 		if cachedActive {
-			a.state.AppendDaemonLog("github rate limit pause active core_remaining=%d reset_at=%s", cachedSnapshot.Core.Remaining, cachedSnapshot.Core.ResetAt.Format(time.RFC3339))
+			a.logger.Info("github rate limit pause active", "core_remaining", cachedSnapshot.Core.Remaining, "reset_at", cachedSnapshot.Core.ResetAt.Format(time.RFC3339))
 			return a.notifyGitHubLowQuotaSessions(ctx, sessions, cachedSnapshot), true, nil
 		}
 		return a.clearExpiredGitHubResumeState(sessions, now), false, nil
@@ -1500,17 +1509,17 @@ func (a *App) enforceGitHubRateLimit(ctx context.Context, sessions []state.Sessi
 	if snapshot.Core.Remaining >= githubCoreLowQuotaThreshold {
 		if cachedActive {
 			a.clearGitHubRateLimitState(false)
-			a.state.AppendDaemonLog("github rate limit pause cleared by live snapshot core_remaining=%d reset_at=%s", snapshot.Core.Remaining, snapshot.Core.ResetAt.Format(time.RFC3339))
+			a.logger.Info("github rate limit pause cleared by live snapshot", "core_remaining", snapshot.Core.Remaining, "reset_at", snapshot.Core.ResetAt.Format(time.RFC3339))
 		}
 		return a.clearExpiredGitHubResumeState(sessions, now), false, nil
 	}
 
 	if cachedActive {
 		a.refreshGitHubRateLimitState(snapshot)
-		a.state.AppendDaemonLog("github rate limit pause active core_remaining=%d reset_at=%s", snapshot.Core.Remaining, snapshot.Core.ResetAt.Format(time.RFC3339))
+		a.logger.Info("github rate limit pause active", "core_remaining", snapshot.Core.Remaining, "reset_at", snapshot.Core.ResetAt.Format(time.RFC3339))
 	} else {
 		a.setGitHubRateLimitState(snapshot)
-		a.state.AppendDaemonLog("github rate limit pause entered core_remaining=%d reset_at=%s", snapshot.Core.Remaining, snapshot.Core.ResetAt.Format(time.RFC3339))
+		a.logger.Info("github rate limit pause entered", "core_remaining", snapshot.Core.Remaining, "reset_at", snapshot.Core.ResetAt.Format(time.RFC3339))
 	}
 	return a.notifyGitHubLowQuotaSessions(ctx, sessions, snapshot), true, nil
 }
@@ -1579,7 +1588,7 @@ func (a *App) notifyGitHubLowQuotaSessions(ctx context.Context, sessions []state
 
 		body := ghcli.FormatGitHubRateLimitDelayComment(snapshot, githubCoreLowQuotaThreshold, a.clock())
 		if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "rate_limit_delay", "github_rate_limit"); err != nil {
-			a.state.AppendDaemonLog("github rate limit delay comment failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
+			a.logger.Error("github rate limit delay comment failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 			continue
@@ -1636,7 +1645,7 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 		if err != nil {
 			session.LastMaintenanceError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
-			a.state.AppendDaemonLog("pr lookup failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
+			a.logger.Error("pr lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
 			continue
 		}
 		if pr == nil {
@@ -1647,17 +1656,17 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 		if pr.MergedAt == nil {
 			if pr.State != "OPEN" {
 				if err := a.cleanupSessionArtifacts(ctx, session, "pull_request_closed"); err != nil {
-					a.state.AppendDaemonLog("cleanup failed repo=%s issue=%d pr=%d branch=%s worktree=%s source=pull_request_closed state=%s err=%v", session.Repo, session.IssueNumber, pr.Number, session.Branch, session.WorktreePath, pr.State, err)
+					a.logger.Error("cleanup failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "branch", session.Branch, "worktree", session.WorktreePath, "state", pr.State, "err", err)
 					continue
 				}
-				a.state.AppendDaemonLog("cleanup complete repo=%s issue=%d pr=%d branch=%s worktree=%s source=pull_request_closed state=%s", session.Repo, session.IssueNumber, pr.Number, session.Branch, session.WorktreePath, pr.State)
+				a.logger.Info("cleanup complete", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "branch", session.Branch, "worktree", session.WorktreePath, "state", pr.State)
 				a.syncSessionIssueLabelsBestEffort(ctx, session, pr, nil, issueCache)
 				continue
 			}
 			detailedPR, issueDetails, err := a.maintainOpenPullRequest(ctx, session, *pr, issueCache)
 			if err != nil {
 				session.UpdatedAt = a.clock().Format(time.RFC3339)
-				a.state.AppendDaemonLog("pr maintenance failed repo=%s issue=%d pr=%d branch=%s err=%v", session.Repo, session.IssueNumber, pr.Number, session.Branch, err)
+				a.logger.Error("pr maintenance failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "branch", session.Branch, "err", err)
 				if shouldCommentMaintenanceFailure(*session, err) {
 					blocked := classifyBlockedReason("pr_maintenance", "git fetch origin main", err)
 					previousStatus := session.Status
@@ -1676,7 +1685,7 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 						Tagline: "Difficulties strengthen the mind, as labor does the body.",
 					})
 					if commentErr := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "blocked", "pr_maintenance"); commentErr != nil {
-						a.state.AppendDaemonLog("pr maintenance failure comment failed repo=%s issue=%d pr=%d err=%v", session.Repo, session.IssueNumber, pr.Number, commentErr)
+						a.logger.Error("pr maintenance failure comment failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "err", commentErr)
 					}
 					session.LastMaintenanceError = err.Error()
 				}
@@ -1689,19 +1698,11 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 
 		session.PullRequestMergedAt = pr.MergedAt.UTC().Format(time.RFC3339)
 		if err := a.cleanupSessionArtifacts(ctx, session, "pull_request_merged"); err != nil {
-			a.state.AppendDaemonLog("cleanup failed repo=%s issue=%d pr=%d branch=%s worktree=%s source=pull_request_merged merged_at=%s err=%v", session.Repo, session.IssueNumber, session.PullRequestNumber, session.Branch, session.WorktreePath, session.PullRequestMergedAt, err)
+			a.logger.Error("cleanup failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", session.PullRequestNumber, "branch", session.Branch, "worktree", session.WorktreePath, "merged_at", session.PullRequestMergedAt, "err", err)
 			continue
 		}
 
-		a.state.AppendDaemonLog(
-			"cleanup complete repo=%s issue=%d pr=%d branch=%s worktree=%s source=pull_request_merged merged_at=%s",
-			session.Repo,
-			session.IssueNumber,
-			session.PullRequestNumber,
-			session.Branch,
-			session.WorktreePath,
-			session.PullRequestMergedAt,
-		)
+		a.logger.Info("cleanup complete", "repo", session.Repo, "issue", session.IssueNumber, "pr", session.PullRequestNumber, "branch", session.Branch, "worktree", session.WorktreePath, "source", "pull_request_merged", "merged_at", session.PullRequestMergedAt)
 		a.syncSessionIssueLabelsBestEffort(ctx, session, pr, nil, issueCache)
 	}
 
@@ -1726,7 +1727,7 @@ func (a *App) cleanupClosedIssueSessions(ctx context.Context, sessions []state.S
 			}
 			session.LastMaintenanceError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
-			a.state.AppendDaemonLog("issue lookup failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
+			a.logger.Error("issue lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
 			continue
 		}
 		if !strings.EqualFold(strings.TrimSpace(issue.State), "closed") {
@@ -1734,13 +1735,13 @@ func (a *App) cleanupClosedIssueSessions(ctx context.Context, sessions []state.S
 		}
 
 		if err := a.cleanupSessionArtifacts(ctx, session, "issue_closed"); err != nil {
-			a.state.AppendDaemonLog("cleanup failed repo=%s issue=%d branch=%s worktree=%s source=issue_closed err=%v", session.Repo, session.IssueNumber, session.Branch, session.WorktreePath, err)
+			a.logger.Error("cleanup failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "worktree", session.WorktreePath, "err", err)
 			continue
 		}
 
 		session.Status = state.SessionStatusClosed
 		session.UpdatedAt = a.clock().Format(time.RFC3339)
-		a.state.AppendDaemonLog("cleanup complete repo=%s issue=%d branch=%s worktree=%s source=issue_closed status=closed", session.Repo, session.IssueNumber, session.Branch, session.WorktreePath)
+		a.logger.Info("cleanup complete", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "worktree", session.WorktreePath)
 		a.syncSessionIssueLabelsBestEffort(ctx, session, nil, issue, issueCache)
 	}
 
@@ -1782,16 +1783,16 @@ func (a *App) launchIssueSession(ctx context.Context, target state.WatchTarget, 
 
 		sessions, err := a.state.LoadSessions()
 		if err != nil {
-			a.state.AppendDaemonLog("session result load failed repo=%s issue=%d err=%v", target.Repo, issue.Number, err)
+			a.logger.Error("session result load failed", "repo", target.Repo, "issue", issue.Number, "err", err)
 			return
 		}
 		if existing, ok := findSession(sessions, target.Repo, issue.Number); ok {
 			if existing.StartedAt != "" && existing.StartedAt != result.StartedAt {
-				a.state.AppendDaemonLog("session result ignored for superseded run repo=%s issue=%d started_at=%s latest_started_at=%s", target.Repo, issue.Number, result.StartedAt, existing.StartedAt)
+				a.logger.Info("session result ignored for superseded run", "repo", target.Repo, "issue", issue.Number, "started_at", result.StartedAt, "latest_started_at", existing.StartedAt)
 				return
 			}
 			if existing.LastCleanupSource != "" {
-				a.state.AppendDaemonLog("session result ignored after cleanup repo=%s issue=%d source=%s", target.Repo, issue.Number, existing.LastCleanupSource)
+				a.logger.Info("session result ignored after cleanup", "repo", target.Repo, "issue", issue.Number, "source", existing.LastCleanupSource)
 				return
 			}
 		}
@@ -1803,11 +1804,11 @@ func (a *App) launchIssueSession(ctx context.Context, target state.WatchTarget, 
 		}
 		sessions = upsertSession(sessions, result)
 		if err := a.state.SaveSessions(sessions); err != nil {
-			a.state.AppendDaemonLog("session result save failed repo=%s issue=%d err=%v", target.Repo, issue.Number, err)
+			a.logger.Error("session result save failed", "repo", target.Repo, "issue", issue.Number, "err", err)
 			return
 		}
 		a.syncSessionIssueLabelsBestEffort(ctx, &result, nil, nil, nil)
-		a.state.AppendDaemonLog("scan repo session finished repo=%s issue=%d status=%s", target.Repo, issue.Number, result.Status)
+		a.logger.Info("scan repo session finished", "repo", target.Repo, "issue", issue.Number, "status", result.Status)
 	}()
 }
 
@@ -1955,7 +1956,7 @@ func (a *App) dispatchConflictResolution(ctx context.Context, session *state.Ses
 		Tagline: "Keep the spec intact while the history moves.",
 	})
 	if commentErr := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "progress", "conflict_resolution"); commentErr != nil {
-		a.state.AppendDaemonLog("pr conflict comment failed repo=%s issue=%d pr=%d err=%v", session.Repo, session.IssueNumber, pr.Number, commentErr)
+		a.logger.Error("pr conflict comment failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "err", commentErr)
 	}
 
 	target := watchTargetForSession(*session, a.fallbackWatchTargetForSession(*session))
@@ -2000,7 +2001,7 @@ func (a *App) tryAutoSquashMerge(ctx context.Context, session *state.Session, pr
 	waitReason := automergeWaitReason(pr)
 	if waitReason != "" {
 		session.LastMaintenanceError = waitReason
-		a.state.AppendDaemonLog("automerge waiting repo=%s issue=%d pr=%d branch=%s reason=%s", session.Repo, session.IssueNumber, pr.Number, session.Branch, waitReason)
+		a.logger.Info("automerge waiting", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "branch", session.Branch, "reason", waitReason)
 		return nil
 	}
 
@@ -2008,7 +2009,7 @@ func (a *App) tryAutoSquashMerge(ctx context.Context, session *state.Session, pr
 		return fmt.Errorf("squash automerge pr #%d: %w", pr.Number, err)
 	}
 
-	a.state.AppendDaemonLog("automerge merged repo=%s issue=%d pr=%d branch=%s strategy=squash", session.Repo, session.IssueNumber, pr.Number, session.Branch)
+	a.logger.Info("automerge merged", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "branch", session.Branch)
 	return nil
 }
 
@@ -2028,7 +2029,7 @@ func (a *App) automergeEnabled(ctx context.Context, session *state.Session, pr g
 				a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
 				return false, nil
 			}
-			a.state.AppendDaemonLog("issue automerge label lookup failed repo=%s issue=%d pr=%d err=%v", session.Repo, session.IssueNumber, pr.Number, err)
+			a.logger.Error("issue automerge label lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "err", err)
 			return false, nil
 		}
 	}
@@ -2058,7 +2059,7 @@ func (a *App) stopMonitoringUnavailableIssueSession(ctx context.Context, session
 	previousStatus := session.Status
 	if err := worktree.CleanupIssueArtifacts(ctx, a.env.Runner, session.RepoPath, session.WorktreePath, session.Branch); err != nil {
 		session.CleanupError = err.Error()
-		a.state.AppendDaemonLog("issue unavailable cleanup failed repo=%s issue=%d branch=%s source=%s err=%v", session.Repo, session.IssueNumber, session.Branch, source, err)
+		a.logger.Error("issue unavailable cleanup failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "source", source, "err", err)
 	} else {
 		session.CleanupCompletedAt = now
 		session.CleanupError = ""
@@ -2072,7 +2073,7 @@ func (a *App) stopMonitoringUnavailableIssueSession(ctx context.Context, session
 	session.LastMaintenanceError = ""
 	session.LastError = fmt.Sprintf("issue is no longer available on GitHub; monitoring stopped: %s", summarizeMaintenanceError(issueErr))
 	a.emitSessionTransition(previousStatus, *session, source)
-	a.state.AppendDaemonLog("issue monitoring stopped repo=%s issue=%d branch=%s source=%s err=%v", session.Repo, session.IssueNumber, session.Branch, source, issueErr)
+	a.logger.Info("issue monitoring stopped", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "source", source, "err", issueErr)
 }
 
 func (a *App) handleFailingPullRequestChecks(ctx context.Context, session *state.Session, pr ghcli.PullRequest) error {
@@ -2213,9 +2214,9 @@ func (a *App) processGitHubCleanupRequests(ctx context.Context, sessions []state
 			continue
 		}
 
-		comments, err := ghcli.ListIssueCommentsForPolling(ctx, a.env.Runner, session.Repo, session.IssueNumber, "cleanup", a.state.AppendDaemonLog)
+		comments, err := ghcli.ListIssueCommentsForPolling(ctx, a.env.Runner, session.Repo, session.IssueNumber, "cleanup", a.logger)
 		if err != nil {
-			a.state.AppendDaemonLog("cleanup comment lookup failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
+			a.logger.Error("cleanup comment lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 			continue
@@ -2225,7 +2226,7 @@ func (a *App) processGitHubCleanupRequests(ctx context.Context, sessions []state
 			continue
 		}
 		if err := ghcli.AddIssueCommentReaction(ctx, a.env.Runner, session.Repo, comment.ID, "+1"); err != nil {
-			a.state.AppendDaemonLog("cleanup reaction failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
+			a.logger.Error("cleanup reaction failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 			continue
@@ -2249,7 +2250,7 @@ func (a *App) processGitHubCleanupRequests(ctx context.Context, sessions []state
 				Tagline: "Trust, but verify.",
 			})
 			if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "cleanup", "github_comment"); err != nil {
-				a.state.AppendDaemonLog("cleanup no-op comment failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
+				a.logger.Error("cleanup no-op comment failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
 				session.LastError = err.Error()
 				session.UpdatedAt = a.clock().Format(time.RFC3339)
 			}
@@ -2259,7 +2260,7 @@ func (a *App) processGitHubCleanupRequests(ctx context.Context, sessions []state
 		cleanupErr := a.cleanupRunningSession(ctx, session, "comment")
 		body := cleanupResultComment(*session, cleanupErr)
 		if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "cleanup", "github_comment"); err != nil {
-			a.state.AppendDaemonLog("cleanup result comment failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
+			a.logger.Error("cleanup result comment failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 		}
@@ -2275,9 +2276,9 @@ func (a *App) processGitHubRecreateRequests(ctx context.Context, sessions []stat
 			continue
 		}
 
-		comments, err := ghcli.ListIssueCommentsForPolling(ctx, a.env.Runner, session.Repo, session.IssueNumber, "recreate", a.state.AppendDaemonLog)
+		comments, err := ghcli.ListIssueCommentsForPolling(ctx, a.env.Runner, session.Repo, session.IssueNumber, "recreate", a.logger)
 		if err != nil {
-			a.state.AppendDaemonLog("recreate comment lookup failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
+			a.logger.Error("recreate comment lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 			continue
@@ -2287,7 +2288,7 @@ func (a *App) processGitHubRecreateRequests(ctx context.Context, sessions []stat
 			continue
 		}
 		if err := ghcli.AddIssueCommentReaction(ctx, a.env.Runner, session.Repo, comment.ID, "eyes"); err != nil {
-			a.state.AppendDaemonLog("recreate reaction failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
+			a.logger.Error("recreate reaction failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 			continue
@@ -2317,7 +2318,7 @@ func (a *App) processGitHubRecreateRequests(ctx context.Context, sessions []stat
 				Tagline: "Better luck next time.",
 			})
 			if err := a.commentOnIssue(ctx, repo, issueNumber, body, "recreate", "github_comment"); err != nil {
-				a.state.AppendDaemonLog("recreate failure comment failed repo=%s issue=%d err=%v", repo, issueNumber, err)
+				a.logger.Error("recreate failure comment failed", "repo", repo, "issue", issueNumber, "err", err)
 			}
 		}
 	}
@@ -2397,10 +2398,10 @@ func (a *App) recreateSessionInline(ctx context.Context, session *state.Session,
 
 	body := recreateResultComment(issue, created.Number, created.URL, source, cleanupErrors)
 	if err := a.commentOnIssue(ctx, repoSlug, issue, body, "recreate", "github_comment"); err != nil {
-		a.state.AppendDaemonLog("recreate result comment failed repo=%s issue=%d err=%v", repoSlug, issue, err)
+		a.logger.Error("recreate result comment failed", "repo", repoSlug, "issue", issue, "err", err)
 	}
 
-	a.state.AppendDaemonLog("recreate completed repo=%s old_issue=%d new_issue=%d source=%s", repoSlug, issue, created.Number, source)
+	a.logger.Info("recreate completed", "repo", repoSlug, "old_issue", issue, "new_issue", created.Number, "source", source)
 	return nil
 }
 
@@ -2418,7 +2419,7 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 				continue
 			}
 			a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), "gh issue view", err)
-			a.state.AppendDaemonLog("resume issue details failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
+			a.logger.Error("resume issue details failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 			continue
 		}
 		if ghcli.HasAnyLabel(details.Labels, "resume", "vigilante:resume") {
@@ -2427,7 +2428,7 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 				if ghcli.HasAnyLabel(details.Labels, label) {
 					if err := ghcli.RemoveIssueLabel(ctx, a.env.Runner, session.Repo, session.IssueNumber, label); err != nil {
 						a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), "gh issue edit --remove-label", err)
-						a.state.AppendDaemonLog("resume label removal failed repo=%s issue=%d label=%s err=%v", session.Repo, session.IssueNumber, label, err)
+						a.logger.Error("resume label removal failed", "repo", session.Repo, "issue", session.IssueNumber, "label", label, "err", err)
 						labelRemovalFailed = true
 						break
 					}
@@ -2439,16 +2440,16 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 			}
 			if err := a.resumeBlockedSession(ctx, session, "label"); err != nil {
 				a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), fallbackText(session.BlockedReason.Operation, "resume"), err)
-				a.state.AppendDaemonLog("resume by label failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
+				a.logger.Error("resume by label failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 			}
 			a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil, nil)
 			continue
 		}
 
-		comments, err := ghcli.ListIssueCommentsForPolling(ctx, a.env.Runner, session.Repo, session.IssueNumber, "resume", a.state.AppendDaemonLog)
+		comments, err := ghcli.ListIssueCommentsForPolling(ctx, a.env.Runner, session.Repo, session.IssueNumber, "resume", a.logger)
 		if err != nil {
 			a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), "gh issue comments", err)
-			a.state.AppendDaemonLog("resume comment lookup failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
+			a.logger.Error("resume comment lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 			continue
 		}
 		comment := ghcli.FindResumeComment(comments, session.LastResumeCommentID)
@@ -2457,7 +2458,7 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 		}
 		if err := ghcli.AddIssueCommentReaction(ctx, a.env.Runner, session.Repo, comment.ID, "eyes"); err != nil {
 			a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), "gh api issue comment reactions", err)
-			a.state.AppendDaemonLog("resume reaction failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
+			a.logger.Error("resume reaction failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
 			continue
 		}
 		session.LastResumeCommentID = comment.ID
@@ -2465,7 +2466,7 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 		session.LastResumeSource = "comment"
 		if err := a.resumeBlockedSession(ctx, session, "comment"); err != nil {
 			a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), fallbackText(session.BlockedReason.Operation, "resume"), err)
-			a.state.AppendDaemonLog("resume by comment failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
+			a.logger.Error("resume by comment failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
 		}
 		a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil, nil)
 	}
@@ -2705,7 +2706,7 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 	if source == "cli" {
 		a.commentOnIssueBestEffort(ctx, repoSlug, issue, localRedispatchStartedComment(session), "local redispatch result")
 	}
-	a.state.AppendDaemonLog("redispatch started repo=%s issue=%d branch=%s worktree=%s", repoSlug, issue, wt.Branch, wt.Path)
+	a.logger.Info("redispatch started", "repo", repoSlug, "issue", issue, "branch", wt.Branch, "worktree", wt.Path)
 	fmt.Fprintf(a.stdout, "redispatched %s issue #%d in %s\n", repoSlug, issue, wt.Path)
 
 	a.launchIssueSession(ctx, target, *selectedIssue, session)
@@ -2818,7 +2819,7 @@ func (a *App) RecreateSession(ctx context.Context, repoSlug string, issue int, s
 		return err
 	}
 
-	a.state.AppendDaemonLog("recreate completed repo=%s old_issue=%d new_issue=%d source=%s", repoSlug, issue, created.Number, source)
+	a.logger.Info("recreate completed", "repo", repoSlug, "old_issue", issue, "new_issue", created.Number, "source", source)
 
 	if len(cleanupErrors) > 0 {
 		fmt.Fprintf(a.stdout, "recreated %s issue #%d as #%d (%s) with partial cleanup errors: %s\n", repoSlug, issue, created.Number, created.URL, strings.Join(cleanupErrors, "; "))
@@ -2914,13 +2915,13 @@ func (a *App) cleanupRunningSession(ctx context.Context, session *state.Session,
 		session.CleanupError = err.Error()
 		session.LastError = fmt.Sprintf("cleanup requested via %s; artifact cleanup failed: %s", source, err)
 		a.emitSessionTransition(previousStatus, *session, "cleanup_"+source)
-		a.state.AppendDaemonLog("running session cleanup failed repo=%s issue=%d source=%s branch=%s worktree=%s err=%v", session.Repo, session.IssueNumber, source, session.Branch, session.WorktreePath, err)
+		a.logger.Error("running session cleanup failed", "repo", session.Repo, "issue", session.IssueNumber, "source", source, "branch", session.Branch, "worktree", session.WorktreePath, "err", err)
 		return nil
 	}
 	session.CleanupCompletedAt = now
 	session.CleanupError = ""
 	a.emitSessionTransition(previousStatus, *session, "cleanup_"+source)
-	a.state.AppendDaemonLog("running session cleanup complete repo=%s issue=%d source=%s branch=%s worktree=%s", session.Repo, session.IssueNumber, source, session.Branch, session.WorktreePath)
+	a.logger.Info("running session cleanup complete", "repo", session.Repo, "issue", session.IssueNumber, "source", source, "branch", session.Branch, "worktree", session.WorktreePath)
 	return nil
 }
 
@@ -2937,7 +2938,7 @@ func (a *App) resetSessionForRedispatch(ctx context.Context, session *state.Sess
 		session.CleanupError = err.Error()
 		session.LastError = fmt.Sprintf("redispatch requested via %s; artifact cleanup failed: %s", source, err)
 		session.UpdatedAt = now
-		a.state.AppendDaemonLog("redispatch cleanup failed repo=%s issue=%d source=%s branch=%s worktree=%s err=%v", session.Repo, session.IssueNumber, source, session.Branch, session.WorktreePath, err)
+		a.logger.Error("redispatch cleanup failed", "repo", session.Repo, "issue", session.IssueNumber, "source", source, "branch", session.Branch, "worktree", session.WorktreePath, "err", err)
 		return err
 	}
 
@@ -2980,7 +2981,7 @@ func (a *App) resetSessionForRedispatch(ctx context.Context, session *state.Sess
 	if source == "cli" {
 		resetStaleAutoRestartState(session)
 	}
-	a.state.AppendDaemonLog("redispatch cleanup complete repo=%s issue=%d source=%s branch=%s worktree=%s", session.Repo, session.IssueNumber, source, session.Branch, session.WorktreePath)
+	a.logger.Info("redispatch cleanup complete", "repo", session.Repo, "issue", session.IssueNumber, "source", source, "branch", session.Branch, "worktree", session.WorktreePath)
 	return nil
 }
 
@@ -3150,10 +3151,10 @@ func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Se
 		}
 		preflightOutput, err := a.env.Runner.Run(ctx, preflightInvocation.Dir, preflightInvocation.Name, preflightInvocation.Args...)
 		if err != nil {
-			a.state.AppendDaemonLog("resume issue preflight failed repo=%s issue=%d err=%v output=%s", session.Repo, session.IssueNumber, err, summarizeText(preflightOutput))
+			a.logger.Error("resume issue preflight failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err, "output", summarizeText(preflightOutput))
 			return err
 		}
-		a.state.AppendDaemonLog("resume issue preflight succeeded repo=%s issue=%d output=%s", session.Repo, session.IssueNumber, summarizeText(preflightOutput))
+		a.logger.Info("resume issue preflight succeeded", "repo", session.Repo, "issue", session.IssueNumber, "output", summarizeText(preflightOutput))
 	}
 	invocation, err := selectedProvider.BuildIssueInvocation(provider.IssueTask{
 		Target:  target,
@@ -3168,12 +3169,12 @@ func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Se
 	session.LastHeartbeatAt = session.EndedAt
 	session.UpdatedAt = session.EndedAt
 	if err != nil {
-		a.state.AppendDaemonLog("resume issue execution failed repo=%s issue=%d err=%v output=%s", session.Repo, session.IssueNumber, err, summarizeText(output))
+		a.logger.Error("resume issue execution failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err, "output", summarizeText(output))
 		return err
 	}
 	session.Status = state.SessionStatusSuccess
 	session.LastError = ""
-	a.state.AppendDaemonLog("resume issue execution succeeded repo=%s issue=%d output=%s", session.Repo, session.IssueNumber, summarizeText(output))
+	a.logger.Info("resume issue execution succeeded", "repo", session.Repo, "issue", session.IssueNumber, "output", summarizeText(output))
 	return nil
 }
 
@@ -3222,34 +3223,34 @@ func (a *App) cleanupInactiveBlockedSessions(ctx context.Context, sessions []sta
 		if err != nil {
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
-			a.state.AppendDaemonLog("blocked session inactivity evaluation failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
+			a.logger.Error("blocked session inactivity evaluation failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
 			continue
 		}
 		if !inactive {
 			if shouldAutoRecoverBlockedSession(*session) {
-				a.state.AppendDaemonLog("blocked session auto recovery skipped repo=%s issue=%d branch=%s reason=recent_activity timeout=%s", session.Repo, session.IssueNumber, session.Branch, evaluationTimeout)
+				a.logger.Info("blocked session auto recovery skipped", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "timeout", evaluationTimeout)
 			}
 			continue
 		}
 
 		if shouldAutoRecoverBlockedSession(*session) {
-			a.state.AppendDaemonLog("blocked session auto recovery starting repo=%s issue=%d branch=%s stage=%s timeout=%s", session.Repo, session.IssueNumber, session.Branch, session.BlockedStage, evaluationTimeout)
+			a.logger.Info("blocked session auto recovery starting", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "stage", session.BlockedStage, "timeout", evaluationTimeout)
 			if err := a.autoRecoverBlockedMaintenanceSession(ctx, session, evaluationTimeout); err != nil {
 				session.LastError = err.Error()
 				session.UpdatedAt = a.clock().Format(time.RFC3339)
-				a.state.AppendDaemonLog("blocked session auto recovery failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
+				a.logger.Error("blocked session auto recovery failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
 			}
 			a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil, nil)
 			continue
 		}
 
-		a.state.AppendDaemonLog("blocked session inactivity timeout reached repo=%s issue=%d branch=%s timeout=%s", session.Repo, session.IssueNumber, session.Branch, timeout)
+		a.logger.Info("blocked session inactivity timeout reached", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "timeout", timeout)
 		cleanupErr := a.cleanupBlockedSessionForInactivity(ctx, session, timeout)
 		body := inactiveBlockedCleanupComment(*session, timeout, cleanupErr)
 		if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "cleanup", "blocked_inactivity_timeout"); err != nil {
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
-			a.state.AppendDaemonLog("blocked session inactivity comment failed repo=%s issue=%d branch=%s err=%v", session.Repo, session.IssueNumber, session.Branch, err)
+			a.logger.Error("blocked session inactivity comment failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
 		}
 		a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil, nil)
 	}
@@ -3273,7 +3274,7 @@ func maintenanceAutoRecoveryTimeout(config state.ServiceConfig) time.Duration {
 }
 
 func (a *App) blockedSessionExceededInactivityTimeout(ctx context.Context, session state.Session, timeout time.Duration) (bool, error) {
-	comments, err := ghcli.ListIssueCommentsForPolling(ctx, a.env.Runner, session.Repo, session.IssueNumber, "blocked-inactivity", a.state.AppendDaemonLog)
+	comments, err := ghcli.ListIssueCommentsForPolling(ctx, a.env.Runner, session.Repo, session.IssueNumber, "blocked-inactivity", a.logger)
 	if err != nil {
 		return false, err
 	}
@@ -3304,7 +3305,7 @@ func (a *App) cleanupBlockedSessionForInactivity(ctx context.Context, session *s
 		session.CleanupError = err.Error()
 		session.LastError = fmt.Sprintf("blocked session exceeded inactivity timeout (%s) but cleanup failed: %s", timeout, err)
 		session.UpdatedAt = now
-		a.state.AppendDaemonLog("blocked session inactivity cleanup failed repo=%s issue=%d branch=%s timeout=%s err=%v", session.Repo, session.IssueNumber, session.Branch, timeout, err)
+		a.logger.Error("blocked session inactivity cleanup failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "timeout", timeout, "err", err)
 		return err
 	}
 
@@ -3323,7 +3324,7 @@ func (a *App) cleanupBlockedSessionForInactivity(ctx context.Context, session *s
 	session.UpdatedAt = now
 	session.LastError = fmt.Sprintf("blocked session cleaned up after %s of inactivity", timeout)
 	a.emitSessionTransition(previousStatus, *session, "blocked_inactivity_timeout")
-	a.state.AppendDaemonLog("blocked session inactivity cleanup complete repo=%s issue=%d branch=%s timeout=%s", session.Repo, session.IssueNumber, session.Branch, timeout)
+	a.logger.Info("blocked session inactivity cleanup complete", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "timeout", timeout)
 	return nil
 }
 
@@ -3399,7 +3400,7 @@ func (a *App) autoRecoverBlockedMaintenanceSession(ctx context.Context, session 
 			Tagline: "The retry stopped at the gate.",
 		})
 		if commentErr := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, failureBody, "blocked", autoRecoverySource); commentErr != nil {
-			a.state.AppendDaemonLog("auto recovery failure comment failed repo=%s issue=%d pr=%d err=%v", session.Repo, session.IssueNumber, pr.Number, commentErr)
+			a.logger.Error("auto recovery failure comment failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "err", commentErr)
 		}
 		return err
 	}
@@ -3428,7 +3429,7 @@ func (a *App) autoRecoverBlockedMaintenanceSession(ctx context.Context, session 
 			Tagline: "Clean slate, real blocker.",
 		})
 		if commentErr := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, failureBody, "blocked", autoRecoverySource); commentErr != nil {
-			a.state.AppendDaemonLog("auto recovery blocked comment failed repo=%s issue=%d pr=%d err=%v", session.Repo, session.IssueNumber, pr.Number, commentErr)
+			a.logger.Error("auto recovery blocked comment failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "err", commentErr)
 		}
 		return resumeErr
 	}
@@ -3449,7 +3450,7 @@ func (a *App) autoRecoverBlockedMaintenanceSession(ctx context.Context, session 
 	if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "resume", autoRecoverySource); err != nil {
 		return err
 	}
-	a.state.AppendDaemonLog("blocked session auto recovery complete repo=%s issue=%d branch=%s pr=%d stage=%s", session.Repo, session.IssueNumber, session.Branch, pr.Number, previousStage)
+	a.logger.Info("blocked session auto recovery complete", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "pr", pr.Number, "stage", previousStage)
 	return nil
 }
 
@@ -3934,16 +3935,16 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 				needsSave = true
 				continue
 			}
-			a.state.AppendDaemonLog("iteration issue details failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
+			a.logger.Error("iteration issue details failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 			needsSave = true
 			continue
 		}
 
-		comments, err := ghcli.ListIssueCommentsForPolling(ctx, a.env.Runner, session.Repo, session.IssueNumber, "iteration", a.state.AppendDaemonLog)
+		comments, err := ghcli.ListIssueCommentsForPolling(ctx, a.env.Runner, session.Repo, session.IssueNumber, "iteration", a.logger)
 		if err != nil {
-			a.state.AppendDaemonLog("iteration comment lookup failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
+			a.logger.Error("iteration comment lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 			needsSave = true
@@ -3973,7 +3974,7 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 				Tagline: "Hands on the wheel, one driver at a time.",
 			})
 			if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "iteration_ignored", "github_comment"); err != nil {
-				a.state.AppendDaemonLog("iteration rejection comment failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
+				a.logger.Error("iteration rejection comment failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
 				session.LastError = err.Error()
 			}
 			needsSave = true
@@ -3981,7 +3982,7 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 		}
 
 		if err := ghcli.AddIssueCommentReaction(ctx, a.env.Runner, session.Repo, comment.ID, "eyes"); err != nil {
-			a.state.AppendDaemonLog("iteration reaction failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
+			a.logger.Error("iteration reaction failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
 		}
 
 		iterationComments := ghcli.AssigneeIterationComments(comments, assignees)
@@ -4005,7 +4006,7 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 			needsSave = true
 			a.emitSessionTransition(previous.Status, updated, "iteration_dispatch")
 			a.syncSessionIssueLabelsBestEffort(ctx, &updated, nil, nil, issueCache)
-			a.state.AppendDaemonLog("iteration dispatch failed repo=%s issue=%d comment=%d err=%v", session.Repo, session.IssueNumber, comment.ID, err)
+			a.logger.Error("iteration dispatch failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
 			continue
 		}
 
@@ -4098,14 +4099,14 @@ func (a *App) dispatchIssueSession(ctx context.Context, target state.WatchTarget
 		if triggeringComment != nil && strings.Contains(strings.ToLower(err.Error()), "worktree already exists") {
 			reused, reuseErr := reuseExistingIterationSession(target, issue, selectedProvider, previous, issueBody, iterationContext, triggeringComment, a.clock())
 			if reuseErr == nil {
-				a.state.AppendDaemonLog("iteration dispatch reusing existing worktree repo=%s issue=%d path=%s branch=%s", target.Repo, issue.Number, reused.WorktreePath, reused.Branch)
+				a.logger.Info("iteration dispatch reusing existing worktree", "repo", target.Repo, "issue", issue.Number, "path", reused.WorktreePath, "branch", reused.Branch)
 				return reused, nil
 			}
 			err = reuseErr
 		}
 		return blockedIssueSessionForDispatchFailure(target, issue, selectedProvider, err, a.clock()), err
 	}
-	a.state.AppendDaemonLog("scan repo worktree ready repo=%s issue=%d path=%s branch=%s reused_remote=%t", target.Repo, issue.Number, wt.Path, wt.Branch, wt.ReusedRemoteBranch != "")
+	a.logger.Info("scan repo worktree ready", "repo", target.Repo, "issue", issue.Number, "path", wt.Path, "branch", wt.Branch, "reused_remote", wt.ReusedRemoteBranch != "")
 
 	diffSummary := ""
 	if strings.TrimSpace(wt.ReusedRemoteBranch) != "" {
@@ -4119,7 +4120,7 @@ func (a *App) dispatchIssueSession(ctx context.Context, target state.WatchTarget
 			blocked.ReusedRemoteBranch = wt.ReusedRemoteBranch
 			return blocked, err
 		}
-		a.state.AppendDaemonLog("scan repo reused remote issue branch repo=%s issue=%d branch=%s base=%s diff=%s", target.Repo, issue.Number, wt.Branch, target.Branch, summarizeText(diffSummary))
+		a.logger.Info("scan repo reused remote issue branch", "repo", target.Repo, "issue", issue.Number, "branch", wt.Branch, "base", target.Branch, "diff", summarizeText(diffSummary))
 	}
 
 	now := a.clock().Format(time.RFC3339)
@@ -4216,7 +4217,7 @@ func reuseExistingIterationSession(target state.WatchTarget, issue ghcli.Issue, 
 
 func (a *App) syncQueuedIssueLabelsBestEffort(ctx context.Context, repo string, issueNumber int) {
 	if err := a.syncIssueManagedLabels(ctx, repo, issueNumber, []string{labelQueued}, nil, nil); err != nil {
-		a.state.AppendDaemonLog("issue label sync failed repo=%s issue=%d err=%v", repo, issueNumber, err)
+		a.logger.Error("issue label sync failed", "repo", repo, "issue", issueNumber, "err", err)
 	}
 }
 
@@ -4225,7 +4226,7 @@ func (a *App) syncSessionIssueLabelsBestEffort(ctx context.Context, session *sta
 		return
 	}
 	if err := a.syncSessionIssueLabels(ctx, session, pr, issueDetails, issueCache); err != nil {
-		a.state.AppendDaemonLog("session label sync failed repo=%s issue=%d status=%s err=%v", session.Repo, session.IssueNumber, session.Status, err)
+		a.logger.Error("session label sync failed", "repo", session.Repo, "issue", session.IssueNumber, "status", session.Status, "err", err)
 	}
 }
 
@@ -4620,7 +4621,7 @@ func localResumeNoopComment() string {
 
 func (a *App) commentOnIssueBestEffort(ctx context.Context, repo string, issue int, body string, purpose string) {
 	if err := a.commentOnIssue(ctx, repo, issue, body, "progress", purpose); err != nil {
-		a.state.AppendDaemonLog("%s comment failed repo=%s issue=%d err=%v", purpose, repo, issue, err)
+		a.logger.Error(fmt.Sprintf("%s comment failed", purpose), "repo", repo, "issue", issue, "err", err)
 	}
 }
 
@@ -4652,7 +4653,7 @@ func (a *App) commentDispatchFailure(ctx context.Context, previous state.Session
 	if fingerprint == previous.LastDispatchFailureFingerprint {
 		session.LastDispatchFailureFingerprint = previous.LastDispatchFailureFingerprint
 		session.LastDispatchFailureCommentedAt = previous.LastDispatchFailureCommentedAt
-		a.state.AppendDaemonLog("dispatch/startup failure comment suppressed repo=%s issue=%d fingerprint=%s", session.Repo, session.IssueNumber, fingerprint)
+		a.logger.Info("dispatch/startup failure comment suppressed", "repo", session.Repo, "issue", session.IssueNumber, "fingerprint", fingerprint)
 		return
 	}
 
@@ -4664,7 +4665,7 @@ func (a *App) commentDispatchFailure(ctx context.Context, previous state.Session
 		NextStep:     dispatchFailureNextStep(*session, stage),
 	})
 	if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "dispatch_failure", stage); err != nil {
-		a.state.AppendDaemonLog("dispatch/startup failure comment failed repo=%s issue=%d stage=%s err=%v", session.Repo, session.IssueNumber, stage, err)
+		a.logger.Error("dispatch/startup failure comment failed", "repo", session.Repo, "issue", session.IssueNumber, "stage", stage, "err", err)
 		return
 	}
 
@@ -4689,13 +4690,13 @@ type resumeFailureDiagnostic struct {
 func (a *App) commentResumeFailure(ctx context.Context, session *state.Session, previousStage string) error {
 	fingerprint := resumeFailureFingerprint(*session)
 	if fingerprint == session.LastResumeFailureFingerprint {
-		a.state.AppendDaemonLog("resume failure comment suppressed repo=%s issue=%d fingerprint=%s", session.Repo, session.IssueNumber, fingerprint)
+		a.logger.Info("resume failure comment suppressed", "repo", session.Repo, "issue", session.IssueNumber, "fingerprint", fingerprint)
 		return nil
 	}
 
 	diagnostic, err := a.generateResumeFailureDiagnostic(ctx, *session, previousStage)
 	if err != nil {
-		a.state.AppendDaemonLog("resume failure diagnostic summary failed repo=%s issue=%d err=%v", session.Repo, session.IssueNumber, err)
+		a.logger.Error("resume failure diagnostic summary failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 		diagnostic = deterministicResumeFailureDiagnostic(*session, previousStage)
 	}
 

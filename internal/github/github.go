@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -296,25 +297,25 @@ func ListIssueComments(ctx context.Context, runner environment.Runner, repo stri
 	return comments, nil
 }
 
-func ListIssueCommentsForPolling(ctx context.Context, runner environment.Runner, repo string, number int, purpose string, logf func(format string, args ...any)) ([]IssueComment, error) {
+func ListIssueCommentsForPolling(ctx context.Context, runner environment.Runner, repo string, number int, purpose string, logger *slog.Logger) ([]IssueComment, error) {
 	output, err := runIssueCommentsCommand(ctx, runner, repo, number)
 	if err != nil {
-		if logf != nil {
-			logf("issue comment poll failed repo=%s issue=%d purpose=%s err=%v output=%s", repo, number, purpose, err, summarizeForLog(output))
+		if logger != nil {
+			logger.Error("issue comment poll failed", "repo", repo, "issue", number, "purpose", purpose, "err", err, "output", summarizeForLog(output))
 		}
 		return nil, err
 	}
 
 	comments, err := parseIssueComments(output)
 	if err != nil {
-		if logf != nil {
-			logf("issue comment poll parse failed repo=%s issue=%d purpose=%s err=%v output=%s", repo, number, purpose, err, summarizeForLog(output))
+		if logger != nil {
+			logger.Error("issue comment poll parse failed", "repo", repo, "issue", number, "purpose", purpose, "err", err, "output", summarizeForLog(output))
 		}
 		return nil, err
 	}
 
-	if logf != nil {
-		logf("issue comment poll repo=%s issue=%d purpose=%s comments=%d", repo, number, purpose, len(comments))
+	if logger != nil {
+		logger.Info("issue comment poll", "repo", repo, "issue", number, "purpose", purpose, "comments", len(comments))
 	}
 	return comments, nil
 }

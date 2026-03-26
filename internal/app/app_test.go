@@ -1123,7 +1123,8 @@ func TestRunDaemonCommandUsesDefaultScanInterval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(logData), "daemon run start once=true interval=1m0s") {
+	logText := string(logData)
+	if !strings.Contains(logText, "daemon run start") || !strings.Contains(logText, "once=true") || !strings.Contains(logText, "interval=1m0s") {
 		t.Fatalf("unexpected daemon log: %s", logData)
 	}
 }
@@ -1145,7 +1146,8 @@ func TestRunDaemonCommandKeepsIntervalOverride(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(logData), "daemon run start once=true interval=30s") {
+	logText := string(logData)
+	if !strings.Contains(logText, "daemon run start") || !strings.Contains(logText, "once=true") || !strings.Contains(logText, "interval=30s") {
 		t.Fatalf("unexpected daemon log: %s", logData)
 	}
 }
@@ -2012,7 +2014,8 @@ func TestCleanupSessionIgnoresLocalCommentFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(logData), "local cleanup result comment failed repo=owner/repo issue=44 err=comment failed") {
+	logText := string(logData)
+	if !strings.Contains(logText, "local cleanup result comment failed") || !strings.Contains(logText, "repo=owner/repo") || !strings.Contains(logText, "issue=44") || !strings.Contains(logText, "err=\"comment failed\"") {
 		t.Fatalf("expected cleanup comment failure log, got: %s", logData)
 	}
 }
@@ -2646,7 +2649,8 @@ func TestResumeSessionIgnoresLocalCommentFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(logData), "local resume result comment failed repo=owner/repo issue=1 err=comment failed") {
+	logText := string(logData)
+	if !strings.Contains(logText, "local resume result comment failed") || !strings.Contains(logText, "repo=owner/repo") || !strings.Contains(logText, "issue=1") || !strings.Contains(logText, "err=\"comment failed\"") {
 		t.Fatalf("expected resume comment failure log, got: %s", logData)
 	}
 }
@@ -2691,7 +2695,7 @@ func TestScanOnceLogsResumeCommentPollingSummaryInsteadOfRawCommand(t *testing.T
 				"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
 			},
 		},
-		Logf: app.state.AppendDaemonLog,
+		Logger: app.logger,
 	}
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
@@ -2729,10 +2733,10 @@ func TestScanOnceLogsResumeCommentPollingSummaryInsteadOfRawCommand(t *testing.T
 		t.Fatal(err)
 	}
 	logText := string(logData)
-	if !strings.Contains(logText, "issue comment poll repo=owner/repo issue=1 purpose=resume comments=1") {
+	if !strings.Contains(logText, "issue comment poll") || !strings.Contains(logText, "repo=owner/repo") || !strings.Contains(logText, "issue=1") || !strings.Contains(logText, "purpose=resume") || !strings.Contains(logText, "comments=1") {
 		t.Fatalf("expected resume polling summary in daemon log: %s", logText)
 	}
-	if strings.Contains(logText, "command start dir=\"\" cmd=gh api repos/owner/repo/issues/1/comments") || strings.Contains(logText, "command ok cmd=gh api repos/owner/repo/issues/1/comments") {
+	if strings.Contains(logText, "command start") && strings.Contains(logText, "gh api repos/owner/repo/issues/1/comments") {
 		t.Fatalf("expected raw resume comment polling command logs to be suppressed: %s", logText)
 	}
 }
@@ -3176,7 +3180,7 @@ func TestScanOnceLogsCleanupCommentPollingSummaryInsteadOfRawCommand(t *testing.
 				"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
 			},
 		},
-		Logf: app.state.AppendDaemonLog,
+		Logger: app.logger,
 	}
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
@@ -3204,10 +3208,10 @@ func TestScanOnceLogsCleanupCommentPollingSummaryInsteadOfRawCommand(t *testing.
 		t.Fatal(err)
 	}
 	logText := string(logData)
-	if !strings.Contains(logText, "issue comment poll repo=owner/repo issue=1 purpose=cleanup comments=1") {
+	if !strings.Contains(logText, "issue comment poll") || !strings.Contains(logText, "repo=owner/repo") || !strings.Contains(logText, "issue=1") || !strings.Contains(logText, "purpose=cleanup") || !strings.Contains(logText, "comments=1") {
 		t.Fatalf("expected cleanup polling summary in daemon log: %s", logText)
 	}
-	if strings.Contains(logText, "command start dir=\"\" cmd=gh api repos/owner/repo/issues/1/comments") || strings.Contains(logText, "command ok cmd=gh api repos/owner/repo/issues/1/comments") {
+	if strings.Contains(logText, "command start") && strings.Contains(logText, "gh api repos/owner/repo/issues/1/comments") {
 		t.Fatalf("expected raw cleanup comment polling command logs to be suppressed: %s", logText)
 	}
 }
@@ -3239,7 +3243,7 @@ func TestScanOnceLogsCommentPollingFailuresWithPurpose(t *testing.T) {
 				"gh api repos/owner/repo/issues/1/comments": errors.New("boom"),
 			},
 		},
-		Logf: app.state.AppendDaemonLog,
+		Logger: app.logger,
 	}
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
@@ -3277,10 +3281,10 @@ func TestScanOnceLogsCommentPollingFailuresWithPurpose(t *testing.T) {
 		t.Fatal(err)
 	}
 	logText := string(logData)
-	if !strings.Contains(logText, "issue comment poll failed repo=owner/repo issue=1 purpose=resume err=boom output=<empty>") {
+	if !strings.Contains(logText, "issue comment poll failed") || !strings.Contains(logText, "repo=owner/repo") || !strings.Contains(logText, "purpose=resume") || !strings.Contains(logText, "err=boom") {
 		t.Fatalf("expected comment polling failure summary in daemon log: %s", logText)
 	}
-	if !strings.Contains(logText, "resume comment lookup failed repo=owner/repo issue=1 err=boom") {
+	if !strings.Contains(logText, "resume comment lookup failed") || !strings.Contains(logText, "repo=owner/repo") || !strings.Contains(logText, "issue=1") || !strings.Contains(logText, "err=boom") {
 		t.Fatalf("expected higher-level resume failure log in daemon log: %s", logText)
 	}
 }

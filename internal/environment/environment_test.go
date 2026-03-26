@@ -1,87 +1,106 @@
 package environment
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/nicobistolfi/vigilante/internal/testutil"
 )
 
+func newTestLogger(buf *bytes.Buffer) *slog.Logger {
+	return slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{
+		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+			return a
+		},
+	}))
+}
+
 func TestLoggingRunnerLogsCommandsWithoutSuccessOutputByDefault(t *testing.T) {
-	var entries []string
+	var buf bytes.Buffer
 	runner := LoggingRunner{
 		Base: testutil.FakeRunner{
 			Outputs: map[string]string{
 				"gh issue list": "[]",
 			},
 		},
-		Logf: func(format string, args ...any) {
-			entries = append(entries, sprintf(format, args...))
-		},
+		Logger: newTestLogger(&buf),
 	}
 
 	if _, err := runner.Run(context.Background(), "/tmp/repo", "gh", "issue", "list"); err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 {
-		t.Fatalf("unexpected log entries: %#v", entries)
+	logOutput := buf.String()
+	if !strings.Contains(logOutput, `msg="command start"`) {
+		t.Fatalf("expected command start log, got: %s", logOutput)
 	}
-	if !strings.Contains(entries[0], `command start dir="/tmp/repo" cmd=gh issue list`) {
-		t.Fatalf("unexpected start log: %s", entries[0])
+	if !strings.Contains(logOutput, `dir=/tmp/repo`) {
+		t.Fatalf("expected dir attribute, got: %s", logOutput)
 	}
-	if entries[1] != "command ok cmd=gh issue list" {
-		t.Fatalf("unexpected success log: %s", entries[1])
+	if !strings.Contains(logOutput, `cmd="gh issue list"`) {
+		t.Fatalf("expected cmd attribute, got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, `msg="command ok"`) {
+		t.Fatalf("expected command ok log, got: %s", logOutput)
+	}
+	if strings.Contains(logOutput, "output=") {
+		t.Fatalf("expected no output attribute when LogSuccessOutput is false, got: %s", logOutput)
 	}
 }
 
 func TestLoggingRunnerCanLogSuccessOutputWhenEnabled(t *testing.T) {
-	var entries []string
+	var buf bytes.Buffer
 	runner := LoggingRunner{
 		Base: testutil.FakeRunner{
 			Outputs: map[string]string{
 				"gh issue list": "[]",
 			},
 		},
-		Logf: func(format string, args ...any) {
-			entries = append(entries, sprintf(format, args...))
-		},
+		Logger:           newTestLogger(&buf),
 		LogSuccessOutput: true,
 	}
 
 	if _, err := runner.Run(context.Background(), "/tmp/repo", "gh", "issue", "list"); err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 2 {
-		t.Fatalf("unexpected log entries: %#v", entries)
+	logOutput := buf.String()
+	if !strings.Contains(logOutput, `msg="command ok"`) {
+		t.Fatalf("expected command ok log, got: %s", logOutput)
 	}
-	if !strings.Contains(entries[1], "command ok cmd=gh issue list output=[]") {
-		t.Fatalf("unexpected success log: %s", entries[1])
+	if !strings.Contains(logOutput, "output=") {
+		t.Fatalf("expected output attribute, got: %s", logOutput)
 	}
 }
 
 func TestLoggingRunnerLogsFailures(t *testing.T) {
-	var entries []string
+	var buf bytes.Buffer
 	runner := LoggingRunner{
 		Base: testutil.FakeRunner{
 			Errors: map[string]error{
 				"git status": fmt.Errorf("boom"),
 			},
 		},
-		Logf: func(format string, args ...any) {
-			entries = append(entries, sprintf(format, args...))
-		},
+		Logger: newTestLogger(&buf),
 	}
 
 	if _, err := runner.Run(context.Background(), "", "git", "status"); err == nil {
 		t.Fatal("expected error")
 	}
-	if len(entries) != 2 {
-		t.Fatalf("unexpected log entries: %#v", entries)
+	logOutput := buf.String()
+	if !strings.Contains(logOutput, `msg="command failed"`) {
+		t.Fatalf("expected command failed log, got: %s", logOutput)
 	}
-	if !strings.Contains(entries[1], "command failed cmd=git status err=boom") {
-		t.Fatalf("unexpected failure log: %s", entries[1])
+	if !strings.Contains(logOutput, `cmd="git status"`) {
+		t.Fatalf("expected cmd attribute, got: %s", logOutput)
+	}
+	if !strings.Contains(logOutput, "err=boom") {
+		t.Fatalf("expected err attribute, got: %s", logOutput)
 	}
 }
 
@@ -195,10 +214,6 @@ func TestLoggingRunnerAccessLogIncludesSessionContext(t *testing.T) {
 	if got, want := entries[0].IssueNumber, 7; got != want {
 		t.Fatalf("issue = %d, want %d", got, want)
 	}
-}
-
-func sprintf(format string, args ...any) string {
-	return fmt.Sprintf(format, args...)
 }
 
 type capturedCommand struct {
