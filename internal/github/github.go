@@ -266,6 +266,10 @@ func normalizeRateLimitResource(resource rateLimitAPIResource) RateLimitResource
 func GetIssueDetails(ctx context.Context, runner environment.Runner, repo string, number int) (*IssueDetails, error) {
 	output, err := runner.Run(ctx, "", "gh", "api", issueAPIPath(repo, number))
 	if err != nil {
+		output = strings.TrimSpace(output)
+		if output != "" {
+			return nil, fmt.Errorf("%w: %s", err, output)
+		}
 		return nil, err
 	}
 

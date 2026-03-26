@@ -2,6 +2,8 @@ package ghcli
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -216,6 +218,28 @@ func TestGetRateLimitSnapshot(t *testing.T) {
 	}
 	if snapshot.Core.ResetAt.IsZero() || snapshot.Rate.ResetAt.IsZero() {
 		t.Fatalf("expected reset timestamps: %#v", snapshot)
+	}
+}
+
+func TestGetIssueDetailsPreservesUnavailableOutputOnCommandFailure(t *testing.T) {
+	runner := testutil.FakeRunner{
+		ErrorOutputs: map[string]string{
+			"gh api repos/owner/repo/issues/7": "gh: HTTP 404: Not Found (https://api.github.com/repos/owner/repo/issues/7)\n",
+		},
+		Errors: map[string]error{
+			"gh api repos/owner/repo/issues/7": errors.New("gh [api repos/owner/repo/issues/7]: exit status 1"),
+		},
+	}
+
+	_, err := GetIssueDetails(context.Background(), runner, "owner/repo", 7)
+	if err == nil {
+		t.Fatal("expected issue details lookup to fail")
+	}
+	if !IsIssueUnavailableError(err) {
+		t.Fatalf("expected unavailable detector to match wrapped command output, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "HTTP 404") {
+		t.Fatalf("expected error to retain command output, got %v", err)
 	}
 }
 
