@@ -226,11 +226,6 @@ func (a *App) getBackend() backend.IssueTracker {
 	return a.issueTrackerFor(backend.DefaultBackendID)
 }
 
-// getRepoHost returns the default repo host for backward compatibility.
-func (a *App) getRepoHost() backend.RepoHost {
-	return a.repoHostFor(backend.DefaultRepoHostID)
-}
-
 // issueTrackerForTarget returns the issue tracker configured for a watch target.
 func (a *App) issueTrackerForTarget(target state.WatchTarget) backend.IssueTracker {
 	return a.issueTrackerFor(target.EffectiveBackendID())
@@ -251,15 +246,6 @@ func (a *App) repoHostForSession(session state.Session) backend.RepoHost {
 	return a.repoHostFor(session.EffectiveRepoBackendID())
 }
 
-func (a *App) pullRequestManager() (backend.RepoHost, bool) {
-	rh := a.getRepoHost()
-	return rh, rh != nil
-}
-
-func (a *App) labelManager() (backend.LabelManager, bool) {
-	return backend.AsLabelManager(a.getBackend())
-}
-
 func (a *App) rateLimitChecker() (backend.RateLimitChecker, bool) {
 	return backend.AsRateLimitChecker(a.getBackend())
 }
@@ -273,14 +259,14 @@ func backendToGHRateLimitSnapshot(s backend.RateLimitSnapshot) ghcli.RateLimitSn
 	}
 }
 
-func (a *App) loadIssueDetailsForScan(ctx context.Context, cache scanIssueDetailsCache, repo string, issueNumber int) (*backend.WorkItem, error) {
+func (a *App) loadIssueDetailsForScan(ctx context.Context, cache scanIssueDetailsCache, backendID string, repo string, issueNumber int) (*backend.WorkItem, error) {
 	ctx = a.withIssueAccessLogContext(ctx, "", repo, issueNumber, "", "")
 	if cache != nil {
 		if details, ok := cache[sessionKey(repo, issueNumber)]; ok {
 			return details, nil
 		}
 	}
-	details, err := a.getBackend().GetWorkItem(ctx, repo, issueNumber)
+	details, err := a.issueTrackerFor(backendID).GetWorkItem(ctx, repo, issueNumber)
 	if err != nil {
 		return nil, err
 	}
@@ -309,7 +295,7 @@ func (a *App) loadPullRequestForSession(ctx context.Context, session state.Sessi
 }
 
 func (a *App) reconcileStaleRunningSession(ctx context.Context, session *state.Session, issueCache scanIssueDetailsCache, reason string, commentOnRecovery bool) (bool, error) {
-	issue, err := a.loadIssueDetailsForScan(ctx, issueCache, session.Repo, session.IssueNumber)
+	issue, err := a.loadIssueDetailsForScan(ctx, issueCache, session.BackendID, session.Repo, session.IssueNumber)
 	if err != nil {
 		if a.issueTrackerForSession(*session).IsWorkItemUnavailable(err) {
 			a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
@@ -359,7 +345,7 @@ func (a *App) reconcileStaleRunningSession(ctx context.Context, session *state.S
 					},
 					Tagline: "Fall seven times, stand up eight.",
 				})
-				if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "progress", "stalled_recovery"); err != nil {
+				if err := a.commentOnIssue(ctx, session.BackendID, session.Repo, session.IssueNumber, body, "progress", "stalled_recovery"); err != nil {
 					session.LastError = err.Error()
 					session.UpdatedAt = a.clock().Format(time.RFC3339)
 					a.logger.Error("stalled session recovery comment failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
@@ -466,9 +452,9 @@ func (a *App) emitGitHubRateLimitEvent(state string, snapshot backend.RateLimitS
 	})
 }
 
-func (a *App) commentOnIssue(ctx context.Context, repo string, issue int, body string, commentType string, source string) error {
+func (a *App) commentOnIssue(ctx context.Context, backendID string, repo string, issue int, body string, commentType string, source string) error {
 	ctx = a.withIssueAccessLogContext(ctx, "", repo, issue, "", "")
-	if err := a.getBackend().PostComment(ctx, repo, issue, body); err != nil {
+	if err := a.issueTrackerFor(backendID).PostComment(ctx, repo, issue, body); err != nil {
 		return err
 	}
 	a.emitCommentEvent(commentType, source)
@@ -1482,7 +1468,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			}
 			nextIssues := backend.SelectWorkItems(items, sessions, *target, availableSlots)
 			for _, queued := range eligibleIssues[len(nextIssues):] {
-				a.syncQueuedIssueLabelsBestEffort(ctx, target.Repo, queued.Number)
+				a.syncQueuedIssueLabelsBestEffort(ctx, target.BackendID, target.Repo, queued.Number)
 			}
 			if len(nextIssues) == 0 {
 				a.logger.Info("scan repo no eligible issues", "repo", target.Repo)
@@ -1679,7 +1665,7 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 				},
 				Tagline: "No loops without consent.",
 			})
-			if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "blocked", "stalled_auto_restart_limit"); err != nil {
+			if err := a.commentOnIssue(ctx, session.BackendID, session.Repo, session.IssueNumber, body, "blocked", "stalled_auto_restart_limit"); err != nil {
 				session.LastError = err.Error()
 				session.UpdatedAt = a.clock().Format(time.RFC3339)
 				a.logger.Error("stalled session auto restart limit comment failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
@@ -1705,7 +1691,7 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 				},
 				Tagline: "The gem cannot be polished without friction.",
 			})
-			if commentErr := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "blocked", "stalled_recovery"); commentErr != nil {
+			if commentErr := a.commentOnIssue(ctx, session.BackendID, session.Repo, session.IssueNumber, body, "blocked", "stalled_recovery"); commentErr != nil {
 				session.LastError = commentErr.Error()
 				session.UpdatedAt = a.clock().Format(time.RFC3339)
 				a.logger.Error("stalled session cleanup comment failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", commentErr)
@@ -1741,7 +1727,7 @@ func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Sessi
 			},
 			Tagline: "Try again, but keep count.",
 		})
-		if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "progress", "stalled_auto_restart"); err != nil {
+		if err := a.commentOnIssue(ctx, session.BackendID, session.Repo, session.IssueNumber, body, "progress", "stalled_auto_restart"); err != nil {
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 			a.logger.Error("stalled session auto restart comment failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
@@ -1861,7 +1847,7 @@ func (a *App) notifyGitHubLowQuotaSessions(ctx context.Context, sessions []state
 		}
 
 		body := ghcli.FormatGitHubRateLimitDelayComment(backendToGHRateLimitSnapshot(snapshot), githubCoreLowQuotaThreshold, a.clock())
-		if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "rate_limit_delay", "github_rate_limit"); err != nil {
+		if err := a.commentOnIssue(ctx, session.BackendID, session.Repo, session.IssueNumber, body, "rate_limit_delay", "github_rate_limit"); err != nil {
 			a.logger.Error("github rate limit delay comment failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
@@ -1963,7 +1949,7 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 						},
 						Tagline: "Difficulties strengthen the mind, as labor does the body.",
 					})
-					if commentErr := a.commentOnIssue(sessionCtx, session.Repo, session.IssueNumber, body, "blocked", "pr_maintenance"); commentErr != nil {
+					if commentErr := a.commentOnIssue(sessionCtx, session.BackendID, session.Repo, session.IssueNumber, body, "blocked", "pr_maintenance"); commentErr != nil {
 						a.logger.Error("pr maintenance failure comment failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "err", commentErr)
 					}
 					session.LastMaintenanceError = err.Error()
@@ -1999,7 +1985,7 @@ func (a *App) cleanupClosedIssueSessions(ctx context.Context, sessions []state.S
 			continue
 		}
 
-		issue, err := a.loadIssueDetailsForScan(sessionCtx, issueCache, session.Repo, session.IssueNumber)
+		issue, err := a.loadIssueDetailsForScan(sessionCtx, issueCache, session.BackendID, session.Repo, session.IssueNumber)
 		if err != nil {
 			if a.issueTrackerForSession(*session).IsWorkItemUnavailable(err) {
 				a.stopMonitoringUnavailableIssueSession(sessionCtx, session, "issue_deleted", err)
@@ -2136,7 +2122,7 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 		if issueDetails != nil {
 			return issueDetails, nil
 		}
-		loaded, err := a.loadIssueDetailsForScan(ctx, issueCache, session.Repo, session.IssueNumber)
+		loaded, err := a.loadIssueDetailsForScan(ctx, issueCache, session.BackendID, session.Repo, session.IssueNumber)
 		if err != nil {
 			return nil, err
 		}
@@ -2209,7 +2195,7 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 		},
 		Tagline: "Success is where preparation and opportunity meet.",
 	})
-	return details, issueDetails, a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "validation", "pr_maintenance")
+	return details, issueDetails, a.commentOnIssue(ctx, session.BackendID, session.Repo, session.IssueNumber, body, "validation", "pr_maintenance")
 }
 
 func (a *App) dispatchConflictResolution(ctx context.Context, session *state.Session, pr backend.PullRequest, issueDetails *backend.WorkItem) error {
@@ -2241,7 +2227,7 @@ func (a *App) dispatchConflictResolution(ctx context.Context, session *state.Ses
 		},
 		Tagline: "Keep the spec intact while the history moves.",
 	})
-	if commentErr := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "progress", "conflict_resolution"); commentErr != nil {
+	if commentErr := a.commentOnIssue(ctx, session.BackendID, session.Repo, session.IssueNumber, body, "progress", "conflict_resolution"); commentErr != nil {
 		a.logger.Error("pr conflict comment failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "err", commentErr)
 	}
 
@@ -2313,7 +2299,7 @@ func (a *App) automergeEnabled(ctx context.Context, session *state.Session, pr b
 
 	if issue == nil {
 		var err error
-		issue, err = a.loadIssueDetailsForScan(ctx, issueCache, session.Repo, session.IssueNumber)
+		issue, err = a.loadIssueDetailsForScan(ctx, issueCache, session.BackendID, session.Repo, session.IssueNumber)
 		if err != nil {
 			if a.issueTrackerForSession(*session).IsWorkItemUnavailable(err) {
 				a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
@@ -2406,7 +2392,7 @@ func (a *App) handleFailingPullRequestChecks(ctx context.Context, session *state
 			},
 			Tagline: "One clean retry is enough to prove the point.",
 		})
-		a.commentOnIssueBestEffort(ctx, session.Repo, session.IssueNumber, body, "ci remediation blocked")
+		a.commentOnIssueBestEffort(ctx, session.BackendID, session.Repo, session.IssueNumber, body, "ci remediation blocked")
 		return nil
 	}
 
@@ -2422,7 +2408,7 @@ func (a *App) handleFailingPullRequestChecks(ctx context.Context, session *state
 		},
 		Tagline: "Tight loop, targeted repair.",
 	})
-	a.commentOnIssueBestEffort(ctx, session.Repo, session.IssueNumber, startBody, "ci remediation start")
+	a.commentOnIssueBestEffort(ctx, session.BackendID, session.Repo, session.IssueNumber, startBody, "ci remediation start")
 
 	target := watchTargetForSession(*session, a.fallbackWatchTargetForSession(*session))
 	if err := issuerunner.RunCIRemediationSession(ctx, a.env, a.state, target, *session, pr, failingChecks); err != nil {
@@ -2540,7 +2526,7 @@ func (a *App) processGitHubCleanupRequests(ctx context.Context, sessions []state
 				},
 				Tagline: "Trust, but verify.",
 			})
-			if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "cleanup", "github_comment"); err != nil {
+			if err := a.commentOnIssue(ctx, session.BackendID, session.Repo, session.IssueNumber, body, "cleanup", "github_comment"); err != nil {
 				a.logger.Error("cleanup no-op comment failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
 				session.LastError = err.Error()
 				session.UpdatedAt = a.clock().Format(time.RFC3339)
@@ -2550,7 +2536,7 @@ func (a *App) processGitHubCleanupRequests(ctx context.Context, sessions []state
 
 		cleanupErr := a.cleanupRunningSession(ctx, session, "comment")
 		body := cleanupResultComment(*session, cleanupErr)
-		if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "cleanup", "github_comment"); err != nil {
+		if err := a.commentOnIssue(ctx, session.BackendID, session.Repo, session.IssueNumber, body, "cleanup", "github_comment"); err != nil {
 			a.logger.Error("cleanup result comment failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
@@ -2609,7 +2595,7 @@ func (a *App) processGitHubRecreateRequests(ctx context.Context, sessions []stat
 				},
 				Tagline: "Better luck next time.",
 			})
-			if err := a.commentOnIssue(ctx, repo, issueNumber, body, "recreate", "github_comment"); err != nil {
+			if err := a.commentOnIssue(ctx, session.BackendID, repo, issueNumber, body, "recreate", "github_comment"); err != nil {
 				a.logger.Error("recreate failure comment failed", "repo", repo, "issue", issueNumber, "err", err)
 			}
 		}
@@ -2621,7 +2607,7 @@ func (a *App) recreateSessionInline(ctx context.Context, session *state.Session,
 	repoSlug := session.Repo
 	issue := session.IssueNumber
 
-	details, err := a.getBackend().GetWorkItem(ctx, repoSlug, issue)
+	details, err := a.issueTrackerForSession(*session).GetWorkItem(ctx, repoSlug, issue)
 	if err != nil {
 		return fmt.Errorf("get issue details: %w", err)
 	}
@@ -2635,15 +2621,15 @@ func (a *App) recreateSessionInline(ctx context.Context, session *state.Session,
 	}
 
 	newBody := details.Body + fmt.Sprintf("\n\n---\n_Recreated from #%d by Vigilante._", issue)
-	created, err := a.getBackend().CreateWorkItem(ctx, repoSlug, details.Title, newBody, labelNames, details.Assignees)
+	created, err := a.issueTrackerForSession(*session).CreateWorkItem(ctx, repoSlug, details.Title, newBody, labelNames, details.Assignees)
 	if err != nil {
 		return fmt.Errorf("create replacement issue: %w", err)
 	}
 
 	crossLinkBody := fmt.Sprintf("## ♻️ Issue Recreated\n\nThis issue has been recreated as #%d.\n\nThe original issue is being closed as `not planned` and stale artifacts are being cleaned up.\n\nSource: `%s`.", created.Number, source)
-	a.commentOnIssueBestEffort(ctx, repoSlug, issue, crossLinkBody, "recreate cross-link")
+	a.commentOnIssueBestEffort(ctx, session.BackendID, repoSlug, issue, crossLinkBody, "recreate cross-link")
 
-	if err := a.getBackend().CloseWorkItem(ctx, repoSlug, issue); err != nil {
+	if err := a.issueTrackerForSession(*session).CloseWorkItem(ctx, repoSlug, issue); err != nil {
 		return fmt.Errorf("close original issue: %w", err)
 	}
 
@@ -2652,16 +2638,16 @@ func (a *App) recreateSessionInline(ctx context.Context, session *state.Session,
 	var cleanupErrors []string
 
 	if session.PullRequestNumber > 0 {
-		if prm, ok := a.pullRequestManager(); ok {
-			if err := prm.ClosePullRequest(ctx, repoSlug, session.PullRequestNumber); err != nil {
+		if rh := a.repoHostForSession(*session); rh != nil {
+			if err := rh.ClosePullRequest(ctx, repoSlug, session.PullRequestNumber); err != nil {
 				cleanupErrors = append(cleanupErrors, fmt.Sprintf("close PR #%d: %s", session.PullRequestNumber, err))
 			}
 		}
 	}
 
 	if session.Branch != "" {
-		if prm, ok := a.pullRequestManager(); ok {
-			if err := prm.DeleteRemoteBranch(ctx, session.RepoPath, session.Branch); err != nil {
+		if rh := a.repoHostForSession(*session); rh != nil {
+			if err := rh.DeleteRemoteBranch(ctx, session.RepoPath, session.Branch); err != nil {
 				cleanupErrors = append(cleanupErrors, fmt.Sprintf("delete remote branch %s: %s", session.Branch, err))
 			}
 		}
@@ -2689,7 +2675,7 @@ func (a *App) recreateSessionInline(ctx context.Context, session *state.Session,
 	session.LastError = fmt.Sprintf("recreated as #%d via %s", created.Number, source)
 
 	body := recreateResultComment(issue, created.Number, created.URL, source, cleanupErrors)
-	if err := a.commentOnIssue(ctx, repoSlug, issue, body, "recreate", "github_comment"); err != nil {
+	if err := a.commentOnIssue(ctx, session.BackendID, repoSlug, issue, body, "recreate", "github_comment"); err != nil {
 		a.logger.Error("recreate result comment failed", "repo", repoSlug, "issue", issue, "err", err)
 	}
 
@@ -2705,7 +2691,7 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 		}
 
 		sessionIT := a.issueTrackerForSession(*session)
-		details, err := a.loadIssueDetailsForScan(ctx, issueCache, session.Repo, session.IssueNumber)
+		details, err := a.loadIssueDetailsForScan(ctx, issueCache, session.BackendID, session.Repo, session.IssueNumber)
 		if err != nil {
 			if sessionIT.IsWorkItemUnavailable(err) {
 				a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
@@ -2843,7 +2829,7 @@ func (a *App) CleanupSession(ctx context.Context, repo string, issue int, source
 	}
 	if !found {
 		if source == "cli" {
-			a.commentOnIssueBestEffort(ctx, repo, issue, localCleanupNoopComment(), "local cleanup no-op")
+			a.commentOnIssueBestEffort(ctx, "", repo, issue, localCleanupNoopComment(), "local cleanup no-op")
 		}
 		return fmt.Errorf("running session not found for %s issue #%d", repo, issue)
 	}
@@ -2854,7 +2840,7 @@ func (a *App) CleanupSession(ctx context.Context, repo string, issue int, source
 		a.syncSessionIssueLabelsBestEffort(ctx, cleanedSession, nil, nil, nil)
 	}
 	if source == "cli" && cleanedSession != nil {
-		a.commentOnIssueBestEffort(ctx, repo, issue, localCleanupResultComment(*cleanedSession), "local cleanup result")
+		a.commentOnIssueBestEffort(ctx, cleanedSession.BackendID, repo, issue, localCleanupResultComment(*cleanedSession), "local cleanup result")
 	}
 	fmt.Fprintf(a.stdout, "cleaned up running session for %s issue #%d\n", repo, issue)
 	return nil
@@ -2876,7 +2862,7 @@ func (a *App) ResumeSession(ctx context.Context, repo string, issue int, source 
 		found = true
 		if sessions[i].Status != state.SessionStatusBlocked {
 			if source == "cli" {
-				a.commentOnIssueBestEffort(ctx, repo, issue, localResumeNoopComment(), "local resume no-op")
+				a.commentOnIssueBestEffort(ctx, "", repo, issue, localResumeNoopComment(), "local resume no-op")
 			}
 			return fmt.Errorf("issue #%d in %s is not blocked", issue, repo)
 		}
@@ -2887,7 +2873,7 @@ func (a *App) ResumeSession(ctx context.Context, repo string, issue int, source 
 	}
 	if !found {
 		if source == "cli" {
-			a.commentOnIssueBestEffort(ctx, repo, issue, localResumeNoopComment(), "local resume no-op")
+			a.commentOnIssueBestEffort(ctx, "", repo, issue, localResumeNoopComment(), "local resume no-op")
 		}
 		return fmt.Errorf("blocked session not found for %s issue #%d", repo, issue)
 	}
@@ -3004,7 +2990,7 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 	a.syncSessionIssueLabelsBestEffort(ctx, &session, nil, nil, nil)
 
 	if source == "cli" {
-		a.commentOnIssueBestEffort(ctx, repoSlug, issue, localRedispatchStartedComment(session), "local redispatch result")
+		a.commentOnIssueBestEffort(ctx, session.BackendID, repoSlug, issue, localRedispatchStartedComment(session), "local redispatch result")
 	}
 	a.logger.Info("redispatch started", "repo", repoSlug, "issue", issue, "branch", wt.Branch, "worktree", wt.Path)
 	fmt.Fprintf(a.stdout, "redispatched %s issue #%d in %s\n", repoSlug, issue, wt.Path)
@@ -3025,11 +3011,12 @@ func (a *App) RecreateSession(ctx context.Context, repoSlug string, issue int, s
 	if err != nil {
 		return err
 	}
-	if _, ok := findWatchTargetByRepo(targets, repoSlug); !ok {
+	target, ok := findWatchTargetByRepo(targets, repoSlug)
+	if !ok {
 		return fmt.Errorf("watch target not found for %s", repoSlug)
 	}
 
-	details, err := a.getBackend().GetWorkItem(ctx, repoSlug, issue)
+	details, err := a.issueTrackerForTarget(target).GetWorkItem(ctx, repoSlug, issue)
 	if err != nil {
 		return fmt.Errorf("get issue details: %w", err)
 	}
@@ -3044,16 +3031,16 @@ func (a *App) RecreateSession(ctx context.Context, repoSlug string, issue int, s
 	}
 
 	newBody := details.Body + fmt.Sprintf("\n\n---\n_Recreated from #%d by Vigilante._", issue)
-	created, err := a.getBackend().CreateWorkItem(ctx, repoSlug, details.Title, newBody, labelNames, details.Assignees)
+	created, err := a.issueTrackerForTarget(target).CreateWorkItem(ctx, repoSlug, details.Title, newBody, labelNames, details.Assignees)
 	if err != nil {
 		return fmt.Errorf("create replacement issue: %w", err)
 	}
 
 	// Cross-link on the old issue and close it.
 	crossLinkBody := fmt.Sprintf("## ♻️ Issue Recreated\n\nThis issue has been recreated as #%d.\n\nThe original issue is being closed as `not planned` and stale artifacts are being cleaned up.\n\nSource: `%s`.", created.Number, source)
-	a.commentOnIssueBestEffort(ctx, repoSlug, issue, crossLinkBody, "recreate cross-link")
+	a.commentOnIssueBestEffort(ctx, target.BackendID, repoSlug, issue, crossLinkBody, "recreate cross-link")
 
-	if err := a.getBackend().CloseWorkItem(ctx, repoSlug, issue); err != nil {
+	if err := a.issueTrackerForTarget(target).CloseWorkItem(ctx, repoSlug, issue); err != nil {
 		return fmt.Errorf("close original issue: %w", err)
 	}
 
@@ -3075,8 +3062,8 @@ func (a *App) RecreateSession(ctx context.Context, repoSlug string, issue int, s
 
 		// Close PR if one exists.
 		if session.PullRequestNumber > 0 {
-			if prm, ok := a.pullRequestManager(); ok {
-				if err := prm.ClosePullRequest(ctx, repoSlug, session.PullRequestNumber); err != nil {
+			if rh := a.repoHostForSession(*session); rh != nil {
+				if err := rh.ClosePullRequest(ctx, repoSlug, session.PullRequestNumber); err != nil {
 					cleanupErrors = append(cleanupErrors, fmt.Sprintf("close PR #%d: %s", session.PullRequestNumber, err))
 				}
 			}
@@ -3084,8 +3071,8 @@ func (a *App) RecreateSession(ctx context.Context, repoSlug string, issue int, s
 
 		// Delete remote branch.
 		if session.Branch != "" {
-			if prm, ok := a.pullRequestManager(); ok {
-				if err := prm.DeleteRemoteBranch(ctx, session.RepoPath, session.Branch); err != nil {
+			if rh := a.repoHostForSession(*session); rh != nil {
+				if err := rh.DeleteRemoteBranch(ctx, session.RepoPath, session.Branch); err != nil {
 					cleanupErrors = append(cleanupErrors, fmt.Sprintf("delete remote branch %s: %s", session.Branch, err))
 				}
 			}
@@ -3328,7 +3315,7 @@ func (a *App) resumeBlockedSession(ctx context.Context, session *state.Session, 
 		markSessionBlocked(session, fallbackText(session.BlockedStage, "pr_maintenance"), blocked, a.clock())
 		session.LastError = err.Error()
 		if source == "cli" {
-			a.commentOnIssueBestEffort(ctx, session.Repo, session.IssueNumber, localResumeFailureComment(*session, previousStage), "local resume failure")
+			a.commentOnIssueBestEffort(ctx, session.BackendID, session.Repo, session.IssueNumber, localResumeFailureComment(*session, previousStage), "local resume failure")
 			return err
 		}
 		return a.commentResumeFailure(ctx, session, previousStage)
@@ -3350,7 +3337,7 @@ func (a *App) resumeBlockedSession(ctx context.Context, session *state.Session, 
 		markSessionBlocked(session, fallbackText(session.BlockedStage, "pr_maintenance"), blocked, a.clock())
 		session.LastError = err.Error()
 		if source == "cli" {
-			a.commentOnIssueBestEffort(ctx, session.Repo, session.IssueNumber, localResumeFailureComment(*session, previousStage), "local resume failure")
+			a.commentOnIssueBestEffort(ctx, session.BackendID, session.Repo, session.IssueNumber, localResumeFailureComment(*session, previousStage), "local resume failure")
 			return err
 		}
 		return a.commentResumeFailure(ctx, session, previousStage)
@@ -3361,7 +3348,7 @@ func (a *App) resumeBlockedSession(ctx context.Context, session *state.Session, 
 	clearBlockedState(session, a.clock(), source)
 	a.emitSessionTransition(previousStatus, *session, source)
 	if source == "cli" {
-		a.commentOnIssueBestEffort(ctx, session.Repo, session.IssueNumber, localResumeSuccessComment(*session, previousStage, previousKind), "local resume result")
+		a.commentOnIssueBestEffort(ctx, session.BackendID, session.Repo, session.IssueNumber, localResumeSuccessComment(*session, previousStage, previousKind), "local resume result")
 		return nil
 	}
 	body := ghcli.FormatProgressComment(ghcli.ProgressComment{
@@ -3376,7 +3363,7 @@ func (a *App) resumeBlockedSession(ctx context.Context, session *state.Session, 
 		},
 		Tagline: "Back on the wire.",
 	})
-	return a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "resume", source)
+	return a.commentOnIssue(ctx, session.BackendID, session.Repo, session.IssueNumber, body, "resume", source)
 }
 
 func (a *App) preflightResume(ctx context.Context, session state.Session) error {
@@ -3416,11 +3403,11 @@ func (a *App) preflightResume(ctx context.Context, session state.Session) error 
 
 func (a *App) resumeBlockedMaintenance(ctx context.Context, session *state.Session) error {
 	ctx = withSessionAccessLogContext(ctx, "maintenance", *session)
-	prm, ok := a.pullRequestManager()
-	if !ok {
+	rh := a.repoHostForSession(*session)
+	if rh == nil {
 		return errors.New("backend does not support pull request operations")
 	}
-	pr, err := prm.FindPullRequestForBranch(ctx, session.Repo, session.Branch)
+	pr, err := rh.FindPullRequestForBranch(ctx, session.Repo, session.Branch)
 	if err != nil {
 		return err
 	}
@@ -3485,11 +3472,11 @@ func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Se
 }
 
 func (a *App) resumeBlockedConflictResolution(ctx context.Context, session *state.Session) error {
-	prm, ok := a.pullRequestManager()
-	if !ok {
+	rh := a.repoHostForSession(*session)
+	if rh == nil {
 		return errors.New("backend does not support pull request operations")
 	}
-	pr, err := prm.FindPullRequestForBranch(ctx, session.Repo, session.Branch)
+	pr, err := rh.FindPullRequestForBranch(ctx, session.Repo, session.Branch)
 	if err != nil {
 		return err
 	}
@@ -3557,7 +3544,7 @@ func (a *App) cleanupInactiveBlockedSessions(ctx context.Context, sessions []sta
 		a.logger.Info("blocked session inactivity timeout reached", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "timeout", timeout)
 		cleanupErr := a.cleanupBlockedSessionForInactivity(ctx, session, timeout)
 		body := inactiveBlockedCleanupComment(*session, timeout, cleanupErr)
-		if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "cleanup", "blocked_inactivity_timeout"); err != nil {
+		if err := a.commentOnIssue(ctx, session.BackendID, session.Repo, session.IssueNumber, body, "cleanup", "blocked_inactivity_timeout"); err != nil {
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 			a.logger.Error("blocked session inactivity comment failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
@@ -3654,11 +3641,11 @@ func shouldAutoRecoverBlockedSession(session state.Session) bool {
 }
 
 func (a *App) autoRecoverBlockedMaintenanceSession(ctx context.Context, session *state.Session, timeout time.Duration) error {
-	prm, ok := a.pullRequestManager()
-	if !ok {
+	rh := a.repoHostForSession(*session)
+	if rh == nil {
 		return errors.New("backend does not support pull request operations")
 	}
-	pr, err := prm.FindPullRequestForBranch(ctx, session.Repo, session.Branch)
+	pr, err := rh.FindPullRequestForBranch(ctx, session.Repo, session.Branch)
 	if err != nil {
 		return err
 	}
@@ -3693,7 +3680,7 @@ func (a *App) autoRecoverBlockedMaintenanceSession(ctx context.Context, session 
 		},
 		Tagline: "Reset the footing, keep the climb.",
 	})
-	if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, startBody, "progress", autoRecoverySource); err != nil {
+	if err := a.commentOnIssue(ctx, session.BackendID, session.Repo, session.IssueNumber, startBody, "progress", autoRecoverySource); err != nil {
 		return err
 	}
 
@@ -3713,7 +3700,7 @@ func (a *App) autoRecoverBlockedMaintenanceSession(ctx context.Context, session 
 			},
 			Tagline: "The retry stopped at the gate.",
 		})
-		if commentErr := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, failureBody, "blocked", autoRecoverySource); commentErr != nil {
+		if commentErr := a.commentOnIssue(ctx, session.BackendID, session.Repo, session.IssueNumber, failureBody, "blocked", autoRecoverySource); commentErr != nil {
 			a.logger.Error("auto recovery failure comment failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "err", commentErr)
 		}
 		return err
@@ -3742,7 +3729,7 @@ func (a *App) autoRecoverBlockedMaintenanceSession(ctx context.Context, session 
 			},
 			Tagline: "Clean slate, real blocker.",
 		})
-		if commentErr := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, failureBody, "blocked", autoRecoverySource); commentErr != nil {
+		if commentErr := a.commentOnIssue(ctx, session.BackendID, session.Repo, session.IssueNumber, failureBody, "blocked", autoRecoverySource); commentErr != nil {
 			a.logger.Error("auto recovery blocked comment failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "err", commentErr)
 		}
 		return resumeErr
@@ -3761,7 +3748,7 @@ func (a *App) autoRecoverBlockedMaintenanceSession(ctx context.Context, session 
 		},
 		Tagline: "Same branch, cleaner footing.",
 	})
-	if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "resume", autoRecoverySource); err != nil {
+	if err := a.commentOnIssue(ctx, session.BackendID, session.Repo, session.IssueNumber, body, "resume", autoRecoverySource); err != nil {
 		return err
 	}
 	a.logger.Info("blocked session auto recovery complete", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "pr", pr.Number, "stage", previousStage)
@@ -4247,7 +4234,7 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 		}
 
 		sessionIT := a.issueTrackerForSession(*session)
-		details, err := a.loadIssueDetailsForScan(ctx, issueCache, session.Repo, session.IssueNumber)
+		details, err := a.loadIssueDetailsForScan(ctx, issueCache, session.BackendID, session.Repo, session.IssueNumber)
 		if err != nil {
 			if sessionIT.IsWorkItemUnavailable(err) {
 				a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
@@ -4292,7 +4279,7 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 				},
 				Tagline: "Hands on the wheel, one driver at a time.",
 			})
-			if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "iteration_ignored", "github_comment"); err != nil {
+			if err := a.commentOnIssue(ctx, session.BackendID, session.Repo, session.IssueNumber, body, "iteration_ignored", "github_comment"); err != nil {
 				a.logger.Error("iteration rejection comment failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
 				session.LastError = err.Error()
 			}
@@ -4538,8 +4525,8 @@ func reuseExistingIterationSession(target state.WatchTarget, issue backend.WorkI
 	return session, nil
 }
 
-func (a *App) syncQueuedIssueLabelsBestEffort(ctx context.Context, repo string, issueNumber int) {
-	if err := a.syncIssueManagedLabels(ctx, repo, issueNumber, []string{labelQueued}, nil, nil); err != nil {
+func (a *App) syncQueuedIssueLabelsBestEffort(ctx context.Context, backendID string, repo string, issueNumber int) {
+	if err := a.syncIssueManagedLabels(ctx, backendID, repo, issueNumber, []string{labelQueued}, nil, nil); err != nil {
 		a.logger.Error("issue label sync failed", "repo", repo, "issue", issueNumber, "err", err)
 	}
 }
@@ -4558,8 +4545,8 @@ func (a *App) syncSessionIssueLabels(ctx context.Context, session *state.Session
 		return nil
 	}
 	if pr == nil && session.PullRequestNumber > 0 && strings.TrimSpace(session.PullRequestMergedAt) == "" {
-		if prm, ok := a.pullRequestManager(); ok {
-			details, err := prm.GetPullRequestDetails(ctx, session.Repo, session.PullRequestNumber)
+		if rh := a.repoHostForSession(*session); rh != nil {
+			details, err := rh.GetPullRequestDetails(ctx, session.Repo, session.PullRequestNumber)
 			if err == nil {
 				pr = details
 			}
@@ -4575,7 +4562,7 @@ func (a *App) syncSessionIssueLabels(ctx context.Context, session *state.Session
 		}
 	}
 	labels := sessionManagedLabels(*session, pr)
-	if err := a.syncIssueManagedLabels(ctx, session.Repo, session.IssueNumber, labels, issueDetails, issueCache); err != nil {
+	if err := a.syncIssueManagedLabels(ctx, session.BackendID, session.Repo, session.IssueNumber, labels, issueDetails, issueCache); err != nil {
 		if a.issueTrackerForSession(*session).IsWorkItemUnavailable(err) {
 			a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
 			return nil
@@ -4585,18 +4572,18 @@ func (a *App) syncSessionIssueLabels(ctx context.Context, session *state.Session
 	return nil
 }
 
-func (a *App) syncIssueManagedLabels(ctx context.Context, repo string, issueNumber int, desired []string, issueDetails *backend.WorkItem, issueCache scanIssueDetailsCache) error {
-	if err := a.ensureRepositoryLabelsProvisioned(ctx, repo); err != nil {
+func (a *App) syncIssueManagedLabels(ctx context.Context, backendID string, repo string, issueNumber int, desired []string, issueDetails *backend.WorkItem, issueCache scanIssueDetailsCache) error {
+	if err := a.ensureRepositoryLabelsProvisioned(ctx, backendID, repo); err != nil {
 		return err
 	}
 	if issueDetails == nil {
-		details, err := a.loadIssueDetailsForScan(ctx, issueCache, repo, issueNumber)
+		details, err := a.loadIssueDetailsForScan(ctx, issueCache, backendID, repo, issueNumber)
 		if err != nil {
 			return err
 		}
 		issueDetails = details
 	}
-	lm, ok := a.labelManager()
+	lm, ok := backend.AsLabelManager(a.issueTrackerFor(backendID))
 	if !ok {
 		return errors.New("backend does not support label operations")
 	}
@@ -4608,7 +4595,7 @@ func (a *App) syncIssueManagedLabels(ctx context.Context, repo string, issueNumb
 	return nil
 }
 
-func (a *App) ensureRepositoryLabelsProvisioned(ctx context.Context, repo string) error {
+func (a *App) ensureRepositoryLabelsProvisioned(ctx context.Context, backendID string, repo string) error {
 	repo = strings.TrimSpace(repo)
 	if repo == "" {
 		return nil
@@ -4621,7 +4608,7 @@ func (a *App) ensureRepositoryLabelsProvisioned(ctx context.Context, repo string
 	}
 	a.repoLabelProvisioningMu.Unlock()
 
-	lm, ok := a.labelManager()
+	lm, ok := backend.AsLabelManager(a.issueTrackerFor(backendID))
 	if !ok {
 		return errors.New("backend does not support label operations")
 	}
@@ -4955,8 +4942,8 @@ func localResumeNoopComment() string {
 	})
 }
 
-func (a *App) commentOnIssueBestEffort(ctx context.Context, repo string, issue int, body string, purpose string) {
-	if err := a.commentOnIssue(ctx, repo, issue, body, "progress", purpose); err != nil {
+func (a *App) commentOnIssueBestEffort(ctx context.Context, backendID string, repo string, issue int, body string, purpose string) {
+	if err := a.commentOnIssue(ctx, backendID, repo, issue, body, "progress", purpose); err != nil {
 		a.logger.Error(fmt.Sprintf("%s comment failed", purpose), "repo", repo, "issue", issue, "err", err)
 	}
 }
@@ -5000,7 +4987,7 @@ func (a *App) commentDispatchFailure(ctx context.Context, previous state.Session
 		WorktreePath: session.WorktreePath,
 		NextStep:     dispatchFailureNextStep(*session, stage),
 	})
-	if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "dispatch_failure", stage); err != nil {
+	if err := a.commentOnIssue(ctx, session.BackendID, session.Repo, session.IssueNumber, body, "dispatch_failure", stage); err != nil {
 		a.logger.Error("dispatch/startup failure comment failed", "repo", session.Repo, "issue", session.IssueNumber, "stage", stage, "err", err)
 		return
 	}
@@ -5048,7 +5035,7 @@ func (a *App) commentResumeFailure(ctx context.Context, session *state.Session, 
 		},
 		Tagline: "No mystery errors left behind.",
 	})
-	if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "resume_failure", previousStage); err != nil {
+	if err := a.commentOnIssue(ctx, session.BackendID, session.Repo, session.IssueNumber, body, "resume_failure", previousStage); err != nil {
 		return err
 	}
 	session.LastResumeFailureFingerprint = fingerprint
