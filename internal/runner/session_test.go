@@ -15,7 +15,6 @@ import (
 
 	"github.com/nicobistolfi/vigilante/internal/backend"
 	"github.com/nicobistolfi/vigilante/internal/environment"
-	ghcli "github.com/nicobistolfi/vigilante/internal/github"
 	"github.com/nicobistolfi/vigilante/internal/repo"
 	"github.com/nicobistolfi/vigilante/internal/skill"
 	"github.com/nicobistolfi/vigilante/internal/state"
@@ -23,25 +22,53 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/testutil"
 )
 
+// fakeIssueTracker is a minimal backend.IssueTracker for runner tests.
+type fakeIssueTracker struct {
+	postedComments []postedComment
+	postError      error
+}
+
+type postedComment struct {
+	target     string
+	workItemID int
+	body       string
+}
+
+func (f *fakeIssueTracker) ID() string { return "fake" }
+func (f *fakeIssueTracker) ResolveAssignee(_ context.Context, assignee string) (string, error) {
+	return assignee, nil
+}
+func (f *fakeIssueTracker) ListWorkItems(_ context.Context, _ string, _ string) ([]backend.WorkItem, error) {
+	return nil, nil
+}
+func (f *fakeIssueTracker) GetWorkItem(_ context.Context, _ string, _ int) (*backend.WorkItem, error) {
+	return nil, nil
+}
+func (f *fakeIssueTracker) ListComments(_ context.Context, _ string, _ int) ([]backend.Comment, error) {
+	return nil, nil
+}
+func (f *fakeIssueTracker) PollComments(_ context.Context, _ string, _ int, _ string) ([]backend.Comment, error) {
+	return nil, nil
+}
+func (f *fakeIssueTracker) PostComment(_ context.Context, target string, workItemID int, body string) error {
+	f.postedComments = append(f.postedComments, postedComment{target: target, workItemID: workItemID, body: body})
+	return f.postError
+}
+func (f *fakeIssueTracker) AcknowledgeComment(_ context.Context, _ string, _ int64, _ string) error {
+	return nil
+}
+func (f *fakeIssueTracker) CreateWorkItem(_ context.Context, _ string, _ string, _ string, _ []string, _ []string) (*backend.CreatedWorkItem, error) {
+	return nil, nil
+}
+func (f *fakeIssueTracker) CloseWorkItem(_ context.Context, _ string, _ int) error { return nil }
+func (f *fakeIssueTracker) IsWorkItemUnavailable(_ error) bool                     { return false }
+
 func TestRunIssueSessionSuccess(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 	baseRunner := testutil.FakeRunner{
 		Outputs: map[string]string{
 			"codex --version": "codex 0.114.0",
-			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
-				Stage:      "Vigilante Session Start",
-				Emoji:      "🧢",
-				Percent:    20,
-				ETAMinutes: 25,
-				Items: []string{
-					"Vigilante launched this implementation session in `/tmp/worktree`.",
-					"Branch: `vigilante/issue-7`.",
-					"Current stage: handing the issue off to the configured coding agent (`Codex`) for investigation and implementation.",
-					"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
-				},
-				Tagline: "Make it simple, but significant.",
-			}): "ok",
 			preflightPromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", "vigilante/issue-7"): "baseline ok",
 			issuePromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", "vigilante/issue-7"):     "done",
 		},
@@ -57,10 +84,20 @@ func TestRunIssueSessionSuccess(t *testing.T) {
 			AccessLog: store.AppendAccessLogEntry,
 		},
 	}
+	it := &fakeIssueTracker{}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
-	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, it, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
+	}
+	if len(it.postedComments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(it.postedComments))
+	}
+	if it.postedComments[0].target != "owner/repo" || it.postedComments[0].workItemID != 7 {
+		t.Fatalf("unexpected comment target: %#v", it.postedComments[0])
+	}
+	if !strings.Contains(it.postedComments[0].body, "Vigilante Session Start") {
+		t.Fatalf("expected start comment, got %q", it.postedComments[0].body)
 	}
 	data, err := os.ReadFile(store.SessionLogPath("owner/repo", 7))
 	if err != nil {
@@ -88,19 +125,6 @@ func TestRunIssueSessionStartCommentIncludesReusedRemoteBranchContext(t *testing
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
 			"codex --version": "codex 0.114.0",
-			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
-				Stage:      "Vigilante Session Start",
-				Emoji:      "🧢",
-				Percent:    20,
-				ETAMinutes: 25,
-				Items: []string{
-					"Vigilante launched this implementation session in `/tmp/worktree` from existing remote branch `origin/vigilante/issue-7-demo`.",
-					"Diff summary against `main`: README.md | 2 ++",
-					"Current stage: handing the issue off to the configured coding agent (`Codex`) to continue the existing implementation.",
-					"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
-				},
-				Tagline: "Make it simple, but significant.",
-			}): "ok",
 			preflightPromptCommandForSession("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7-demo", BaseBranch: "main", ReusedRemoteBranch: "vigilante/issue-7-demo"}):                                                       "baseline ok",
 			issuePromptCommandForSession("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7-demo", BaseBranch: "main", ReusedRemoteBranch: "vigilante/issue-7-demo", BranchDiffSummary: "README.md | 2 ++", Provider: "codex"}): "done",
 		},
@@ -110,6 +134,7 @@ func TestRunIssueSessionStartCommentIncludesReusedRemoteBranchContext(t *testing
 	if err := store.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
+	it := &fakeIssueTracker{}
 	session := state.Session{
 		RepoPath:           "/tmp/repo",
 		IssueNumber:        7,
@@ -120,9 +145,15 @@ func TestRunIssueSessionStartCommentIncludesReusedRemoteBranchContext(t *testing
 		BranchDiffSummary:  "README.md | 2 ++",
 		Status:             state.SessionStatusRunning,
 	}
-	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, it, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
+	}
+	if len(it.postedComments) < 1 {
+		t.Fatal("expected at least 1 comment")
+	}
+	if !strings.Contains(it.postedComments[0].body, "existing remote branch `origin/vigilante/issue-7-demo`") {
+		t.Fatalf("expected reused branch in start comment, got %q", it.postedComments[0].body)
 	}
 }
 
@@ -132,36 +163,6 @@ func TestRunIssueSessionFailureCommentsOnIssue(t *testing.T) {
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
 			"codex --version": "codex 0.114.0",
-			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
-				Stage:      "Vigilante Session Start",
-				Emoji:      "🧢",
-				Percent:    20,
-				ETAMinutes: 25,
-				Items: []string{
-					"Vigilante launched this implementation session in `/tmp/worktree`.",
-					"Branch: `vigilante/issue-7`.",
-					"Current stage: handing the issue off to the configured coding agent (`Codex`) for investigation and implementation.",
-					"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
-				},
-				Tagline: "Make it simple, but significant.",
-			}): "ok",
-			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
-				Stage:      "Blocked",
-				Emoji:      "🧱",
-				Percent:    25,
-				ETAMinutes: 15,
-				Items: blockedPreflightItems(
-					state.BlockedReason{
-						Kind:    "validation_failed",
-						Summary: "baseline validation failed: go test ./... exit status 1",
-						Detail:  "baseline validation failed: go test ./... exit status 1",
-					},
-					"codex",
-					"",
-					"vigilante resume --repo owner/repo --issue 7",
-				),
-				Tagline: "Strong foundations make calm debugging sessions.",
-			}): "ok",
 		},
 		Errors: map[string]error{
 			preflightPromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", "vigilante/issue-7"): errors.New("baseline validation failed: go test ./... exit status 1"),
@@ -172,13 +173,21 @@ func TestRunIssueSessionFailureCommentsOnIssue(t *testing.T) {
 	if err := store.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
+	it := &fakeIssueTracker{}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
-	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, it, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 	if got.Status != state.SessionStatusBlocked {
 		t.Fatalf("unexpected status: %#v", got)
 	}
 	if !strings.Contains(got.LastError, "go test ./...") {
 		t.Fatalf("unexpected error: %#v", got)
+	}
+	// Expect 2 comments: start + blocked
+	if len(it.postedComments) != 2 {
+		t.Fatalf("expected 2 comments (start + blocked), got %d", len(it.postedComments))
+	}
+	if !strings.Contains(it.postedComments[1].body, "Blocked") {
+		t.Fatalf("expected blocked comment, got %q", it.postedComments[1].body)
 	}
 	data, err := os.ReadFile(store.SessionLogPath("owner/repo", 7))
 	if err != nil {
@@ -192,24 +201,14 @@ func TestRunIssueSessionFailureCommentsOnIssue(t *testing.T) {
 func TestRunConflictResolutionSessionFailureCommentsOnIssue(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, IssueTitle: "Demo", IssueBody: "Preserve the requested behavior.", IssueURL: "https://github.com/owner/repo/issues/7", BaseBranch: "main", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7"}
+	pr := backend.PullRequest{Number: 17, Title: "Demo PR", Body: "PR body", URL: "https://github.com/owner/repo/pull/17", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"}
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
 			"codex --version": "codex 0.114.0",
-			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
-				Stage:      "Blocked",
-				Emoji:      "🧯",
-				Percent:    90,
-				ETAMinutes: 12,
-				Items: []string{
-					"Conflict resolution for PR #17 on `vigilante/issue-7` did not complete.",
-					"Cause class: `provider_runtime_error`.",
-					"Next step: fix the blocker, then run `vigilante resume --repo owner/repo --issue 7` or request resume from GitHub.",
-				},
-				Tagline: "An obstacle is often a stepping stone.",
-			}): "ok",
 		},
 		Errors: map[string]error{
-			conflictResolutionPromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, IssueTitle: "Demo", IssueBody: "Preserve the requested behavior.", IssueURL: "https://github.com/owner/repo/issues/7", BaseBranch: "main", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7"}, backend.PullRequest{Number: 17, Title: "Demo PR", Body: "PR body", URL: "https://github.com/owner/repo/pull/17", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"}): errors.New("codex exec [--cd /tmp/worktree --dangerously-bypass-approvals-and-sandbox prompt]: exit status 1"),
+			conflictResolutionPromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", session, pr): errors.New("codex exec [--cd /tmp/worktree --dangerously-bypass-approvals-and-sandbox prompt]: exit status 1"),
 		},
 	}
 	env := &environment.Environment{OS: "darwin", Runner: runner}
@@ -218,16 +217,24 @@ func TestRunConflictResolutionSessionFailureCommentsOnIssue(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	it := &fakeIssueTracker{}
 	err := RunConflictResolutionSession(
 		context.Background(),
 		env,
 		store,
+		it,
 		state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"},
-		state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, IssueTitle: "Demo", IssueBody: "Preserve the requested behavior.", IssueURL: "https://github.com/owner/repo/issues/7", BaseBranch: "main", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7"},
-		backend.PullRequest{Number: 17, Title: "Demo PR", Body: "PR body", URL: "https://github.com/owner/repo/pull/17", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"},
+		session,
+		pr,
 	)
 	if err == nil {
 		t.Fatal("expected error")
+	}
+	if len(it.postedComments) != 1 {
+		t.Fatalf("expected 1 blocked comment, got %d", len(it.postedComments))
+	}
+	if !strings.Contains(it.postedComments[0].body, "Blocked") {
+		t.Fatalf("expected blocked comment, got %q", it.postedComments[0].body)
 	}
 }
 
@@ -237,18 +244,6 @@ func TestRunCIRemediationSessionFailureCommentsOnIssue(t *testing.T) {
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
 			"codex --version": "codex 0.114.0",
-			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
-				Stage:      "CI Remediation Blocked",
-				Emoji:      "🧯",
-				Percent:    92,
-				ETAMinutes: 10,
-				Items: []string{
-					"CI remediation for PR #17 on `vigilante/issue-7` did not complete automatically.",
-					"Cause class: `provider_runtime_error`.",
-					"Next step: fix the blocker, then run `vigilante resume --repo owner/repo --issue 7` or request resume from GitHub.",
-				},
-				Tagline: "Stop the loop before it turns into noise.",
-			}): "ok",
 		},
 		Errors: map[string]error{
 			"codex exec --cd /tmp/worktree --dangerously-bypass-approvals-and-sandbox Use the `vigilante-issue-implementation` skill for this task.\nRepository: owner/repo\nLocal repository path: /tmp/repo\nIssue: #7 - Demo\nIssue URL: https://github.com/owner/repo/issues/7\nPull Request: #17\nPull Request URL: https://github.com/owner/repo/pull/17\nWorktree path: /tmp/worktree\nBranch: vigilante/issue-7\nCI remediation context: GitHub reported failing required checks for this existing PR.\nFailing check: test (state=COMPLETED conclusion=FAILURE)\nInvestigate the failing CI checks, reproduce the problem locally when practical, and make the minimal code or configuration fix needed to get the PR green again.\nAny commit, amend, rebase rewrite, or conflict-resolution commit must preserve the user's existing git author, committer, and signing configuration. Commit on behalf of the user and do not overwrite `git config` with a coding-agent identity.\nDo not add `Co-authored by:` trailers or any other agent attribution for Codex, Claude, Gemini, or similar coding-agent identities.\nUse `gh issue comment` for progress updates and blockers, push any successful fix to the existing PR branch, and do not open a new pull request.\nIf GitHub exposes a failing check summary or log URL during your investigation, use it. At minimum, work from the failing check identifiers listed above.\nIf you cannot fix the failure safely, leave a concise GitHub comment explaining the blocker and exit with a non-zero status so Vigilante can stop and hand off to a human.\nKeep the changes minimal and focused on restoring CI for the existing pull request.": errors.New("codex exec [--cd /tmp/worktree --dangerously-bypass-approvals-and-sandbox prompt]: exit status 1"),
@@ -260,10 +255,12 @@ func TestRunCIRemediationSessionFailureCommentsOnIssue(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	it := &fakeIssueTracker{}
 	err := RunCIRemediationSession(
 		context.Background(),
 		env,
 		store,
+		it,
 		state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"},
 		state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, IssueTitle: "Demo", IssueURL: "https://github.com/owner/repo/issues/7", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7"},
 		backend.PullRequest{Number: 17, URL: "https://github.com/owner/repo/pull/17"},
@@ -271,6 +268,12 @@ func TestRunCIRemediationSessionFailureCommentsOnIssue(t *testing.T) {
 	)
 	if err == nil {
 		t.Fatal("expected error")
+	}
+	if len(it.postedComments) != 1 {
+		t.Fatalf("expected 1 blocked comment, got %d", len(it.postedComments))
+	}
+	if !strings.Contains(it.postedComments[0].body, "CI Remediation Blocked") {
+		t.Fatalf("expected CI remediation blocked comment, got %q", it.postedComments[0].body)
 	}
 }
 
@@ -280,19 +283,6 @@ func TestRunIssueSessionSuccessWithClaudeProvider(t *testing.T) {
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
 			"claude --version": "Claude Code 2.1.3",
-			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
-				Stage:      "Vigilante Session Start",
-				Emoji:      "🧢",
-				Percent:    20,
-				ETAMinutes: 25,
-				Items: []string{
-					"Vigilante launched this implementation session in `/tmp/worktree`.",
-					"Branch: `vigilante/issue-7`.",
-					"Current stage: handing the issue off to the configured coding agent (`Claude Code`) for investigation and implementation.",
-					"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
-				},
-				Tagline: "Make it simple, but significant.",
-			}): "ok",
 			testutil.Key("claude", "--print", "--dangerously-skip-permissions", skill.BuildIssuePreflightPrompt(
 				state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"},
 				backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
@@ -311,8 +301,9 @@ func TestRunIssueSessionSuccessWithClaudeProvider(t *testing.T) {
 	if err := store.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
+	it := &fakeIssueTracker{}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: "claude", Status: state.SessionStatusRunning}
-	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, it, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
 	}
@@ -324,19 +315,6 @@ func TestRunIssueSessionSuccessWithGeminiProvider(t *testing.T) {
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
 			"gemini --version": "gemini 0.34.0",
-			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
-				Stage:      "Vigilante Session Start",
-				Emoji:      "🧢",
-				Percent:    20,
-				ETAMinutes: 25,
-				Items: []string{
-					"Vigilante launched this implementation session in `/tmp/worktree`.",
-					"Branch: `vigilante/issue-7`.",
-					"Current stage: handing the issue off to the configured coding agent (`Gemini CLI`) for investigation and implementation.",
-					"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
-				},
-				Tagline: "Make it simple, but significant.",
-			}): "ok",
 			testutil.Key("gemini", "--prompt", skill.BuildIssuePreflightPrompt(
 				state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"},
 				backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
@@ -355,8 +333,9 @@ func TestRunIssueSessionSuccessWithGeminiProvider(t *testing.T) {
 	if err := store.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
+	it := &fakeIssueTracker{}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: "gemini", Status: state.SessionStatusRunning}
-	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, it, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
 	}
@@ -380,19 +359,6 @@ func TestRunIssueSessionUsesMonorepoSkillWhenClassified(t *testing.T) {
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
 			"codex --version": "codex 0.114.0",
-			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
-				Stage:      "Vigilante Session Start",
-				Emoji:      "🧢",
-				Percent:    20,
-				ETAMinutes: 25,
-				Items: []string{
-					"Vigilante launched this implementation session in `/tmp/worktree`.",
-					"Branch: `vigilante/issue-7`.",
-					"Current stage: handing the issue off to the configured coding agent (`Codex`) for investigation and implementation.",
-					"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
-				},
-				Tagline: "Make it simple, but significant.",
-			}): "ok",
 			preflightPromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", "vigilante/issue-7"): "baseline ok",
 			testutil.Key("codex", "exec", "--cd", "/tmp/worktree", "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePrompt(
 				target,
@@ -406,9 +372,10 @@ func TestRunIssueSessionUsesMonorepoSkillWhenClassified(t *testing.T) {
 	if err := store.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
+	it := &fakeIssueTracker{}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
 
-	got := RunIssueSession(context.Background(), env, store, target, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, it, target, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
@@ -433,19 +400,6 @@ func TestRunIssueSessionUsesNxSkillWhenClassified(t *testing.T) {
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
 			"codex --version": "codex 0.114.0",
-			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
-				Stage:      "Vigilante Session Start",
-				Emoji:      "🧢",
-				Percent:    20,
-				ETAMinutes: 25,
-				Items: []string{
-					"Vigilante launched this implementation session in `/tmp/worktree`.",
-					"Branch: `vigilante/issue-7`.",
-					"Current stage: handing the issue off to the configured coding agent (`Codex`) for investigation and implementation.",
-					"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
-				},
-				Tagline: "Make it simple, but significant.",
-			}): "ok",
 			preflightPromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", "vigilante/issue-7"): "baseline ok",
 			testutil.Key("codex", "exec", "--cd", "/tmp/worktree", "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePrompt(
 				target,
@@ -459,9 +413,10 @@ func TestRunIssueSessionUsesNxSkillWhenClassified(t *testing.T) {
 	if err := store.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
+	it := &fakeIssueTracker{}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
 
-	got := RunIssueSession(context.Background(), env, store, target, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, it, target, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
@@ -486,19 +441,6 @@ func TestRunIssueSessionUsesRushMonorepoSkillWhenClassified(t *testing.T) {
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
 			"codex --version": "codex 0.114.0",
-			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
-				Stage:      "Vigilante Session Start",
-				Emoji:      "🧢",
-				Percent:    20,
-				ETAMinutes: 25,
-				Items: []string{
-					"Vigilante launched this implementation session in `/tmp/worktree`.",
-					"Branch: `vigilante/issue-7`.",
-					"Current stage: handing the issue off to the configured coding agent (`Codex`) for investigation and implementation.",
-					"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
-				},
-				Tagline: "Make it simple, but significant.",
-			}): "ok",
 			preflightPromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", "vigilante/issue-7"): "baseline ok",
 			testutil.Key("codex", "exec", "--cd", "/tmp/worktree", "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePrompt(
 				target,
@@ -512,9 +454,10 @@ func TestRunIssueSessionUsesRushMonorepoSkillWhenClassified(t *testing.T) {
 	if err := store.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
+	it := &fakeIssueTracker{}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
 
-	got := RunIssueSession(context.Background(), env, store, target, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, it, target, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
@@ -534,9 +477,10 @@ func TestRunIssueSessionFailsWhenProviderVersionIsIncompatible(t *testing.T) {
 	if err := store.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
+	it := &fakeIssueTracker{}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
 
-	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, it, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 
 	if got.Status != state.SessionStatusFailed {
 		t.Fatalf("unexpected status: %#v", got)

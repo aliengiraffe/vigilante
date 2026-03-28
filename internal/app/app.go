@@ -2043,7 +2043,7 @@ func (a *App) launchIssueSession(ctx context.Context, target state.WatchTarget, 
 		defer a.sessionWG.Done()
 		defer a.clearSessionCancel(key)
 
-		result := issuerunner.RunIssueSession(runCtx, a.env, a.state, target, issue, session)
+		result := issuerunner.RunIssueSession(runCtx, a.env, a.state, a.issueTrackerForTarget(target), target, issue, session)
 
 		a.sessionMu.Lock()
 		defer a.sessionMu.Unlock()
@@ -2232,7 +2232,7 @@ func (a *App) dispatchConflictResolution(ctx context.Context, session *state.Ses
 	}
 
 	target := watchTargetForSession(*session, a.fallbackWatchTargetForSession(*session))
-	if conflictErr := issuerunner.RunConflictResolutionSession(ctx, a.env, a.state, target, *session, pr); conflictErr != nil {
+	if conflictErr := issuerunner.RunConflictResolutionSession(ctx, a.env, a.state, a.issueTrackerForSession(*session), target, *session, pr); conflictErr != nil {
 		return conflictErr
 	}
 
@@ -2411,7 +2411,7 @@ func (a *App) handleFailingPullRequestChecks(ctx context.Context, session *state
 	a.commentOnIssueBestEffort(ctx, session.BackendID, session.Repo, session.IssueNumber, startBody, "ci remediation start")
 
 	target := watchTargetForSession(*session, a.fallbackWatchTargetForSession(*session))
-	if err := issuerunner.RunCIRemediationSession(ctx, a.env, a.state, target, *session, pr, failingChecks); err != nil {
+	if err := issuerunner.RunCIRemediationSession(ctx, a.env, a.state, a.issueTrackerForSession(*session), target, *session, pr, failingChecks); err != nil {
 		blocked := classifyBlockedReason("ci_remediation", "coding agent remediation", err)
 		markSessionBlocked(session, "ci_remediation", blocked, a.clock())
 		session.LastMaintenanceError = err.Error()
@@ -3487,7 +3487,7 @@ func (a *App) resumeBlockedConflictResolution(ctx context.Context, session *stat
 		session.PullRequestBaseBranch = strings.TrimSpace(pr.BaseRefName)
 	}
 	target := watchTargetForSession(*session, a.fallbackWatchTargetForSession(*session))
-	if err := issuerunner.RunConflictResolutionSession(ctx, a.env, a.state, target, *session, *pr); err != nil {
+	if err := issuerunner.RunConflictResolutionSession(ctx, a.env, a.state, a.issueTrackerForSession(*session), target, *session, *pr); err != nil {
 		return err
 	}
 	session.Status = state.SessionStatusSuccess
