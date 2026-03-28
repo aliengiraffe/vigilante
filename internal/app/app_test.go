@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nicobistolfi/vigilante/internal/backend"
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
 	"github.com/nicobistolfi/vigilante/internal/repo"
@@ -87,7 +88,7 @@ func TestMaintainOpenPullRequestPropagatesAccessLogContext(t *testing.T) {
 		Branch:       "vigilante/issue-7",
 		WorktreePath: "/tmp/worktree",
 	}
-	pr := ghcli.PullRequest{
+	pr := backend.PullRequest{
 		Number:      12,
 		State:       "OPEN",
 		BaseRefName: "main",
@@ -288,7 +289,7 @@ func TestDesiredSessionLabels(t *testing.T) {
 	tests := []struct {
 		name             string
 		session          state.Session
-		pr               *ghcli.PullRequest
+		pr               *backend.PullRequest
 		wantState        string
 		wantIntervention string
 	}{
@@ -325,11 +326,11 @@ func TestDesiredSessionLabels(t *testing.T) {
 		{
 			name:    "success awaiting validation",
 			session: state.Session{Status: state.SessionStatusSuccess},
-			pr: &ghcli.PullRequest{
+			pr: &backend.PullRequest{
 				Number:           17,
 				ReviewDecision:   "APPROVED",
 				MergeStateStatus: "CLEAN",
-				StatusCheckRollup: []ghcli.StatusCheckRoll{
+				StatusChecks: []backend.StatusCheck{
 					{State: "COMPLETED", Conclusion: "SUCCESS"},
 				},
 			},
@@ -518,22 +519,18 @@ func TestProcessGitHubIterationRequestsForTargetDispatchesAssigneeComment(t *tes
 	}
 	app.repoLabelsProvisionedOnce["owner/repo"] = true
 
-	iterationContext := buildIterationPromptContext([]ghcli.IssueComment{
+	iterationContext := buildIterationPromptContext([]backend.Comment{
 		{
 			ID:        101,
 			Body:      "@vigilanteai first follow-up",
 			CreatedAt: now.Add(-2 * time.Minute),
-			User: struct {
-				Login string `json:"login"`
-			}{Login: "nicobistolfi"},
+			Author:    "nicobistolfi",
 		},
 		{
 			ID:        102,
 			Body:      "@vigilanteai tighten the validation path",
 			CreatedAt: now.Add(-1 * time.Minute),
-			User: struct {
-				Login string `json:"login"`
-			}{Login: "nicobistolfi"},
+			Author:    "nicobistolfi",
 		},
 	})
 	startSession := state.Session{
@@ -763,14 +760,12 @@ func TestProcessGitHubIterationRequestsForTargetReusesExistingWorktree(t *testin
 	}
 	app.repoLabelsProvisionedOnce["owner/repo"] = true
 
-	iterationContext := buildIterationPromptContext([]ghcli.IssueComment{
+	iterationContext := buildIterationPromptContext([]backend.Comment{
 		{
 			ID:        102,
 			Body:      "@vigilanteai continue from the existing worktree",
 			CreatedAt: now.Add(-1 * time.Minute),
-			User: struct {
-				Login string `json:"login"`
-			}{Login: "nicobistolfi"},
+			Author:    "nicobistolfi",
 		},
 	})
 	startSession := state.Session{
@@ -885,18 +880,16 @@ func TestDispatchIssueSessionRejectsUnsafeExistingIterationWorktree(t *testing.T
 		},
 	}
 
-	comment := &ghcli.IssueComment{
+	comment := &backend.Comment{
 		ID:        101,
 		Body:      "@vigilanteai continue",
 		CreatedAt: now,
-		User: struct {
-			Login string `json:"login"`
-		}{Login: "nicobistolfi"},
+		Author:    "nicobistolfi",
 	}
 	session, err := app.dispatchIssueSession(
 		context.Background(),
 		state.WatchTarget{Path: repoPath, Repo: "owner/repo", Branch: "main"},
-		ghcli.Issue{Number: 1, Title: "first", URL: "https://github.com/owner/repo/issues/1"},
+		backend.WorkItem{Number: 1, Title: "first", URL: "https://github.com/owner/repo/issues/1"},
 		"codex",
 		state.Session{
 			RepoPath:     repoPath,
@@ -4418,8 +4411,8 @@ func TestScanOnceResumesAfterGitHubRateLimitResetWindowPasses(t *testing.T) {
 	app.githubRateLimitState = githubRateLimitState{
 		Active:  true,
 		ResetAt: resetAt,
-		Snapshot: ghcli.RateLimitSnapshot{
-			Core: ghcli.RateLimitResource{Limit: 5000, Remaining: 95, ResetAt: resetAt},
+		Snapshot: backend.RateLimitSnapshot{
+			Core: backend.RateLimitResource{Limit: 5000, Remaining: 95, ResetAt: resetAt},
 		},
 	}
 	app.env.Runner = testutil.FakeRunner{
@@ -4465,8 +4458,8 @@ func TestScanOnceClearsStaleGitHubRateLimitPauseWhenLiveQuotaRecovered(t *testin
 	app.githubRateLimitState = githubRateLimitState{
 		Active:  true,
 		ResetAt: cachedResetAt,
-		Snapshot: ghcli.RateLimitSnapshot{
-			Core: ghcli.RateLimitResource{Limit: 5000, Remaining: 0, ResetAt: cachedResetAt},
+		Snapshot: backend.RateLimitSnapshot{
+			Core: backend.RateLimitResource{Limit: 5000, Remaining: 0, ResetAt: cachedResetAt},
 		},
 	}
 	app.env.Runner = testutil.FakeRunner{
@@ -5133,7 +5126,7 @@ func TestScanOnceBlocksFailedIssueDispatchAndContinuesToNextIssue(t *testing.T) 
 	app.stderr = testutil.IODiscard{}
 	blockedSession := blockedIssueSessionForDispatchFailure(
 		state.WatchTarget{Path: repoPath, Repo: "owner/repo"},
-		ghcli.Issue{Number: 1, Title: "first", URL: "https://github.com/owner/repo/issues/1"},
+		backend.WorkItem{Number: 1, Title: "first", URL: "https://github.com/owner/repo/issues/1"},
 		"codex",
 		errors.New("exit status 1: worktree add failed"),
 		time.Date(2026, 3, 13, 20, 0, 0, 0, time.UTC),
@@ -5330,7 +5323,7 @@ func TestScanOnceSuppressesDuplicateDispatchFailureComment(t *testing.T) {
 
 	session := blockedIssueSessionForDispatchFailure(
 		state.WatchTarget{Path: repoPath, Repo: "owner/repo"},
-		ghcli.Issue{Number: 1, Title: "first", URL: "https://github.com/owner/repo/issues/1"},
+		backend.WorkItem{Number: 1, Title: "first", URL: "https://github.com/owner/repo/issues/1"},
 		"codex",
 		errors.New("worktree already exists for issue #1"),
 		now,
@@ -6372,7 +6365,7 @@ func TestScanOnceFailingChecksTriggerCIRemediation(t *testing.T) {
 			WorktreePath: filepath.Join("/tmp/repo", ".worktrees", "vigilante", "issue-1"),
 			Branch:       "vigilante/issue-1",
 			Provider:     "codex",
-		}, ghcli.PullRequest{Number: 31, URL: "https://github.com/owner/repo/pull/31"}, []ghcli.StatusCheckRoll{{Context: "test", State: "COMPLETED", Conclusion: "FAILURE"}}): "fixed and pushed",
+		}, backend.PullRequest{Number: 31, URL: "https://github.com/owner/repo/pull/31"}, []backend.StatusCheck{{Context: "test", State: "COMPLETED", Conclusion: "FAILURE"}}): "fixed and pushed",
 		"gh api user --jq .login": "nicobistolfi\n",
 		"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
 	})
@@ -6424,7 +6417,7 @@ func TestScanOnceRepeatedIdenticalFailingChecksBlockForManualReview(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessions[0].LastCIRemediationFingerprint = ciFailureFingerprint(31, []ghcli.StatusCheckRoll{{Context: "test", State: "COMPLETED", Conclusion: "FAILURE"}})
+	sessions[0].LastCIRemediationFingerprint = ciFailureFingerprint(31, []backend.StatusCheck{{Context: "test", State: "COMPLETED", Conclusion: "FAILURE"}})
 	sessions[0].LastCIRemediationAttemptedAt = "2026-03-17T19:30:00Z"
 	if err := app.state.SaveSessions(sessions); err != nil {
 		t.Fatal(err)
@@ -6549,7 +6542,7 @@ func automergePRDetailsJSON(label string, mergeable string, mergeState string, r
 func TestRequiredChecksState(t *testing.T) {
 	tests := []struct {
 		name   string
-		checks []ghcli.StatusCheckRoll
+		checks []backend.StatusCheck
 		want   string
 	}{
 		{
@@ -6558,63 +6551,63 @@ func TestRequiredChecksState(t *testing.T) {
 		},
 		{
 			name: "queued checks are pending",
-			checks: []ghcli.StatusCheckRoll{
+			checks: []backend.StatusCheck{
 				{Context: "test", State: "QUEUED"},
 			},
 			want: "pending",
 		},
 		{
 			name: "pending checks are pending",
-			checks: []ghcli.StatusCheckRoll{
+			checks: []backend.StatusCheck{
 				{Context: "test", State: "PENDING"},
 			},
 			want: "pending",
 		},
 		{
 			name: "in progress checks are pending",
-			checks: []ghcli.StatusCheckRoll{
+			checks: []backend.StatusCheck{
 				{Context: "test", State: "IN_PROGRESS"},
 			},
 			want: "pending",
 		},
 		{
 			name: "successful completed checks pass",
-			checks: []ghcli.StatusCheckRoll{
+			checks: []backend.StatusCheck{
 				{Context: "test", State: "COMPLETED", Conclusion: "SUCCESS"},
 			},
 			want: "passing",
 		},
 		{
 			name: "failed completed checks fail",
-			checks: []ghcli.StatusCheckRoll{
+			checks: []backend.StatusCheck{
 				{Context: "test", State: "COMPLETED", Conclusion: "FAILURE"},
 			},
 			want: "failing",
 		},
 		{
 			name: "cancelled completed checks fail when nothing is still running",
-			checks: []ghcli.StatusCheckRoll{
+			checks: []backend.StatusCheck{
 				{Context: "test", State: "COMPLETED", Conclusion: "CANCELLED"},
 			},
 			want: "failing",
 		},
 		{
 			name: "timed out completed checks fail when nothing is still running",
-			checks: []ghcli.StatusCheckRoll{
+			checks: []backend.StatusCheck{
 				{Context: "test", State: "COMPLETED", Conclusion: "TIMED_OUT"},
 			},
 			want: "failing",
 		},
 		{
 			name: "action required completed checks fail when nothing is still running",
-			checks: []ghcli.StatusCheckRoll{
+			checks: []backend.StatusCheck{
 				{Context: "test", State: "COMPLETED", Conclusion: "ACTION_REQUIRED"},
 			},
 			want: "failing",
 		},
 		{
 			name: "active rerun takes precedence over cancelled prior attempt",
-			checks: []ghcli.StatusCheckRoll{
+			checks: []backend.StatusCheck{
 				{Context: "test", State: "COMPLETED", Conclusion: "CANCELLED"},
 				{Context: "test", State: "IN_PROGRESS"},
 			},
@@ -7237,7 +7230,7 @@ func TestScanOnceRoutesDirtyPullRequestToConflictResolution(t *testing.T) {
 			WorktreePath: filepath.Join("/tmp/repo", ".worktrees", "vigilante", "issue-1"),
 			Branch:       "vigilante/issue-1",
 			Provider:     "codex",
-		}, ghcli.PullRequest{Number: 31, Title: "Test PR", Body: "Test PR body", URL: "https://github.com/owner/repo/pull/31", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"}): "resolved and pushed",
+		}, backend.PullRequest{Number: 31, Title: "Test PR", Body: "Test PR body", URL: "https://github.com/owner/repo/pull/31", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"}): "resolved and pushed",
 		"gh api user --jq .login": "nicobistolfi\n",
 		"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
 	})
@@ -7277,16 +7270,16 @@ func TestScanOnceSkipsDuplicateConflictResolutionDispatchWhenPRFingerprintIsUnch
 		t.Fatal(err)
 	}
 	sessions[0].BaseBranch = "main"
-	updatePullRequestMaintenanceSnapshot(&sessions[0], ghcli.PullRequest{
-		Number:            31,
-		Title:             "Test PR",
-		Body:              "Test PR body",
-		URL:               "https://github.com/owner/repo/pull/31",
-		State:             "OPEN",
-		Mergeable:         "CONFLICTING",
-		MergeStateStatus:  "DIRTY",
-		ReviewDecision:    "APPROVED",
-		StatusCheckRollup: []ghcli.StatusCheckRoll{{Context: "test", State: "COMPLETED", Conclusion: "SUCCESS"}},
+	updatePullRequestMaintenanceSnapshot(&sessions[0], backend.PullRequest{
+		Number:           31,
+		Title:            "Test PR",
+		Body:             "Test PR body",
+		URL:              "https://github.com/owner/repo/pull/31",
+		State:            "OPEN",
+		Mergeable:        "CONFLICTING",
+		MergeStateStatus: "DIRTY",
+		ReviewDecision:   "APPROVED",
+		StatusChecks:     []backend.StatusCheck{{Context: "test", State: "COMPLETED", Conclusion: "SUCCESS"}},
 	})
 	sessions[0].LastMaintenanceError = "conflict resolution dispatched for PR #31; waiting for updated branch state"
 	if err := app.state.SaveSessions(sessions); err != nil {
@@ -7652,7 +7645,7 @@ func mergeStringMaps(maps ...map[string]string) map[string]string {
 func issuePromptCommand(worktreePath string, repo string, repoPath string, issueNumber int, title string, issueURL string, branch string) string {
 	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePrompt(
 		state.WatchTarget{Path: repoPath, Repo: repo},
-		ghcli.Issue{Number: issueNumber, Title: title, URL: issueURL},
+		backend.WorkItem{Number: issueNumber, Title: title, URL: issueURL},
 		state.Session{WorktreePath: worktreePath, Branch: branch, Provider: "codex"},
 	))
 }
@@ -7660,7 +7653,7 @@ func issuePromptCommand(worktreePath string, repo string, repoPath string, issue
 func issuePromptCommandForSession(worktreePath string, repo string, repoPath string, issueNumber int, title string, issueURL string, session state.Session) string {
 	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePrompt(
 		state.WatchTarget{Path: repoPath, Repo: repo},
-		ghcli.Issue{Number: issueNumber, Title: title, URL: issueURL},
+		backend.WorkItem{Number: issueNumber, Title: title, URL: issueURL},
 		session,
 	))
 }
@@ -7671,7 +7664,7 @@ func issuePromptCommandForProvider(providerID string, worktreePath string, repo 
 		return testutil.Key("gemini", "--prompt", skill.BuildIssuePromptForRuntime(
 			skill.RuntimeGemini,
 			state.WatchTarget{Path: repoPath, Repo: repo},
-			ghcli.Issue{Number: issueNumber, Title: title, URL: issueURL},
+			backend.WorkItem{Number: issueNumber, Title: title, URL: issueURL},
 			state.Session{WorktreePath: worktreePath, Branch: branch, Provider: "gemini"},
 		), "--yolo")
 	default:
@@ -7686,7 +7679,7 @@ func preflightPromptCommand(worktreePath string, repo string, repoPath string, i
 func preflightPromptCommandForSession(worktreePath string, repo string, repoPath string, issueNumber int, title string, issueURL string, session state.Session) string {
 	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePreflightPrompt(
 		state.WatchTarget{Path: repoPath, Repo: repo},
-		ghcli.Issue{Number: issueNumber, Title: title, URL: issueURL},
+		backend.WorkItem{Number: issueNumber, Title: title, URL: issueURL},
 		session,
 	))
 }
@@ -7706,7 +7699,7 @@ func resumeDiagnosticSummaryCommandForProvider(worktreePath string, providerID s
 	}
 }
 
-func ciRemediationPromptCommand(worktreePath string, repo string, repoPath string, session state.Session, pr ghcli.PullRequest, checks []ghcli.StatusCheckRoll) string {
+func ciRemediationPromptCommand(worktreePath string, repo string, repoPath string, session state.Session, pr backend.PullRequest, checks []backend.StatusCheck) string {
 	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildCIRemediationPrompt(
 		state.WatchTarget{Path: repoPath, Repo: repo},
 		session,
@@ -7715,7 +7708,7 @@ func ciRemediationPromptCommand(worktreePath string, repo string, repoPath strin
 	))
 }
 
-func conflictResolutionPromptCommand(worktreePath string, repo string, repoPath string, session state.Session, pr ghcli.PullRequest) string {
+func conflictResolutionPromptCommand(worktreePath string, repo string, repoPath string, session state.Session, pr backend.PullRequest) string {
 	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildConflictResolutionPrompt(
 		state.WatchTarget{Path: repoPath, Repo: repo, Branch: session.BaseBranch},
 		session,

@@ -10,9 +10,11 @@
 [![License](https://img.shields.io/github/license/aliengiraffe/vigilante)](https://github.com/aliengiraffe/vigilante/blob/main/LICENSE)
 [![Release Workflow](https://img.shields.io/github/actions/workflow/status/aliengiraffe/vigilante/release.yml?label=release)](https://github.com/aliengiraffe/vigilante/actions/workflows/release.yml)
 
-`vigilante` is a GitHub-native control plane for autonomous software delivery. It watches repositories, selects executable issues, prepares isolated implementation environments, dispatches headless coding agents, keeps GitHub updated with progress, and maintains the delivery loop around pull requests.
+`vigilante` is an extensible control plane for autonomous software delivery. It watches repositories, selects executable work items, prepares isolated implementation environments, dispatches headless coding agents, keeps project-management systems updated with progress, and maintains the delivery loop around pull requests.
 
 It is a Go CLI and background service that runs locally on top of the tools teams already use: `git`, `gh`, and a supported coding-agent CLI such as `codex`, `claude`, or `gemini`. The current target platforms are macOS and Ubuntu.
+
+Vigilante's architecture separates **project-management backends** (where work items come from) from **coding-agent providers** (what generates the code). GitHub is the first and currently only fully implemented backend; the abstraction layer is designed so additional backends such as Linear or Jira can be added without restructuring the core dispatch and session lifecycle.
 
 Want to see that workflow on this repository? Browse [Vigilante's closed issues](https://github.com/aliengiraffe/vigilante/issues?q=is%3Aissue%20state%3Aclosed) for concrete examples of the project operating on its own codebase and improving itself over time.
 
@@ -20,23 +22,23 @@ Want to see that workflow on this repository? Browse [Vigilante's closed issues]
 
 `vigilante` is the orchestration layer around coding agents. It is responsible for:
 
-- treating GitHub issues as the work queue
+- treating project-management work items (currently GitHub issues) as the work queue
 - selecting eligible work based on labels, assignees, and repository limits
 - creating dedicated git worktrees and issue branches for each session
 - choosing the right execution playbook from repository classification
 - launching supported coding-agent CLIs under a consistent lifecycle
-- posting execution state back to GitHub through issue comments and PR tracking
+- posting execution state back to the project-management backend through comments and PR tracking
 - recovering, resuming, redispatching, and cleaning up local sessions safely
 
 ## What Vigilante Is Not
 
-`vigilante` is not the code-generating model itself. Tools such as Codex, Claude Code, and Gemini are the execution engines that read prompts, edit code, run validation, and prepare pull requests. Keeping orchestration separate from code generation lets Vigilante stay provider-neutral while owning scheduling, worktree isolation, GitHub coordination, and PR maintenance.
+`vigilante` is not the code-generating model itself. Tools such as Codex, Claude Code, and Gemini are the execution engines that read prompts, edit code, run validation, and prepare pull requests. Keeping orchestration separate from code generation lets Vigilante stay provider-neutral and backend-neutral while owning scheduling, worktree isolation, project-management coordination, and PR maintenance.
 
 ## Why Use Vigilante
 
 Vigilante turns a repository checkout into a controlled autonomous worker instead of a loose collection of scripts.
 
-- GitHub stays the operator surface for issue intake, progress, resume commands, cleanup, and PR visibility.
+- The project-management backend (currently GitHub) stays the operator surface for issue intake, progress, resume commands, cleanup, and PR visibility.
 - Each issue runs in an isolated worktree, which keeps the main checkout stable and makes unattended execution safer.
 - Repository-aware skills let the same control plane adapt to standard repositories, monorepos, and supported build systems.
 - Session state persists locally, so Vigilante can recover from failures, clean up stalled work, and avoid duplicate dispatch.
@@ -99,6 +101,30 @@ Once a folder is registered, `vigilante` should:
 In the current implementation, that worker loop already covers repository onboarding, issue intake, isolated worktrees, provider orchestration, repo-aware execution skills, local session recovery, and part of the pull request maintenance path. CI/CD promotion and richer deployment control are planned next-stage capabilities.
 
 Vigilante also monitors GitHub REST API quota through `gh api /rate_limit` before GitHub-heavy orchestration work. When the REST core bucket drops below `100` remaining requests, Vigilante posts one delay notice per affected issue for that reset window, pauses additional GitHub-backed work, and resumes automatically after GitHub's reported reset time.
+
+## Architecture: Project-Management Backends
+
+Vigilante separates the **project-management backend** (the system that hosts work items and comments) from the **coding-agent provider** (the CLI that generates code). The orchestration loop depends on a `Backend` interface (`internal/backend`) rather than calling GitHub APIs directly.
+
+The `Backend` interface covers the minimum operations the dispatch loop needs:
+
+- resolving assignees
+- listing and fetching work items
+- reading and posting comments
+- detecting operator commands (`@vigilanteai resume`, `cleanup`, `recreate`)
+- creating and closing work items
+
+Optional capability interfaces extend the core for backends that support additional features:
+
+| Capability | Description | GitHub |
+|---|---|---|
+| `LabelManager` | Sync labels on work items and projects | ✅ |
+| `PullRequestManager` | Find, inspect, merge, and close pull requests | ✅ |
+| `RateLimitChecker` | Expose API quota information for proactive throttling | ✅ |
+
+GitHub is the only fully implemented backend today. Adding a new backend (e.g. Linear or Jira) requires implementing the `Backend` interface and registering it through `backend.Register()`. The orchestration loop checks capability interfaces at runtime so backends that do not support labels, PRs, or rate limits degrade gracefully.
+
+Watch targets and sessions carry a `backend_id` field (defaulting to `"github"` for backward compatibility) so the system can route each target to the correct backend implementation.
 
 ## Telemetry
 

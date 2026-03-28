@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	ghcli "github.com/nicobistolfi/vigilante/internal/github"
+	"github.com/nicobistolfi/vigilante/internal/backend"
 	"github.com/nicobistolfi/vigilante/internal/state"
 )
 
@@ -21,21 +21,21 @@ type Invocation struct {
 
 type IssueTask struct {
 	Target  state.WatchTarget
-	Issue   ghcli.Issue
+	Issue   backend.WorkItem
 	Session state.Session
 }
 
 type ConflictTask struct {
 	Target  state.WatchTarget
 	Session state.Session
-	PR      ghcli.PullRequest
+	PR      backend.PullRequest
 }
 
 type CIRemediationTask struct {
 	Target        state.WatchTarget
 	Session       state.Session
-	PR            ghcli.PullRequest
-	FailingChecks []ghcli.StatusCheckRoll
+	PR            backend.PullRequest
+	FailingChecks []backend.StatusCheck
 }
 
 type Provider interface {
@@ -64,21 +64,8 @@ func RegisteredIDs() []string {
 	return ids
 }
 
-func ResolveIssueLabel(labels []ghcli.Label) (string, error) {
-	matches := make([]string, 0, len(registry))
-	for _, providerID := range RegisteredIDs() {
-		if ghcli.HasAnyLabel(labels, providerID) {
-			matches = append(matches, providerID)
-		}
-	}
-	switch len(matches) {
-	case 0:
-		return "", nil
-	case 1:
-		return matches[0], nil
-	default:
-		return "", fmt.Errorf("multiple provider labels: %s", strings.Join(matches, ", "))
-	}
+func ResolveIssueLabel(labels []string) (string, error) {
+	return backend.ResolveIssueProviderLabel(labels, RegisteredIDs())
 }
 
 func Resolve(id string) (Provider, error) {
