@@ -81,15 +81,15 @@ var supportedCompletionShells = []string{"bash", "fish", "zsh"}
 var errHelpHandled = errors.New("help handled")
 
 type App struct {
-	stdin   io.Reader
-	stdout  io.Writer
-	stderr  io.Writer
-	state   *state.Store
-	logger  *slog.Logger
-	clock   func() time.Time
-	env          *environment.Environment
-	issueTracker backend.IssueTracker
-	repoHost     backend.RepoHost
+	stdin         io.Reader
+	stdout        io.Writer
+	stderr        io.Writer
+	state         *state.Store
+	logger        *slog.Logger
+	clock         func() time.Time
+	env           *environment.Environment
+	issueTrackers map[string]backend.IssueTracker
+	repoHosts     map[string]backend.RepoHost
 
 	sessionMu                 sync.Mutex
 	sessionWG                 sync.WaitGroup
@@ -152,6 +152,8 @@ func New() *App {
 		state:                     store,
 		logger:                    logger,
 		clock:                     time.Now().UTC,
+		issueTrackers:             make(map[string]backend.IssueTracker),
+		repoHosts:                 make(map[string]backend.RepoHost),
 		cancels:                   make(map[string]context.CancelFunc),
 		repoLabelsProvisionedOnce: make(map[string]bool),
 		proxyExec:                 runProxyBinary,
@@ -162,29 +164,91 @@ func New() *App {
 	}
 }
 
-// getBackend returns the issue tracker, lazily constructing it from the
-// current env.Runner so that tests which swap the runner after New() see
-// the change.
-func (a *App) getBackend() backend.IssueTracker {
-	if a.issueTracker == nil {
-		a.issueTracker = backend.NewGitHubBackend(a.env.Runner, a.logger)
+// issueTrackerFor returns the issue tracker for the given backend ID, lazily
+// constructing and caching it.  For "github" the app's logging runner is
+// used; for other IDs the global registry factory is consulted.
+func (a *App) issueTrackerFor(backendID string) backend.IssueTracker {
+	if backendID == "" {
+		backendID = backend.DefaultBackendID
 	}
-	return a.issueTracker
+	if a.issueTrackers == nil {
+		a.issueTrackers = make(map[string]backend.IssueTracker)
+	}
+	if it, ok := a.issueTrackers[backendID]; ok {
+		return it
+	}
+	var it backend.IssueTracker
+	if backendID == backend.GitHubBackendID {
+		it = backend.NewGitHubBackend(a.env.Runner, a.logger)
+	} else if factory, ok := backend.Lookup(backendID); ok {
+		it = factory(a.logger)
+	} else {
+		it = backend.NewGitHubBackend(a.env.Runner, a.logger)
+	}
+	a.issueTrackers[backendID] = it
+	return it
 }
 
-// getRepoHost returns the repo host, lazily constructing it from the current
-// env.Runner so that tests which swap the runner after New() see the change.
-func (a *App) getRepoHost() backend.RepoHost {
-	if a.repoHost == nil {
-		// If the issue tracker is a unified backend that also implements
-		// RepoHost, reuse it for backward compatibility.
-		if rh, ok := a.getBackend().(backend.RepoHost); ok {
-			a.repoHost = rh
-		} else {
-			a.repoHost = backend.NewGitHubRepoHost(a.env.Runner, a.logger)
-		}
+// repoHostFor returns the repo host for the given backend ID, lazily
+// constructing and caching it.
+func (a *App) repoHostFor(backendID string) backend.RepoHost {
+	if backendID == "" {
+		backendID = backend.DefaultRepoHostID
 	}
-	return a.repoHost
+	if a.repoHosts == nil {
+		a.repoHosts = make(map[string]backend.RepoHost)
+	}
+	if rh, ok := a.repoHosts[backendID]; ok {
+		return rh
+	}
+	var rh backend.RepoHost
+	if backendID == backend.GitHubBackendID {
+		// If the issue tracker for this ID also implements RepoHost, reuse
+		// it for backward compatibility (e.g. GitHubBackend).
+		if it, ok := a.issueTrackers[backendID]; ok {
+			if combined, ok := it.(backend.RepoHost); ok {
+				a.repoHosts[backendID] = combined
+				return combined
+			}
+		}
+		rh = backend.NewGitHubRepoHost(a.env.Runner, a.logger)
+	} else if factory, ok := backend.LookupRepoHost(backendID); ok {
+		rh = factory(a.logger)
+	} else {
+		rh = backend.NewGitHubRepoHost(a.env.Runner, a.logger)
+	}
+	a.repoHosts[backendID] = rh
+	return rh
+}
+
+// getBackend returns the default issue tracker for backward compatibility.
+func (a *App) getBackend() backend.IssueTracker {
+	return a.issueTrackerFor(backend.DefaultBackendID)
+}
+
+// getRepoHost returns the default repo host for backward compatibility.
+func (a *App) getRepoHost() backend.RepoHost {
+	return a.repoHostFor(backend.DefaultRepoHostID)
+}
+
+// issueTrackerForTarget returns the issue tracker configured for a watch target.
+func (a *App) issueTrackerForTarget(target state.WatchTarget) backend.IssueTracker {
+	return a.issueTrackerFor(target.EffectiveBackendID())
+}
+
+// repoHostForTarget returns the repo host configured for a watch target.
+func (a *App) repoHostForTarget(target state.WatchTarget) backend.RepoHost {
+	return a.repoHostFor(target.EffectiveRepoBackendID())
+}
+
+// issueTrackerForSession returns the issue tracker configured for a session.
+func (a *App) issueTrackerForSession(session state.Session) backend.IssueTracker {
+	return a.issueTrackerFor(session.EffectiveBackendID())
+}
+
+// repoHostForSession returns the repo host configured for a session.
+func (a *App) repoHostForSession(session state.Session) backend.RepoHost {
+	return a.repoHostFor(session.EffectiveRepoBackendID())
 }
 
 func (a *App) pullRequestManager() (backend.RepoHost, bool) {
@@ -227,27 +291,27 @@ func (a *App) loadIssueDetailsForScan(ctx context.Context, cache scanIssueDetail
 }
 
 func (a *App) loadPullRequestForSession(ctx context.Context, session state.Session) (*backend.PullRequest, error) {
-	prm, ok := a.pullRequestManager()
-	if !ok {
+	rh := a.repoHostForSession(session)
+	if rh == nil {
 		return nil, nil
 	}
 	if session.PullRequestNumber > 0 {
-		return prm.GetPullRequestDetails(ctx, session.Repo, session.PullRequestNumber)
+		return rh.GetPullRequestDetails(ctx, session.Repo, session.PullRequestNumber)
 	}
 	if strings.TrimSpace(session.Branch) == "" {
 		return nil, nil
 	}
-	pr, err := prm.FindPullRequestForBranch(ctx, session.Repo, session.Branch)
+	pr, err := rh.FindPullRequestForBranch(ctx, session.Repo, session.Branch)
 	if err != nil || pr == nil {
 		return pr, err
 	}
-	return prm.GetPullRequestDetails(ctx, session.Repo, pr.Number)
+	return rh.GetPullRequestDetails(ctx, session.Repo, pr.Number)
 }
 
 func (a *App) reconcileStaleRunningSession(ctx context.Context, session *state.Session, issueCache scanIssueDetailsCache, reason string, commentOnRecovery bool) (bool, error) {
 	issue, err := a.loadIssueDetailsForScan(ctx, issueCache, session.Repo, session.IssueNumber)
 	if err != nil {
-		if a.getBackend().IsWorkItemUnavailable(err) {
+		if a.issueTrackerForSession(*session).IsWorkItemUnavailable(err) {
 			a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
 			resetStaleAutoRestartState(session)
 			return true, nil
@@ -1384,9 +1448,10 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			startedCount += started
 			a.logger.Info("scan repo classified", "repo", target.Repo, "shape", target.Classification.Shape, "hints", len(target.Classification.ProcessHints.WorkspaceConfigFiles))
 			a.logger.Info("scan repo start", "repo", target.Repo, "path", target.Path, "max_parallel", target.MaxParallel)
+			targetIssueTracker := a.issueTrackerForTarget(*target)
 			resolvedAssignee, ok := resolvedAssignees[target.Assignee]
 			if !ok {
-				resolvedAssignee, err = a.getBackend().ResolveAssignee(targetCtx, target.Assignee)
+				resolvedAssignee, err = targetIssueTracker.ResolveAssignee(targetCtx, target.Assignee)
 				if err == nil {
 					resolvedAssignees[target.Assignee] = resolvedAssignee
 				}
@@ -1397,7 +1462,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				fmt.Fprintf(a.stdout, "repo: %s scan failed: %s\n", target.Repo, summarizeText(err.Error()))
 				continue
 			}
-			items, err := a.getBackend().ListWorkItems(targetCtx, target.Repo, resolvedAssignee)
+			items, err := targetIssueTracker.ListWorkItems(targetCtx, target.Repo, resolvedAssignee)
 			target.LastScanAt = a.clock().Format(time.RFC3339)
 			if err != nil {
 				a.logger.Error("scan repo issues failed", "repo", target.Repo, "err", err)
@@ -1498,6 +1563,8 @@ func (a *App) ScanOnce(ctx context.Context) error {
 					RepoPath:           target.Path,
 					Repo:               target.Repo,
 					Provider:           selectedProvider,
+					BackendID:          target.EffectiveBackendID(),
+					RepoBackendID:      target.EffectiveRepoBackendID(),
 					IssueNumber:        next.Number,
 					IssueTitle:         next.Title,
 					IssueURL:           next.URL,
@@ -1849,11 +1916,11 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 			continue
 		}
 
-		prm, prmOK := a.pullRequestManager()
-		if !prmOK {
+		sessionRH := a.repoHostForSession(*session)
+		if sessionRH == nil {
 			continue
 		}
-		pr, err := prm.FindPullRequestForBranch(sessionCtx, session.Repo, session.Branch)
+		pr, err := sessionRH.FindPullRequestForBranch(sessionCtx, session.Repo, session.Branch)
 		if err != nil {
 			session.LastMaintenanceError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
@@ -1934,7 +2001,7 @@ func (a *App) cleanupClosedIssueSessions(ctx context.Context, sessions []state.S
 
 		issue, err := a.loadIssueDetailsForScan(sessionCtx, issueCache, session.Repo, session.IssueNumber)
 		if err != nil {
-			if a.getBackend().IsWorkItemUnavailable(err) {
+			if a.issueTrackerForSession(*session).IsWorkItemUnavailable(err) {
 				a.stopMonitoringUnavailableIssueSession(sessionCtx, session, "issue_deleted", err)
 				continue
 			}
@@ -2056,11 +2123,11 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 		return nil, nil, errors.New("worktree is not clean before PR maintenance")
 	}
 
-	prm, ok := a.pullRequestManager()
-	if !ok {
+	sessionRH := a.repoHostForSession(*session)
+	if sessionRH == nil {
 		return nil, nil, errors.New("backend does not support pull request operations")
 	}
-	details, err := prm.GetPullRequestDetails(ctx, session.Repo, pr.Number)
+	details, err := sessionRH.GetPullRequestDetails(ctx, session.Repo, pr.Number)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2148,7 +2215,7 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 func (a *App) dispatchConflictResolution(ctx context.Context, session *state.Session, pr backend.PullRequest, issueDetails *backend.WorkItem) error {
 	if issueDetails == nil {
 		var err error
-		issueDetails, err = a.getBackend().GetWorkItem(ctx, session.Repo, session.IssueNumber)
+		issueDetails, err = a.issueTrackerForSession(*session).GetWorkItem(ctx, session.Repo, session.IssueNumber)
 		if err != nil {
 			return err
 		}
@@ -2224,11 +2291,11 @@ func (a *App) tryAutoSquashMerge(ctx context.Context, session *state.Session, pr
 		return nil
 	}
 
-	prm, ok := a.pullRequestManager()
-	if !ok {
+	sessionRH := a.repoHostForSession(*session)
+	if sessionRH == nil {
 		return errors.New("backend does not support pull request operations")
 	}
-	if err := prm.MergePullRequestSquash(ctx, session.Repo, pr.Number); err != nil {
+	if err := sessionRH.MergePullRequestSquash(ctx, session.Repo, pr.Number); err != nil {
 		return fmt.Errorf("squash automerge pr #%d: %w", pr.Number, err)
 	}
 
@@ -2248,7 +2315,7 @@ func (a *App) automergeEnabled(ctx context.Context, session *state.Session, pr b
 		var err error
 		issue, err = a.loadIssueDetailsForScan(ctx, issueCache, session.Repo, session.IssueNumber)
 		if err != nil {
-			if a.getBackend().IsWorkItemUnavailable(err) {
+			if a.issueTrackerForSession(*session).IsWorkItemUnavailable(err) {
 				a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
 				return false, nil
 			}
@@ -2437,7 +2504,8 @@ func (a *App) processGitHubCleanupRequests(ctx context.Context, sessions []state
 			continue
 		}
 
-		comments, err := a.getBackend().PollComments(ctx, session.Repo, session.IssueNumber, "cleanup")
+		it := a.issueTrackerForSession(*session)
+		comments, err := it.PollComments(ctx, session.Repo, session.IssueNumber, "cleanup")
 		if err != nil {
 			a.logger.Error("cleanup comment lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 			session.LastError = err.Error()
@@ -2448,7 +2516,7 @@ func (a *App) processGitHubCleanupRequests(ctx context.Context, sessions []state
 		if comment == nil {
 			continue
 		}
-		if err := a.getBackend().AcknowledgeComment(ctx, session.Repo, comment.ID, "+1"); err != nil {
+		if err := it.AcknowledgeComment(ctx, session.Repo, comment.ID, "+1"); err != nil {
 			a.logger.Error("cleanup reaction failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
@@ -2499,7 +2567,8 @@ func (a *App) processGitHubRecreateRequests(ctx context.Context, sessions []stat
 			continue
 		}
 
-		comments, err := a.getBackend().PollComments(ctx, session.Repo, session.IssueNumber, "recreate")
+		it := a.issueTrackerForSession(*session)
+		comments, err := it.PollComments(ctx, session.Repo, session.IssueNumber, "recreate")
 		if err != nil {
 			a.logger.Error("recreate comment lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 			session.LastError = err.Error()
@@ -2510,7 +2579,7 @@ func (a *App) processGitHubRecreateRequests(ctx context.Context, sessions []stat
 		if comment == nil {
 			continue
 		}
-		if err := a.getBackend().AcknowledgeComment(ctx, session.Repo, comment.ID, "eyes"); err != nil {
+		if err := it.AcknowledgeComment(ctx, session.Repo, comment.ID, "eyes"); err != nil {
 			a.logger.Error("recreate reaction failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
@@ -2635,9 +2704,10 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 			continue
 		}
 
+		sessionIT := a.issueTrackerForSession(*session)
 		details, err := a.loadIssueDetailsForScan(ctx, issueCache, session.Repo, session.IssueNumber)
 		if err != nil {
-			if a.getBackend().IsWorkItemUnavailable(err) {
+			if sessionIT.IsWorkItemUnavailable(err) {
 				a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
 				continue
 			}
@@ -2647,7 +2717,7 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 		}
 		if backend.HasLabel(details.Labels, "resume", "vigilante:resume") {
 			labelRemovalFailed := false
-			lm, lmOK := a.labelManager()
+			lm, lmOK := backend.AsLabelManager(sessionIT)
 			for _, label := range []string{"resume", "vigilante:resume"} {
 				if backend.HasLabel(details.Labels, label) {
 					if !lmOK {
@@ -2676,7 +2746,7 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 			continue
 		}
 
-		comments, err := a.getBackend().PollComments(ctx, session.Repo, session.IssueNumber, "resume")
+		comments, err := sessionIT.PollComments(ctx, session.Repo, session.IssueNumber, "resume")
 		if err != nil {
 			a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), "gh issue comments", err)
 			a.logger.Error("resume comment lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
@@ -2686,7 +2756,7 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 		if comment == nil {
 			continue
 		}
-		if err := a.getBackend().AcknowledgeComment(ctx, session.Repo, comment.ID, "eyes"); err != nil {
+		if err := sessionIT.AcknowledgeComment(ctx, session.Repo, comment.ID, "eyes"); err != nil {
 			a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), "gh api issue comment reactions", err)
 			a.logger.Error("resume reaction failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
 			continue
@@ -2872,7 +2942,7 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 		break
 	}
 
-	items, err := a.getBackend().ListWorkItems(ctx, target.Repo, target.Assignee)
+	items, err := a.issueTrackerForTarget(target).ListWorkItems(ctx, target.Repo, target.Assignee)
 	if err != nil {
 		return err
 	}
@@ -3328,7 +3398,7 @@ func (a *App) preflightResume(ctx context.Context, session state.Session) error 
 		if _, err := a.env.Runner.Run(ctx, "", "gh", "auth", "status"); err != nil {
 			return err
 		}
-		_, err = a.getBackend().GetWorkItem(ctx, session.Repo, session.IssueNumber)
+		_, err = a.issueTrackerForSession(session).GetWorkItem(ctx, session.Repo, session.IssueNumber)
 		return err
 	case "provider_missing":
 		_, err = a.env.Runner.LookPath(tool)
@@ -3514,7 +3584,7 @@ func maintenanceAutoRecoveryTimeout(config state.ServiceConfig) time.Duration {
 }
 
 func (a *App) blockedSessionExceededInactivityTimeout(ctx context.Context, session state.Session, timeout time.Duration) (bool, error) {
-	comments, err := a.getBackend().PollComments(ctx, session.Repo, session.IssueNumber, "blocked-inactivity")
+	comments, err := a.issueTrackerForSession(session).PollComments(ctx, session.Repo, session.IssueNumber, "blocked-inactivity")
 	if err != nil {
 		return false, err
 	}
@@ -4096,18 +4166,20 @@ func resolveIssueProvider(target state.WatchTarget, issue backend.WorkItem) (str
 
 func blockedIssueSessionForDispatchFailure(target state.WatchTarget, issue backend.WorkItem, selectedProvider string, err error, now time.Time) state.Session {
 	session := state.Session{
-		RepoPath:     target.Path,
-		Repo:         target.Repo,
-		Provider:     selectedProvider,
-		IssueNumber:  issue.Number,
-		IssueTitle:   issue.Title,
-		IssueURL:     issue.URL,
-		Branch:       worktree.IssueBranchName(issue.Number, issue.Title),
-		WorktreePath: worktree.IssueWorktreePath(target.Path, issue.Number),
-		Status:       state.SessionStatusFailed,
-		StartedAt:    now.Format(time.RFC3339),
-		UpdatedAt:    now.Format(time.RFC3339),
-		LastError:    err.Error(),
+		RepoPath:      target.Path,
+		Repo:          target.Repo,
+		Provider:      selectedProvider,
+		BackendID:     target.EffectiveBackendID(),
+		RepoBackendID: target.EffectiveRepoBackendID(),
+		IssueNumber:   issue.Number,
+		IssueTitle:    issue.Title,
+		IssueURL:      issue.URL,
+		Branch:        worktree.IssueBranchName(issue.Number, issue.Title),
+		WorktreePath:  worktree.IssueWorktreePath(target.Path, issue.Number),
+		Status:        state.SessionStatusFailed,
+		StartedAt:     now.Format(time.RFC3339),
+		UpdatedAt:     now.Format(time.RFC3339),
+		LastError:     err.Error(),
 	}
 	markSessionBlocked(&session, "issue_execution", classifyBlockedReason("issue_execution", "git worktree add", err), now)
 	session.LastError = err.Error()
@@ -4174,9 +4246,10 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 			continue
 		}
 
+		sessionIT := a.issueTrackerForSession(*session)
 		details, err := a.loadIssueDetailsForScan(ctx, issueCache, session.Repo, session.IssueNumber)
 		if err != nil {
-			if a.getBackend().IsWorkItemUnavailable(err) {
+			if sessionIT.IsWorkItemUnavailable(err) {
 				a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
 				needsSave = true
 				continue
@@ -4188,7 +4261,7 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 			continue
 		}
 
-		comments, err := a.getBackend().PollComments(ctx, session.Repo, session.IssueNumber, "iteration")
+		comments, err := sessionIT.PollComments(ctx, session.Repo, session.IssueNumber, "iteration")
 		if err != nil {
 			a.logger.Error("iteration comment lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 			session.LastError = err.Error()
@@ -4227,7 +4300,7 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 			continue
 		}
 
-		if err := a.getBackend().AcknowledgeComment(ctx, session.Repo, comment.ID, "eyes"); err != nil {
+		if err := sessionIT.AcknowledgeComment(ctx, session.Repo, comment.ID, "eyes"); err != nil {
 			a.logger.Error("iteration reaction failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
 		}
 
@@ -4376,6 +4449,8 @@ func (a *App) dispatchIssueSession(ctx context.Context, target state.WatchTarget
 	session.RepoPath = target.Path
 	session.Repo = target.Repo
 	session.Provider = selectedProvider
+	session.BackendID = target.EffectiveBackendID()
+	session.RepoBackendID = target.EffectiveRepoBackendID()
 	session.IssueNumber = issue.Number
 	session.IssueTitle = issue.Title
 	session.IssueBody = strings.TrimSpace(issueBody)
@@ -4491,8 +4566,9 @@ func (a *App) syncSessionIssueLabels(ctx context.Context, session *state.Session
 		}
 	}
 	if pr != nil && pr.MergedAt == nil && pr.Number > 0 && len(pr.Labels) == 0 && pr.ReviewDecision == "" && !pr.IsDraft && pr.MergeStateStatus == "" && len(pr.StatusChecks) == 0 {
-		if prm, ok := a.pullRequestManager(); ok {
-			details, err := prm.GetPullRequestDetails(ctx, session.Repo, pr.Number)
+		sessionRH := a.repoHostForSession(*session)
+		if sessionRH != nil {
+			details, err := sessionRH.GetPullRequestDetails(ctx, session.Repo, pr.Number)
 			if err == nil {
 				pr = details
 			}
@@ -4500,7 +4576,7 @@ func (a *App) syncSessionIssueLabels(ctx context.Context, session *state.Session
 	}
 	labels := sessionManagedLabels(*session, pr)
 	if err := a.syncIssueManagedLabels(ctx, session.Repo, session.IssueNumber, labels, issueDetails, issueCache); err != nil {
-		if a.getBackend().IsWorkItemUnavailable(err) {
+		if a.issueTrackerForSession(*session).IsWorkItemUnavailable(err) {
 			a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
 			return nil
 		}

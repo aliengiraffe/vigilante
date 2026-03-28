@@ -104,9 +104,15 @@ Vigilante also monitors GitHub REST API quota through `gh api /rate_limit` befor
 
 ## Architecture: Project-Management Backends
 
-Vigilante separates the **project-management backend** (the system that hosts work items and comments) from the **coding-agent provider** (the CLI that generates code). The orchestration loop depends on a `Backend` interface (`internal/backend`) rather than calling GitHub APIs directly.
+Vigilante separates three backend concerns that can be mixed independently per watch target:
 
-The `Backend` interface covers the minimum operations the dispatch loop needs:
+1. **Issue Tracker** (`IssueTracker`) — the system that hosts work items and comments (e.g. GitHub Issues, and in the future Linear, Jira).
+2. **Repository Host** (`RepoHost`) — the system that hosts code, branches, and pull requests (e.g. GitHub, and in the future GitLab, Bitbucket).
+3. **Coding-Agent Provider** — the CLI that generates code (e.g. Codex, Claude Code, Gemini).
+
+The issue tracker and repo host can differ for the same watch target. For example, a team could track work in Linear while hosting code and pull requests on GitHub.
+
+The `IssueTracker` interface covers the minimum operations the dispatch loop needs for work-item management:
 
 - resolving assignees
 - listing and fetching work items
@@ -114,17 +120,22 @@ The `Backend` interface covers the minimum operations the dispatch loop needs:
 - detecting operator commands (`@vigilanteai resume`, `cleanup`, `recreate`)
 - creating and closing work items
 
+The `RepoHost` interface covers pull-request and branch management:
+
+- finding and inspecting pull requests
+- merging and closing pull requests
+- deleting remote branches
+
 Optional capability interfaces extend the core for backends that support additional features:
 
 | Capability | Description | GitHub |
 |---|---|---|
 | `LabelManager` | Sync labels on work items and projects | ✅ |
-| `PullRequestManager` | Find, inspect, merge, and close pull requests | ✅ |
 | `RateLimitChecker` | Expose API quota information for proactive throttling | ✅ |
 
-GitHub is the only fully implemented backend today. Adding a new backend (e.g. Linear or Jira) requires implementing the `Backend` interface and registering it through `backend.Register()`. The orchestration loop checks capability interfaces at runtime so backends that do not support labels, PRs, or rate limits degrade gracefully.
+GitHub is the only fully implemented backend today for both roles. Adding a new issue tracker (e.g. Linear) requires implementing the `IssueTracker` interface and registering it through `backend.Register()`. Adding a new repo host (e.g. GitLab) requires implementing `RepoHost` and registering through `backend.RegisterRepoHost()`. The orchestration loop checks capability interfaces at runtime so backends that do not support labels or rate limits degrade gracefully.
 
-Watch targets and sessions carry a `backend_id` field (defaulting to `"github"` for backward compatibility) so the system can route each target to the correct backend implementation.
+Watch targets and sessions carry `backend_id` (issue tracker) and `repo_backend_id` (repo host) fields, both defaulting to `"github"` for backward compatibility. The orchestration loop resolves the correct backend implementation per target, enabling heterogeneous configurations where issues come from one system and code lives in another.
 
 ## Telemetry
 
