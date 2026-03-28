@@ -6416,6 +6416,93 @@ func TestScanOnceAutomergeSkipsAlreadyClaimedIterationComment(t *testing.T) {
 	}
 }
 
+func TestScanOnceAutomergeDeferredWhenIteratingLabelPresent(t *testing.T) {
+	app, runner := newPullRequestMaintenanceTestAppWithCountingRunner(t, map[string]string{
+		"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
+		"git fetch origin main":  "ok",
+		"git status --porcelain": "",
+		"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
+		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": automergePRDetailsJSON("vigilante:automerge", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
+		"gh api repos/owner/repo/issues/1":          `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"open","labels":[{"name":"vigilante:automerge"},{"name":"vigilante:iterating"}],"assignees":[{"login":"nicobistolfi"}]}`,
+		"gh api repos/owner/repo/issues/1/comments": `[]`,
+		"gh pr merge --repo owner/repo 31 --squash --delete-branch": "ok",
+		"gh api user --jq .login":                                   "nicobistolfi\n",
+		"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+	})
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.waitForSessions()
+
+	mergeKey := testutil.Key("gh", "pr", "merge", "--repo", "owner/repo", "31", "--squash", "--delete-branch")
+	if runner.counts[mergeKey] != 0 {
+		t.Fatalf("expected automerge to be deferred due to vigilante:iterating label, but gh pr merge was called %d times", runner.counts[mergeKey])
+	}
+}
+
+func TestIterationRequestAddsIteratingLabelBeforeDispatch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	runner := &countingRunner{
+		base: testutil.FakeRunner{
+			LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+			Outputs: map[string]string{
+				"gh api repos/owner/repo/issues/1":                          `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"open","labels":[{"name":"vigilante:ready-for-review"}],"assignees":[{"login":"nicobistolfi"}]}`,
+				"gh api repos/owner/repo/issues/1/comments":                 `[{"id":301,"body":"@vigilanteai please revise the validation","created_at":"2026-03-26T12:00:00Z","user":{"login":"nicobistolfi"}}]`,
+				"gh api --method POST -H Accept: application/vnd.github+json repos/owner/repo/issues/comments/301/reactions -f content=eyes": "ok",
+				"gh api repos/owner/repo/labels?per_page=100":                                                    `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+				"gh issue edit --repo owner/repo 1 --add-label vigilante:iterating --remove-label vigilante:ready-for-review": "ok",
+				"gh api user --jq .login": "nicobistolfi\n",
+				"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+				"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
+				"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": `{"number":31,"title":"PR","body":"","url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"","statusCheckRollup":[],"baseRefName":"main"}`,
+				"git fetch origin main":  "ok",
+				"git status --porcelain": "",
+				"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
+				"git worktree prune":                          "ok",
+				"git worktree list --porcelain":               "",
+				"git branch -f main refs/remotes/origin/main": "ok",
+				"git worktree add -b vigilante/issue-1-first /tmp/repo/.worktrees/vigilante/issue-1 origin/main": "ok",
+			},
+		},
+	}
+	app.env.Runner = runner
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:     "/tmp/repo",
+		Repo:         "owner/repo",
+		IssueNumber:  1,
+		IssueTitle:   "first",
+		IssueURL:     "https://github.com/owner/repo/issues/1",
+		Branch:       "vigilante/issue-1",
+		WorktreePath: filepath.Join("/tmp/repo", ".worktrees", "vigilante", "issue-1"),
+		Status:       state.SessionStatusSuccess,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.waitForSessions()
+
+	labelKey := testutil.Key("gh", "issue", "edit", "--repo", "owner/repo", "1", "--add-label", "vigilante:iterating", "--remove-label", "vigilante:ready-for-review")
+	if runner.counts[labelKey] < 1 {
+		t.Fatalf("expected vigilante:iterating label to be added immediately when iteration comment detected, but gh issue edit was called %d times for that key", runner.counts[labelKey])
+	}
+}
+
 func newPullRequestMaintenanceTestApp(t *testing.T, outputs map[string]string) (*App, *bytes.Buffer) {
 	t.Helper()
 
@@ -6455,6 +6542,49 @@ func newPullRequestMaintenanceTestApp(t *testing.T, outputs map[string]string) (
 	}
 
 	return app, &stdout
+}
+
+func newPullRequestMaintenanceTestAppWithCountingRunner(t *testing.T, outputs map[string]string) (*App, *countingRunner) {
+	t.Helper()
+
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	outputs = mergeStringMaps(map[string]string{
+		"gh api repos/owner/repo/issues/1":          `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"open","labels":[],"assignees":[]}`,
+		"gh api repos/owner/repo/issues/1/comments": "[]",
+	}, outputs)
+	runner := &countingRunner{
+		base: testutil.FakeRunner{
+			LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+			Outputs:   outputs,
+		},
+	}
+	app.env.Runner = runner
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:     "/tmp/repo",
+		Repo:         "owner/repo",
+		IssueNumber:  1,
+		IssueTitle:   "first",
+		IssueURL:     "https://github.com/owner/repo/issues/1",
+		Branch:       "vigilante/issue-1",
+		WorktreePath: filepath.Join("/tmp/repo", ".worktrees", "vigilante", "issue-1"),
+		Status:       state.SessionStatusSuccess,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	return app, runner
 }
 
 func automergePRDetailsJSON(label string, mergeable string, mergeState string, reviewDecision string, checkState string, conclusion string) string {

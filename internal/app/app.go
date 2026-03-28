@@ -2111,6 +2111,9 @@ func (a *App) hasPendingIterationComment(ctx context.Context, session *state.Ses
 	if err != nil {
 		return false, err
 	}
+	if ghcli.HasAnyLabel(details.Labels, labelIterating) {
+		return true, nil
+	}
 	comments, err := ghcli.ListIssueCommentsForPolling(ctx, a.env.Runner, session.Repo, session.IssueNumber, "iteration_gate", a.logger)
 	if err != nil {
 		return false, err
@@ -4093,6 +4096,10 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 
 		if err := ghcli.AddIssueCommentReaction(ctx, a.env.Runner, session.Repo, comment.ID, "eyes"); err != nil {
 			a.logger.Error("iteration reaction failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
+		}
+
+		if err := a.syncIssueManagedLabels(ctx, session.Repo, session.IssueNumber, []string{labelIterating}, details, issueCache); err != nil {
+			a.logger.Error("early iterating label failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 		}
 
 		iterationComments := ghcli.AssigneeIterationComments(comments, assignees)
