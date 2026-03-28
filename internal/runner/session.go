@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nicobistolfi/vigilante/internal/backend"
 	"github.com/nicobistolfi/vigilante/internal/blocking"
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
@@ -17,7 +18,7 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/telemetry"
 )
 
-func RunIssueSession(ctx context.Context, env *environment.Environment, store *state.Store, target state.WatchTarget, issue ghcli.Issue, session state.Session) state.Session {
+func RunIssueSession(ctx context.Context, env *environment.Environment, store *state.Store, target state.WatchTarget, issue backend.WorkItem, session state.Session) state.Session {
 	if session.Repo == "" {
 		session.Repo = target.Repo
 	}
@@ -191,7 +192,7 @@ func fallbackSessionText(value string, fallback string) string {
 	return value
 }
 
-func RunConflictResolutionSession(ctx context.Context, env *environment.Environment, store *state.Store, target state.WatchTarget, session state.Session, pr ghcli.PullRequest) error {
+func RunConflictResolutionSession(ctx context.Context, env *environment.Environment, store *state.Store, target state.WatchTarget, session state.Session, pr backend.PullRequest) error {
 	repoSlug := session.Repo
 	if repoSlug == "" {
 		repoSlug = target.Repo
@@ -245,7 +246,7 @@ func RunConflictResolutionSession(ctx context.Context, env *environment.Environm
 	return nil
 }
 
-func RunCIRemediationSession(ctx context.Context, env *environment.Environment, store *state.Store, target state.WatchTarget, session state.Session, pr ghcli.PullRequest, failingChecks []ghcli.StatusCheckRoll) error {
+func RunCIRemediationSession(ctx context.Context, env *environment.Environment, store *state.Store, target state.WatchTarget, session state.Session, pr backend.PullRequest, failingChecks []backend.StatusCheck) error {
 	repoSlug := session.Repo
 	if repoSlug == "" {
 		repoSlug = target.Repo

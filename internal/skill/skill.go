@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	skillassets "github.com/nicobistolfi/vigilante"
-	ghcli "github.com/nicobistolfi/vigilante/internal/github"
+	"github.com/nicobistolfi/vigilante/internal/backend"
 	"github.com/nicobistolfi/vigilante/internal/repo"
 	"github.com/nicobistolfi/vigilante/internal/state"
 )
@@ -141,11 +141,11 @@ func InlineSkillHeader(name string) string {
 	}, "\n")
 }
 
-func BuildIssuePrompt(target state.WatchTarget, issue ghcli.Issue, session state.Session) string {
+func BuildIssuePrompt(target state.WatchTarget, issue backend.WorkItem, session state.Session) string {
 	return BuildIssuePromptForRuntime(RuntimeCodex, target, issue, session)
 }
 
-func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue ghcli.Issue, session state.Session) string {
+func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue backend.WorkItem, session state.Session) string {
 	selectedSkill := IssueImplementationSkill(target)
 	lines := []string{}
 	if runtimeUsesInlineSkillHeader(runtime) {
@@ -352,7 +352,7 @@ func monorepoExecutionContextJSON(target state.WatchTarget, selectedSkill string
 	return string(data)
 }
 
-func BuildIssuePreflightPrompt(target state.WatchTarget, issue ghcli.Issue, session state.Session) string {
+func BuildIssuePreflightPrompt(target state.WatchTarget, issue backend.WorkItem, session state.Session) string {
 	baseBranch := promptBaseBranch(target, session)
 	baselineLine := fmt.Sprintf("Before implementing issue #%d, validate the repository baseline from the current `%s`-derived worktree without making any file changes.", issue.Number, baseBranch)
 	if strings.TrimSpace(session.ReusedRemoteBranch) != "" {
@@ -407,11 +407,11 @@ func displayProviderName(name string) string {
 	return strings.Join(parts, " ")
 }
 
-func BuildConflictResolutionPrompt(target state.WatchTarget, session state.Session, pr ghcli.PullRequest) string {
+func BuildConflictResolutionPrompt(target state.WatchTarget, session state.Session, pr backend.PullRequest) string {
 	return BuildConflictResolutionPromptForRuntime(RuntimeCodex, target, session, pr)
 }
 
-func BuildConflictResolutionPromptForRuntime(runtime string, target state.WatchTarget, session state.Session, pr ghcli.PullRequest) string {
+func BuildConflictResolutionPromptForRuntime(runtime string, target state.WatchTarget, session state.Session, pr backend.PullRequest) string {
 	lines := []string{}
 	if runtimeUsesInlineSkillHeader(runtime) {
 		lines = append(lines, InlineSkillHeader(VigilanteConflictResolution))
@@ -466,11 +466,11 @@ func promptBaseBranch(target state.WatchTarget, session state.Session) string {
 	return "main"
 }
 
-func BuildCIRemediationPrompt(target state.WatchTarget, session state.Session, pr ghcli.PullRequest, checks []ghcli.StatusCheckRoll) string {
+func BuildCIRemediationPrompt(target state.WatchTarget, session state.Session, pr backend.PullRequest, checks []backend.StatusCheck) string {
 	return BuildCIRemediationPromptForRuntime(RuntimeCodex, target, session, pr, checks)
 }
 
-func BuildCIRemediationPromptForRuntime(runtime string, target state.WatchTarget, session state.Session, pr ghcli.PullRequest, checks []ghcli.StatusCheckRoll) string {
+func BuildCIRemediationPromptForRuntime(runtime string, target state.WatchTarget, session state.Session, pr backend.PullRequest, checks []backend.StatusCheck) string {
 	lines := []string{}
 	if runtimeUsesInlineSkillHeader(runtime) {
 		lines = append(lines, InlineSkillHeader(IssueImplementationSkill(target)))

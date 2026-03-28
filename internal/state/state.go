@@ -23,11 +23,21 @@ type WatchTarget struct {
 	Branch         string              `json:"branch"`
 	Classification repo.Classification `json:"classification,omitempty"`
 	Provider       string              `json:"provider,omitempty"`
+	BackendID      string              `json:"backend_id,omitempty"`
 	Labels         []string            `json:"labels,omitempty"`
 	Assignee       string              `json:"assignee,omitempty"`
 	MaxParallel    int                 `json:"max_parallel_sessions"`
 	LastScanAt     string              `json:"last_scan_at,omitempty"`
 	AddedAt        string              `json:"added_at,omitempty"`
+}
+
+// EffectiveBackendID returns the backend identifier for this watch target,
+// defaulting to "github" when not explicitly set (backward compatibility).
+func (t WatchTarget) EffectiveBackendID() string {
+	if id := strings.TrimSpace(t.BackendID); id != "" {
+		return id
+	}
+	return "github"
 }
 
 type BranchMode string
@@ -75,6 +85,7 @@ type Session struct {
 	RepoPath                       string        `json:"repo_path"`
 	Repo                           string        `json:"repo"`
 	Provider                       string        `json:"provider,omitempty"`
+	BackendID                      string        `json:"backend_id,omitempty"`
 	IssueNumber                    int           `json:"issue_number"`
 	IssueTitle                     string        `json:"issue_title,omitempty"`
 	IssueBody                      string        `json:"issue_body,omitempty"`
@@ -141,6 +152,15 @@ type Session struct {
 	EndedAt                        string        `json:"ended_at,omitempty"`
 	UpdatedAt                      string        `json:"updated_at,omitempty"`
 	LastError                      string        `json:"last_error,omitempty"`
+}
+
+// EffectiveBackendID returns the backend identifier for this session,
+// defaulting to "github" when not explicitly set (backward compatibility).
+func (s Session) EffectiveBackendID() string {
+	if id := strings.TrimSpace(s.BackendID); id != "" {
+		return id
+	}
+	return "github"
 }
 
 type Store struct {
@@ -265,6 +285,9 @@ func (s *Store) LoadWatchTargets() ([]WatchTarget, error) {
 		if strings.TrimSpace(targets[i].Provider) == "" {
 			targets[i].Provider = "codex"
 		}
+		if strings.TrimSpace(targets[i].BackendID) == "" {
+			targets[i].BackendID = "github"
+		}
 		targets[i].MaxParallel = normalizeMaxParallelSessions(targets[i].MaxParallel)
 	}
 	return targets, nil
@@ -285,6 +308,9 @@ func (s *Store) LoadSessions() ([]Session, error) {
 	for i := range sessions {
 		if strings.TrimSpace(sessions[i].Provider) == "" {
 			sessions[i].Provider = "codex"
+		}
+		if strings.TrimSpace(sessions[i].BackendID) == "" {
+			sessions[i].BackendID = "github"
 		}
 	}
 	return sessions, nil

@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	skillassets "github.com/nicobistolfi/vigilante"
-	ghcli "github.com/nicobistolfi/vigilante/internal/github"
+	"github.com/nicobistolfi/vigilante/internal/backend"
 	"github.com/nicobistolfi/vigilante/internal/repo"
 	"github.com/nicobistolfi/vigilante/internal/state"
 )
@@ -131,7 +131,7 @@ func TestEnsureInstalledUsesEmbeddedAssetsOutsideRepo(t *testing.T) {
 
 func TestBuildIssuePrompt(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
-	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	issue := backend.WorkItem{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 	prompt := BuildIssuePrompt(target, issue, session)
 	for _, text := range []string{"Use the `vigilante-issue-implementation` skill", "Detected repo shape: traditional", `Repo process context JSON: {"shape":"traditional"}`, "Selected issue implementation skill: vigilante-issue-implementation", "Issue: #12 - Fix bug", "Worktree path: /tmp/worktree", "vigilante gh issue comment", "vigilante git push", "vigilante gh pr create", "Closes #12", "Coding Agent Launched: Codex", "@vigilanteai resume", "@vigilanteai cleanup", "issue-comment commands rather than shell commands", "10-cell progress bar", "ETA: ~N minutes", "preserve the user's existing git author, committer, and signing configuration", "Do not add `Co-authored by:` trailers"} {
@@ -143,7 +143,7 @@ func TestBuildIssuePrompt(t *testing.T) {
 
 func TestBuildIssuePromptIncludesReusedRemoteBranchContext(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}
-	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	issue := backend.WorkItem{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{
 		WorktreePath:       "/tmp/worktree",
 		Branch:             "vigilante/issue-12-fix-bug",
@@ -167,7 +167,7 @@ func TestBuildIssuePromptIncludesReusedRemoteBranchContext(t *testing.T) {
 
 func TestBuildIssuePromptIncludesIssueBodyAndIterationContext(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
-	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	issue := backend.WorkItem{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{
 		WorktreePath:           "/tmp/worktree",
 		Branch:                 "vigilante/issue-12",
@@ -260,7 +260,7 @@ func TestBuildIssuePromptSelectsMonorepoSkill(t *testing.T) {
 			},
 		},
 	}
-	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	issue := backend.WorkItem{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 
 	prompt := BuildIssuePrompt(target, issue, session)
@@ -293,7 +293,7 @@ func TestBuildIssuePromptFallsBackForUnknownMonorepoStack(t *testing.T) {
 			MonorepoStack: repo.MonorepoStackUnknown,
 		},
 	}
-	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	issue := backend.WorkItem{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 
 	prompt := BuildIssuePrompt(target, issue, session)
@@ -322,7 +322,7 @@ func TestBuildIssuePromptSelectsTurborepoSkill(t *testing.T) {
 			},
 		},
 	}
-	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	issue := backend.WorkItem{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 
 	prompt := BuildIssuePrompt(target, issue, session)
@@ -353,7 +353,7 @@ func TestBuildIssuePromptSelectsGradleMultiProjectSkill(t *testing.T) {
 			},
 		},
 	}
-	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	issue := backend.WorkItem{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 
 	prompt := BuildIssuePrompt(target, issue, session)
@@ -384,7 +384,7 @@ func TestBuildIssuePromptSelectsNxSkill(t *testing.T) {
 			},
 		},
 	}
-	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	issue := backend.WorkItem{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 
 	prompt := BuildIssuePrompt(target, issue, session)
@@ -418,7 +418,7 @@ func TestBuildIssuePromptSelectsRushMonorepoSkill(t *testing.T) {
 			},
 		},
 	}
-	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	issue := backend.WorkItem{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 
 	prompt := BuildIssuePrompt(target, issue, session)
@@ -451,7 +451,7 @@ func TestBuildIssuePromptSelectsBazelMonorepoSkill(t *testing.T) {
 			},
 		},
 	}
-	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	issue := backend.WorkItem{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 
 	prompt := BuildIssuePrompt(target, issue, session)
@@ -474,7 +474,7 @@ func TestBuildIssuePromptSelectsBazelMonorepoSkill(t *testing.T) {
 
 func TestBuildIssuePreflightPrompt(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
-	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	issue := backend.WorkItem{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 	prompt := BuildIssuePreflightPrompt(target, issue, session)
 	for _, text := range []string{"Repository: owner/repo", "Issue: #12 - Fix bug", "`main`-derived worktree", "build or equivalent verification command", "existing test suite", "Do not implement the issue", "do not comment on GitHub"} {
@@ -486,7 +486,7 @@ func TestBuildIssuePreflightPrompt(t *testing.T) {
 
 func TestBuildIssuePreflightPromptForReusedRemoteBranch(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
-	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	issue := backend.WorkItem{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{
 		WorktreePath:       "/tmp/worktree",
 		Branch:             "vigilante/issue-12-fix-bug",
@@ -508,7 +508,7 @@ func TestBuildIssuePreflightPromptForReusedRemoteBranch(t *testing.T) {
 func TestBuildConflictResolutionPrompt(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
 	session := state.Session{IssueNumber: 12, IssueTitle: "Fix bug", IssueBody: "Preserve the original validation behavior.", IssueURL: "https://example.com/issues/12", BaseBranch: "main", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", BranchDiffSummary: "Keep the error-state form inputs intact."}
-	pr := ghcli.PullRequest{Number: 88, URL: "https://example.com/pull/88", Title: "Fix bug", Body: "This PR keeps the original UX behavior.", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"}
+	pr := backend.PullRequest{Number: 88, URL: "https://example.com/pull/88", Title: "Fix bug", Body: "This PR keeps the original UX behavior.", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"}
 	prompt := BuildConflictResolutionPrompt(target, session, pr)
 	for _, text := range []string{"Use the `vigilante-conflict-resolution` skill", "Issue specification: Preserve the original validation behavior.", "Pull Request title: Fix bug", "GitHub mergeability: mergeable=CONFLICTING mergeStateStatus=DIRTY", "Work through the rebase commit by commit.", "preserve the user's existing git author, committer, and signing configuration", "Do not add `Co-authored by:` trailers", "vigilante logs --repo <owner/name> --issue <n>", "go test ./...", "Existing branch summary: Keep the error-state form inputs intact."} {
 		if !strings.Contains(prompt, text) {
@@ -520,8 +520,8 @@ func TestBuildConflictResolutionPrompt(t *testing.T) {
 func TestBuildCIRemediationPrompt(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
 	session := state.Session{IssueNumber: 12, IssueTitle: "Fix bug", IssueURL: "https://example.com/issues/12", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12"}
-	pr := ghcli.PullRequest{Number: 88, URL: "https://example.com/pull/88"}
-	prompt := BuildCIRemediationPrompt(target, session, pr, []ghcli.StatusCheckRoll{{Context: "test", Conclusion: "FAILURE"}})
+	pr := backend.PullRequest{Number: 88, URL: "https://example.com/pull/88"}
+	prompt := BuildCIRemediationPrompt(target, session, pr, []backend.StatusCheck{{Context: "test", Conclusion: "FAILURE"}})
 	for _, text := range []string{"Use the `vigilante-issue-implementation` skill", "Pull Request: #88", "CI remediation context", "Failing check: test", "preserve the user's existing git author, committer, and signing configuration", "Do not add `Co-authored by:` trailers", "do not open a new pull request", "exit with a non-zero status"} {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q: %s", text, prompt)
@@ -663,7 +663,7 @@ func TestEnsureInstalledForGeminiCreatesSkillsAndRemovesLegacyCommands(t *testin
 
 func TestBuildIssuePromptForClaudeInlinesSkillInstructions(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
-	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	issue := backend.WorkItem{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "claude"}
 	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
 	for _, text := range []string{"Follow these `vigilante-issue-implementation` skill instructions directly", "Coding Agent Launched: Claude Code", "@vigilanteai resume", "@vigilanteai cleanup", "Issue: #12 - Fix bug"} {
@@ -675,7 +675,7 @@ func TestBuildIssuePromptForClaudeInlinesSkillInstructions(t *testing.T) {
 
 func TestBuildIssuePromptForGeminiInlinesSkillInstructions(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
-	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	issue := backend.WorkItem{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "gemini"}
 	prompt := BuildIssuePromptForRuntime(RuntimeGemini, target, issue, session)
 	for _, text := range []string{"Follow these `vigilante-issue-implementation` skill instructions directly", "Coding Agent Launched: Gemini CLI", "@vigilanteai resume", "@vigilanteai cleanup", "Issue: #12 - Fix bug"} {

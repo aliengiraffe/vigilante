@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	ghcli "github.com/nicobistolfi/vigilante/internal/github"
+	"github.com/nicobistolfi/vigilante/internal/backend"
 	"github.com/nicobistolfi/vigilante/internal/skill"
 	"github.com/nicobistolfi/vigilante/internal/state"
 )
@@ -83,9 +83,9 @@ func TestClaudeInvocationUsesWorktreeDirForHeadlessRuns(t *testing.T) {
 	}
 
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
-	issue := ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}
+	issue := backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: ClaudeID}
-	pr := ghcli.PullRequest{Number: 11, URL: "https://github.com/owner/repo/pull/11"}
+	pr := backend.PullRequest{Number: 11, URL: "https://github.com/owner/repo/pull/11"}
 
 	preflight, err := selectedProvider.BuildIssuePreflightInvocation(IssueTask{Target: target, Issue: issue, Session: session})
 	if err != nil {
@@ -121,7 +121,7 @@ func TestClaudeInvocationUsesWorktreeDirForHeadlessRuns(t *testing.T) {
 		Target:        target,
 		Session:       session,
 		PR:            pr,
-		FailingChecks: []ghcli.StatusCheckRoll{{Context: "test", Conclusion: "FAILURE"}},
+		FailingChecks: []backend.StatusCheck{{Context: "test", Conclusion: "FAILURE"}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +129,7 @@ func TestClaudeInvocationUsesWorktreeDirForHeadlessRuns(t *testing.T) {
 	if remediationInvocation.Dir != "/tmp/worktree" {
 		t.Fatalf("expected remediation dir to be worktree, got %#v", remediationInvocation)
 	}
-	wantRemediationArgs := []string{"--print", "--permission-mode", "acceptEdits", skill.BuildCIRemediationPromptForRuntime(skill.RuntimeClaude, target, session, pr, []ghcli.StatusCheckRoll{{Context: "test", Conclusion: "FAILURE"}})}
+	wantRemediationArgs := []string{"--print", "--permission-mode", "acceptEdits", skill.BuildCIRemediationPromptForRuntime(skill.RuntimeClaude, target, session, pr, []backend.StatusCheck{{Context: "test", Conclusion: "FAILURE"}})}
 	assertInvocationArgs(t, remediationInvocation.Args, wantRemediationArgs)
 }
 
@@ -143,7 +143,7 @@ func TestResolveIssueLabelUsesRegisteredProviderIDs(t *testing.T) {
 		registry = original
 	})
 
-	selected, err := ResolveIssueLabel([]ghcli.Label{{Name: "cursor"}})
+	selected, err := ResolveIssueLabel([]string{"cursor"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,7 +162,7 @@ func TestResolveIssueLabelRejectsConflictingProviderLabels(t *testing.T) {
 		registry = original
 	})
 
-	_, err := ResolveIssueLabel([]ghcli.Label{{Name: DefaultID}, {Name: "cursor"}})
+	_, err := ResolveIssueLabel([]string{DefaultID, "cursor"})
 	if err == nil {
 		t.Fatal("expected conflict error")
 	}

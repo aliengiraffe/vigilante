@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nicobistolfi/vigilante/internal/backend"
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
 	"github.com/nicobistolfi/vigilante/internal/repo"
@@ -57,7 +58,7 @@ func TestRunIssueSessionSuccess(t *testing.T) {
 		},
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
-	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
 	}
@@ -119,7 +120,7 @@ func TestRunIssueSessionStartCommentIncludesReusedRemoteBranchContext(t *testing
 		BranchDiffSummary:  "README.md | 2 ++",
 		Status:             state.SessionStatusRunning,
 	}
-	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
 	}
@@ -172,7 +173,7 @@ func TestRunIssueSessionFailureCommentsOnIssue(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
-	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 	if got.Status != state.SessionStatusBlocked {
 		t.Fatalf("unexpected status: %#v", got)
 	}
@@ -208,7 +209,7 @@ func TestRunConflictResolutionSessionFailureCommentsOnIssue(t *testing.T) {
 			}): "ok",
 		},
 		Errors: map[string]error{
-			conflictResolutionPromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, IssueTitle: "Demo", IssueBody: "Preserve the requested behavior.", IssueURL: "https://github.com/owner/repo/issues/7", BaseBranch: "main", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7"}, ghcli.PullRequest{Number: 17, Title: "Demo PR", Body: "PR body", URL: "https://github.com/owner/repo/pull/17", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"}): errors.New("codex exec [--cd /tmp/worktree --dangerously-bypass-approvals-and-sandbox prompt]: exit status 1"),
+			conflictResolutionPromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, IssueTitle: "Demo", IssueBody: "Preserve the requested behavior.", IssueURL: "https://github.com/owner/repo/issues/7", BaseBranch: "main", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7"}, backend.PullRequest{Number: 17, Title: "Demo PR", Body: "PR body", URL: "https://github.com/owner/repo/pull/17", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"}): errors.New("codex exec [--cd /tmp/worktree --dangerously-bypass-approvals-and-sandbox prompt]: exit status 1"),
 		},
 	}
 	env := &environment.Environment{OS: "darwin", Runner: runner}
@@ -223,7 +224,7 @@ func TestRunConflictResolutionSessionFailureCommentsOnIssue(t *testing.T) {
 		store,
 		state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"},
 		state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, IssueTitle: "Demo", IssueBody: "Preserve the requested behavior.", IssueURL: "https://github.com/owner/repo/issues/7", BaseBranch: "main", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7"},
-		ghcli.PullRequest{Number: 17, Title: "Demo PR", Body: "PR body", URL: "https://github.com/owner/repo/pull/17", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"},
+		backend.PullRequest{Number: 17, Title: "Demo PR", Body: "PR body", URL: "https://github.com/owner/repo/pull/17", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"},
 	)
 	if err == nil {
 		t.Fatal("expected error")
@@ -265,8 +266,8 @@ func TestRunCIRemediationSessionFailureCommentsOnIssue(t *testing.T) {
 		store,
 		state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"},
 		state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, IssueTitle: "Demo", IssueURL: "https://github.com/owner/repo/issues/7", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7"},
-		ghcli.PullRequest{Number: 17, URL: "https://github.com/owner/repo/pull/17"},
-		[]ghcli.StatusCheckRoll{{Context: "test", State: "COMPLETED", Conclusion: "FAILURE"}},
+		backend.PullRequest{Number: 17, URL: "https://github.com/owner/repo/pull/17"},
+		[]backend.StatusCheck{{Context: "test", State: "COMPLETED", Conclusion: "FAILURE"}},
 	)
 	if err == nil {
 		t.Fatal("expected error")
@@ -294,13 +295,13 @@ func TestRunIssueSessionSuccessWithClaudeProvider(t *testing.T) {
 			}): "ok",
 			testutil.Key("claude", "--print", "--dangerously-skip-permissions", skill.BuildIssuePreflightPrompt(
 				state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"},
-				ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
+				backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
 				state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: "claude"},
 			)): "baseline ok",
 			testutil.Key("claude", "--print", "--dangerously-skip-permissions", skill.BuildIssuePromptForRuntime(
 				skill.RuntimeClaude,
 				state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"},
-				ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
+				backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
 				state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: "claude"},
 			)): "done",
 		},
@@ -311,7 +312,7 @@ func TestRunIssueSessionSuccessWithClaudeProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: "claude", Status: state.SessionStatusRunning}
-	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
 	}
@@ -338,13 +339,13 @@ func TestRunIssueSessionSuccessWithGeminiProvider(t *testing.T) {
 			}): "ok",
 			testutil.Key("gemini", "--prompt", skill.BuildIssuePreflightPrompt(
 				state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"},
-				ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
+				backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
 				state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: "gemini"},
 			), "--yolo"): "baseline ok",
 			testutil.Key("gemini", "--prompt", skill.BuildIssuePromptForRuntime(
 				skill.RuntimeGemini,
 				state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"},
-				ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
+				backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
 				state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: "gemini"},
 			), "--yolo"): "done",
 		},
@@ -355,7 +356,7 @@ func TestRunIssueSessionSuccessWithGeminiProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: "gemini", Status: state.SessionStatusRunning}
-	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
 	}
@@ -395,7 +396,7 @@ func TestRunIssueSessionUsesMonorepoSkillWhenClassified(t *testing.T) {
 			preflightPromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", "vigilante/issue-7"): "baseline ok",
 			testutil.Key("codex", "exec", "--cd", "/tmp/worktree", "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePrompt(
 				target,
-				ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
+				backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
 				state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: "codex"},
 			)): "done",
 		},
@@ -407,7 +408,7 @@ func TestRunIssueSessionUsesMonorepoSkillWhenClassified(t *testing.T) {
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
 
-	got := RunIssueSession(context.Background(), env, store, target, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, target, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
@@ -448,7 +449,7 @@ func TestRunIssueSessionUsesNxSkillWhenClassified(t *testing.T) {
 			preflightPromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", "vigilante/issue-7"): "baseline ok",
 			testutil.Key("codex", "exec", "--cd", "/tmp/worktree", "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePrompt(
 				target,
-				ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
+				backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
 				state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: "codex"},
 			)): "done",
 		},
@@ -460,7 +461,7 @@ func TestRunIssueSessionUsesNxSkillWhenClassified(t *testing.T) {
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
 
-	got := RunIssueSession(context.Background(), env, store, target, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, target, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
@@ -501,7 +502,7 @@ func TestRunIssueSessionUsesRushMonorepoSkillWhenClassified(t *testing.T) {
 			preflightPromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", "vigilante/issue-7"): "baseline ok",
 			testutil.Key("codex", "exec", "--cd", "/tmp/worktree", "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePrompt(
 				target,
-				ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
+				backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
 				state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: "codex"},
 			)): "done",
 		},
@@ -513,7 +514,7 @@ func TestRunIssueSessionUsesRushMonorepoSkillWhenClassified(t *testing.T) {
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
 
-	got := RunIssueSession(context.Background(), env, store, target, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, target, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
@@ -535,7 +536,7 @@ func TestRunIssueSessionFailsWhenProviderVersionIsIncompatible(t *testing.T) {
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
 
-	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, backend.WorkItem{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 
 	if got.Status != state.SessionStatusFailed {
 		t.Fatalf("unexpected status: %#v", got)
@@ -760,7 +761,7 @@ func preflightPromptCommand(worktreePath string, repo string, repoPath string, i
 func preflightPromptCommandForSession(worktreePath string, repo string, repoPath string, issueNumber int, title string, issueURL string, session state.Session) string {
 	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePreflightPrompt(
 		state.WatchTarget{Path: repoPath, Repo: repo},
-		ghcli.Issue{Number: issueNumber, Title: title, URL: issueURL},
+		backend.WorkItem{Number: issueNumber, Title: title, URL: issueURL},
 		session,
 	))
 }
@@ -772,12 +773,12 @@ func issuePromptCommand(worktreePath string, repo string, repoPath string, issue
 func issuePromptCommandForSession(worktreePath string, repo string, repoPath string, issueNumber int, title string, issueURL string, session state.Session) string {
 	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePrompt(
 		state.WatchTarget{Path: repoPath, Repo: repo},
-		ghcli.Issue{Number: issueNumber, Title: title, URL: issueURL},
+		backend.WorkItem{Number: issueNumber, Title: title, URL: issueURL},
 		session,
 	))
 }
 
-func conflictResolutionPromptCommand(worktreePath string, repo string, repoPath string, session state.Session, pr ghcli.PullRequest) string {
+func conflictResolutionPromptCommand(worktreePath string, repo string, repoPath string, session state.Session, pr backend.PullRequest) string {
 	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildConflictResolutionPrompt(
 		state.WatchTarget{Path: repoPath, Repo: repo, Branch: session.BaseBranch},
 		session,
