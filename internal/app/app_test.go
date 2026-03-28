@@ -50,6 +50,72 @@ func (r *countingRunner) LookPath(file string) (string, error) {
 	return r.base.LookPath(file)
 }
 
+func TestMaintainOpenPullRequestPropagatesAccessLogContext(t *testing.T) {
+	t.Setenv("VIGILANTE_HOME", t.TempDir())
+	store := state.NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	var entries []environment.AccessLogEntry
+	runner := environment.LoggingRunner{
+		Base: testutil.FakeRunner{
+			Outputs: map[string]string{
+				"git fetch origin main":  "ok\n",
+				"git status --porcelain": "",
+				"gh pr view --repo owner/repo 12 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": `{"number":12,"title":"PR","body":"","url":"https://example.test/pr/12","state":"OPEN","mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"","statusCheckRollup":[],"baseRefName":"main"}`,
+				"git rebase origin/main":           "Current branch is up to date.\n",
+				"gh api repos/owner/repo/issues/7": `{"title":"Issue","body":"Body","html_url":"https://example.test/issues/7","state":"open","labels":[],"assignees":[]}`,
+			},
+		},
+		AccessLog: func(entry environment.AccessLogEntry) {
+			entries = append(entries, entry)
+		},
+	}
+	app := &App{
+		stdout: testutil.IODiscard{},
+		stderr: testutil.IODiscard{},
+		clock:  func() time.Time { return time.Date(2026, 3, 26, 20, 0, 0, 0, time.UTC) },
+		state:  store,
+		env: &environment.Environment{
+			OS:     "linux",
+			Runner: runner,
+		},
+	}
+	session := &state.Session{
+		Repo:         "owner/repo",
+		IssueNumber:  7,
+		Branch:       "vigilante/issue-7",
+		WorktreePath: "/tmp/worktree",
+	}
+	pr := ghcli.PullRequest{
+		Number:      12,
+		State:       "OPEN",
+		BaseRefName: "main",
+		Mergeable:   "MERGEABLE",
+	}
+
+	if _, _, err := app.maintainOpenPullRequest(context.Background(), session, pr, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("expected access log entries")
+	}
+	for _, entry := range entries {
+		if got, want := entry.ExecutionContext, "maintenance"; got != want {
+			t.Fatalf("context = %q, want %q", got, want)
+		}
+		if got, want := entry.Repo, "owner/repo"; got != want {
+			t.Fatalf("repo = %q, want %q", got, want)
+		}
+		if got, want := entry.IssueNumber, 7; got != want {
+			t.Fatalf("issue = %d, want %d", got, want)
+		}
+		if got, want := entry.CorrelationID, "maintenance:owner/repo#7"; got != want {
+			t.Fatalf("correlation_id = %q, want %q", got, want)
+		}
+	}
+}
+
 func setupTelemetryCapture(t *testing.T) (*analyticsBatchCapture, func() error) {
 	t.Helper()
 

@@ -62,7 +62,7 @@ func (r LoggingRunner) Run(ctx context.Context, dir string, name string, args ..
 		r.CaptureCommand(ctx, name, args, exitCode, endedAt.Sub(startedAt).Milliseconds())
 	}
 	if r.AccessLog != nil {
-		r.AccessLog(buildAccessLogEntry(ctx, dir, name, args, startedAt, endedAt, err))
+		r.AccessLog(buildAccessLogEntry(ctx, dir, name, args, startedAt, endedAt, output, err))
 	}
 	if r.Logger != nil {
 		if err != nil {

@@ -159,6 +159,7 @@ func New() *App {
 }
 
 func (a *App) loadIssueDetailsForScan(ctx context.Context, cache scanIssueDetailsCache, repo string, issueNumber int) (*ghcli.IssueDetails, error) {
+	ctx = a.withIssueAccessLogContext(ctx, "", repo, issueNumber, "", "")
 	if cache != nil {
 		if details, ok := cache[sessionKey(repo, issueNumber)]; ok {
 			return details, nil
@@ -347,11 +348,59 @@ func (a *App) emitGitHubRateLimitEvent(state string, snapshot ghcli.RateLimitSna
 }
 
 func (a *App) commentOnIssue(ctx context.Context, repo string, issue int, body string, commentType string, source string) error {
+	ctx = a.withIssueAccessLogContext(ctx, "", repo, issue, "", "")
 	if err := ghcli.CommentOnIssue(ctx, a.env.Runner, repo, issue, body); err != nil {
 		return err
 	}
 	a.emitCommentEvent(commentType, source)
 	return nil
+}
+
+func (a *App) withIssueAccessLogContext(ctx context.Context, executionContext string, repo string, issue int, branch string, worktreePath string) context.Context {
+	return environment.WithAccessLogContext(ctx, environment.AccessLogContext{
+		ExecutionContext: executionContext,
+		Repo:             strings.TrimSpace(repo),
+		IssueNumber:      issue,
+		Branch:           strings.TrimSpace(branch),
+		WorktreePath:     strings.TrimSpace(worktreePath),
+		CorrelationID:    accessLogCorrelationID(executionContext, repo, issue),
+	})
+}
+
+func (a *App) withWatchTargetAccessLogContext(ctx context.Context, executionContext string, target state.WatchTarget) context.Context {
+	return environment.WithAccessLogContext(ctx, environment.AccessLogContext{
+		ExecutionContext: executionContext,
+		Repo:             strings.TrimSpace(target.Repo),
+		Branch:           strings.TrimSpace(target.Branch),
+		CorrelationID:    accessLogCorrelationID(executionContext, target.Repo, 0),
+	})
+}
+
+func withSessionAccessLogContext(ctx context.Context, executionContext string, session state.Session) context.Context {
+	return environment.WithAccessLogContext(ctx, environment.AccessLogContext{
+		ExecutionContext: executionContext,
+		Repo:             strings.TrimSpace(session.Repo),
+		IssueNumber:      session.IssueNumber,
+		Branch:           strings.TrimSpace(session.Branch),
+		WorktreePath:     strings.TrimSpace(session.WorktreePath),
+		CorrelationID:    accessLogCorrelationID(executionContext, session.Repo, session.IssueNumber),
+	})
+}
+
+func accessLogCorrelationID(executionContext string, repo string, issue int) string {
+	executionContext = strings.TrimSpace(executionContext)
+	repo = strings.TrimSpace(repo)
+	if executionContext == "" {
+		return ""
+	}
+	switch {
+	case repo == "" && issue <= 0:
+		return executionContext
+	case issue > 0:
+		return fmt.Sprintf("%s:%s#%d", executionContext, repo, issue)
+	default:
+		return fmt.Sprintf("%s:%s", executionContext, repo)
+	}
 }
 
 func (a *App) Run(ctx context.Context, args []string) int {
@@ -1186,6 +1235,10 @@ func daemonMode(once bool) string {
 }
 
 func (a *App) ScanOnce(ctx context.Context) error {
+	ctx = environment.WithAccessLogContext(ctx, environment.AccessLogContext{
+		ExecutionContext: "scan",
+		CorrelationID:    accessLogCorrelationID("scan", "all", 0),
+	})
 	a.logger.Info("scan start")
 	locked, err := a.state.TryWithScanLock(func() error {
 		if err := a.state.EnsureLayout(); err != nil {
@@ -1251,6 +1304,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 
 		for i := range targets {
 			target := &targets[i]
+			targetCtx := a.withWatchTargetAccessLogContext(ctx, "scan", *target)
 			target.Assignee = assigneeOrDefault(target.Assignee)
 			if strings.TrimSpace(target.Provider) == "" {
 				target.Provider = provider.DefaultID
@@ -1258,7 +1312,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			target.MaxParallel = configuredMaxParallel(target.MaxParallel)
 			target.Classification = repo.Classify(target.Path)
 			if target.EffectiveBranchMode() == state.BranchModeAuto {
-				resolvedBranch, err := repo.ResolveBranch(ctx, a.env.Runner, target.Path, string(target.EffectiveBranchMode()), target.Branch)
+				resolvedBranch, err := repo.ResolveBranch(targetCtx, a.env.Runner, target.Path, string(target.EffectiveBranchMode()), target.Branch)
 				if err != nil {
 					return err
 				}
@@ -1268,7 +1322,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				}
 			}
 			var started int
-			sessions, started, err = a.processGitHubIterationRequestsForTarget(ctx, *target, sessions, issueDetailsCache)
+			sessions, started, err = a.processGitHubIterationRequestsForTarget(targetCtx, *target, sessions, issueDetailsCache)
 			if err != nil {
 				return err
 			}
@@ -1277,7 +1331,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			a.logger.Info("scan repo start", "repo", target.Repo, "path", target.Path, "max_parallel", target.MaxParallel)
 			resolvedAssignee, ok := resolvedAssignees[target.Assignee]
 			if !ok {
-				resolvedAssignee, err = ghcli.ResolveAssignee(ctx, a.env.Runner, target.Assignee)
+				resolvedAssignee, err = ghcli.ResolveAssignee(targetCtx, a.env.Runner, target.Assignee)
 				if err == nil {
 					resolvedAssignees[target.Assignee] = resolvedAssignee
 				}
@@ -1288,7 +1342,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				fmt.Fprintf(a.stdout, "repo: %s scan failed: %s\n", target.Repo, summarizeText(err.Error()))
 				continue
 			}
-			issues, err := ghcli.ListOpenIssuesForAssignee(ctx, a.env.Runner, target.Repo, resolvedAssignee)
+			issues, err := ghcli.ListOpenIssuesForAssignee(targetCtx, a.env.Runner, target.Repo, resolvedAssignee)
 			target.LastScanAt = a.clock().Format(time.RFC3339)
 			if err != nil {
 				a.logger.Error("scan repo issues failed", "repo", target.Repo, "err", err)
@@ -1328,7 +1382,8 @@ func (a *App) ScanOnce(ctx context.Context) error {
 					a.logger.Info("scan repo issue provider override", "repo", target.Repo, "issue", next.Number, "provider", selectedProvider)
 				}
 				a.logger.Info("scan repo issue skill", "repo", target.Repo, "issue", next.Number, "skill", skill.IssueImplementationSkill(*target), "shape", target.Classification.Shape)
-				resolvedBranch, err := repo.ResolveBranch(ctx, a.env.Runner, target.Path, string(target.EffectiveBranchMode()), target.Branch)
+				issueCtx := a.withIssueAccessLogContext(targetCtx, "scan", target.Repo, next.Number, target.Branch, "")
+				resolvedBranch, err := repo.ResolveBranch(issueCtx, a.env.Runner, target.Path, string(target.EffectiveBranchMode()), target.Branch)
 				if err != nil {
 					session := blockedIssueSessionForDispatchFailure(*target, next, selectedProvider, err, a.clock())
 					previous, _ := findSession(sessions, target.Repo, next.Number)
@@ -1345,7 +1400,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				}
 				target.Branch = resolvedBranch
 
-				wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, *target, next.Number, next.Title)
+				wt, err := worktree.CreateIssueWorktree(issueCtx, a.env.Runner, *target, next.Number, next.Title)
 				if err != nil {
 					session := blockedIssueSessionForDispatchFailure(*target, next, selectedProvider, err, a.clock())
 					previous, _ := findSession(sessions, target.Repo, next.Number)
@@ -1364,9 +1419,9 @@ func (a *App) ScanOnce(ctx context.Context) error {
 
 				diffSummary := ""
 				if strings.TrimSpace(wt.ReusedRemoteBranch) != "" {
-					diffSummary, err = summarizeIssueBranchDiff(ctx, a.env.Runner, target.Path, target.Branch, wt.Branch)
+					diffSummary, err = summarizeIssueBranchDiff(issueCtx, a.env.Runner, target.Path, target.Branch, wt.Branch)
 					if err != nil {
-						_ = worktree.CleanupIssueArtifacts(ctx, a.env.Runner, target.Path, wt.Path, wt.Branch)
+						_ = worktree.CleanupIssueArtifacts(issueCtx, a.env.Runner, target.Path, wt.Path, wt.Branch)
 						session := blockedIssueSessionForDispatchFailure(*target, next, selectedProvider, fmt.Errorf("analyze reused remote issue branch %q against %q: %w", wt.Branch, target.Branch, err), a.clock())
 						session.Branch = wt.Branch
 						session.BaseBranch = target.Branch
@@ -1719,6 +1774,7 @@ func sessionAffectedByGitHubRateLimitPause(session state.Session) bool {
 func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session, issueCache scanIssueDetailsCache) ([]state.Session, error) {
 	for i := range sessions {
 		session := &sessions[i]
+		sessionCtx := withSessionAccessLogContext(ctx, "maintenance", *session)
 		if session.Status != state.SessionStatusSuccess || session.CleanupCompletedAt != "" || session.MonitoringStoppedAt != "" {
 			continue
 		}
@@ -1726,7 +1782,7 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 			continue
 		}
 
-		pr, err := ghcli.FindPullRequestForBranch(ctx, a.env.Runner, session.Repo, session.Branch)
+		pr, err := ghcli.FindPullRequestForBranch(sessionCtx, a.env.Runner, session.Repo, session.Branch)
 		if err != nil {
 			session.LastMaintenanceError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
@@ -1740,7 +1796,7 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 		updatePullRequestTrackingFromLookup(session, *pr)
 		if pr.MergedAt == nil {
 			if pr.State != "OPEN" {
-				if err := a.cleanupSessionArtifacts(ctx, session, "pull_request_closed"); err != nil {
+				if err := a.cleanupSessionArtifacts(sessionCtx, session, "pull_request_closed"); err != nil {
 					a.logger.Error("cleanup failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "branch", session.Branch, "worktree", session.WorktreePath, "state", pr.State, "err", err)
 					continue
 				}
@@ -1748,7 +1804,7 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 				a.syncSessionIssueLabelsBestEffort(ctx, session, pr, nil, issueCache)
 				continue
 			}
-			detailedPR, issueDetails, err := a.maintainOpenPullRequest(ctx, session, *pr, issueCache)
+			detailedPR, issueDetails, err := a.maintainOpenPullRequest(sessionCtx, session, *pr, issueCache)
 			if err != nil {
 				session.UpdatedAt = a.clock().Format(time.RFC3339)
 				a.logger.Error("pr maintenance failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "branch", session.Branch, "err", err)
@@ -1769,7 +1825,7 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 						},
 						Tagline: "Difficulties strengthen the mind, as labor does the body.",
 					})
-					if commentErr := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "blocked", "pr_maintenance"); commentErr != nil {
+					if commentErr := a.commentOnIssue(sessionCtx, session.Repo, session.IssueNumber, body, "blocked", "pr_maintenance"); commentErr != nil {
 						a.logger.Error("pr maintenance failure comment failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "err", commentErr)
 					}
 					session.LastMaintenanceError = err.Error()
@@ -1782,7 +1838,7 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 		}
 
 		session.PullRequestMergedAt = pr.MergedAt.UTC().Format(time.RFC3339)
-		if err := a.cleanupSessionArtifacts(ctx, session, "pull_request_merged"); err != nil {
+		if err := a.cleanupSessionArtifacts(sessionCtx, session, "pull_request_merged"); err != nil {
 			a.logger.Error("cleanup failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", session.PullRequestNumber, "branch", session.Branch, "worktree", session.WorktreePath, "merged_at", session.PullRequestMergedAt, "err", err)
 			continue
 		}
@@ -1797,6 +1853,7 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 func (a *App) cleanupClosedIssueSessions(ctx context.Context, sessions []state.Session, issueCache scanIssueDetailsCache) ([]state.Session, error) {
 	for i := range sessions {
 		session := &sessions[i]
+		sessionCtx := withSessionAccessLogContext(ctx, "maintenance", *session)
 		if session.Status != state.SessionStatusSuccess || session.CleanupCompletedAt != "" || session.MonitoringStoppedAt != "" {
 			continue
 		}
@@ -1804,10 +1861,10 @@ func (a *App) cleanupClosedIssueSessions(ctx context.Context, sessions []state.S
 			continue
 		}
 
-		issue, err := a.loadIssueDetailsForScan(ctx, issueCache, session.Repo, session.IssueNumber)
+		issue, err := a.loadIssueDetailsForScan(sessionCtx, issueCache, session.Repo, session.IssueNumber)
 		if err != nil {
 			if ghcli.IsIssueUnavailableError(err) {
-				a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
+				a.stopMonitoringUnavailableIssueSession(sessionCtx, session, "issue_deleted", err)
 				continue
 			}
 			session.LastMaintenanceError = err.Error()
@@ -1819,7 +1876,7 @@ func (a *App) cleanupClosedIssueSessions(ctx context.Context, sessions []state.S
 			continue
 		}
 
-		if err := a.cleanupSessionArtifacts(ctx, session, "issue_closed"); err != nil {
+		if err := a.cleanupSessionArtifacts(sessionCtx, session, "issue_closed"); err != nil {
 			a.logger.Error("cleanup failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "worktree", session.WorktreePath, "err", err)
 			continue
 		}
@@ -1834,6 +1891,7 @@ func (a *App) cleanupClosedIssueSessions(ctx context.Context, sessions []state.S
 }
 
 func (a *App) cleanupSessionArtifacts(ctx context.Context, session *state.Session, source string) error {
+	ctx = withSessionAccessLogContext(ctx, "maintenance", *session)
 	now := a.clock().Format(time.RFC3339)
 	session.LastCleanupSource = source
 	if err := worktree.CleanupIssueArtifacts(ctx, a.env.Runner, session.RepoPath, session.WorktreePath, session.Branch); err != nil {
@@ -1902,6 +1960,7 @@ func (a *App) waitForSessions() {
 }
 
 func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Session, pr ghcli.PullRequest, issueCache scanIssueDetailsCache) (*ghcli.PullRequest, *ghcli.IssueDetails, error) {
+	ctx = withSessionAccessLogContext(ctx, "maintenance", *session)
 	previousMaintenanceError := session.LastMaintenanceError
 	session.LastMaintenanceError = ""
 	fallbackTarget := a.fallbackWatchTargetForSession(*session)
@@ -3165,6 +3224,7 @@ func (a *App) resumeBlockedSession(ctx context.Context, session *state.Session, 
 }
 
 func (a *App) preflightResume(ctx context.Context, session state.Session) error {
+	ctx = withSessionAccessLogContext(ctx, "maintenance", session)
 	selectedProvider, err := provider.Resolve(session.Provider)
 	if err != nil {
 		return err
@@ -3199,6 +3259,7 @@ func (a *App) preflightResume(ctx context.Context, session state.Session) error 
 }
 
 func (a *App) resumeBlockedMaintenance(ctx context.Context, session *state.Session) error {
+	ctx = withSessionAccessLogContext(ctx, "maintenance", *session)
 	pr, err := ghcli.FindPullRequestForBranch(ctx, a.env.Runner, session.Repo, session.Branch)
 	if err != nil {
 		return err
