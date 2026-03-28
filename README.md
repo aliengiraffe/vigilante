@@ -14,7 +14,7 @@
 
 It is a Go CLI and background service that runs locally on top of the tools teams already use: `git`, `gh`, and a supported coding-agent CLI such as `codex`, `claude`, or `gemini`. The current target platforms are macOS and Ubuntu.
 
-Vigilante's architecture separates **project-management backends** (where work items come from) from **coding-agent providers** (what generates the code). GitHub is the first and currently only fully implemented backend; the abstraction layer is designed so additional backends such as Linear or Jira can be added without restructuring the core dispatch and session lifecycle.
+Vigilante's architecture separates three concerns: **issue trackers** (where work items come from — e.g. GitHub Issues, Linear, Jira), **repository hosts** (where code and pull requests live — e.g. GitHub, GitLab), and **coding-agent providers** (what generates the code — e.g. Codex, Claude Code, Gemini). The issue tracker and repo host can differ for the same watch target, so a team could track work in Linear while hosting code on GitHub. GitHub is the first and currently only fully implemented backend for both roles; the abstraction layer is designed so additional backends can be added without restructuring the core dispatch and session lifecycle.
 
 Want to see that workflow on this repository? Browse [Vigilante's closed issues](https://github.com/aliengiraffe/vigilante/issues?q=is%3Aissue%20state%3Aclosed) for concrete examples of the project operating on its own codebase and improving itself over time.
 

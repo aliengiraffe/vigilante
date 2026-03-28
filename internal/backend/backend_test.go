@@ -345,3 +345,140 @@ func TestSelectWorkItemsAllowsCompletedCleanedUpSessions(t *testing.T) {
 		t.Fatalf("expected issue 1 to be eligible after cleanup, got %#v", selected)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Dual-backend abstraction tests
+// ---------------------------------------------------------------------------
+
+func TestDefaultRepoHostID(t *testing.T) {
+	if DefaultRepoHostID != "github" {
+		t.Fatalf("expected github, got %q", DefaultRepoHostID)
+	}
+}
+
+func TestGitHubRepoHostRegistered(t *testing.T) {
+	factory, ok := LookupRepoHost(GitHubBackendID)
+	if !ok {
+		t.Fatal("expected github repo host to be registered")
+	}
+	rh := factory(nil)
+	if rh.ID() != "github" {
+		t.Fatalf("expected github, got %q", rh.ID())
+	}
+}
+
+func TestGitHubIssueTrackerImplementsIssueTracker(t *testing.T) {
+	var _ IssueTracker = (*GitHubIssueTracker)(nil)
+	tracker := NewGitHubIssueTracker(nil, nil)
+	if tracker.ID() != "github" {
+		t.Fatalf("expected github, got %q", tracker.ID())
+	}
+}
+
+func TestGitHubRepoHostImplementsRepoHost(t *testing.T) {
+	var _ RepoHost = (*GitHubRepoHost)(nil)
+	host := NewGitHubRepoHost(nil, nil)
+	if host.ID() != "github" {
+		t.Fatalf("expected github, got %q", host.ID())
+	}
+}
+
+func TestGitHubIssueTrackerLabelManagerCapability(t *testing.T) {
+	tracker := NewGitHubIssueTracker(nil, nil)
+	if _, ok := AsLabelManager(tracker); !ok {
+		t.Error("expected GitHubIssueTracker to implement LabelManager")
+	}
+}
+
+func TestGitHubIssueTrackerRateLimitCapability(t *testing.T) {
+	tracker := NewGitHubIssueTracker(nil, nil)
+	if _, ok := AsRateLimitChecker(tracker); !ok {
+		t.Error("expected GitHubIssueTracker to implement RateLimitChecker")
+	}
+}
+
+func TestGitHubRepoHostRateLimitCapability(t *testing.T) {
+	host := NewGitHubRepoHost(nil, nil)
+	if _, ok := AsRateLimitChecker(host); !ok {
+		t.Error("expected GitHubRepoHost to implement RateLimitChecker")
+	}
+}
+
+func TestGitHubBackendImplementsBothInterfaces(t *testing.T) {
+	b := NewGitHubBackend(nil, nil)
+
+	// IssueTracker
+	var _ IssueTracker = b
+	if b.ID() != "github" {
+		t.Fatalf("expected github, got %q", b.ID())
+	}
+
+	// RepoHost via AsPullRequestManager (backward compat)
+	if _, ok := AsPullRequestManager(b); !ok {
+		t.Error("expected unified GitHubBackend to implement RepoHost via AsPullRequestManager")
+	}
+
+	// Direct RepoHost assertion
+	var _ RepoHost = b
+}
+
+func TestSeparateIssueTrackerAndRepoHostHaveDifferentInstances(t *testing.T) {
+	tracker := NewGitHubIssueTracker(nil, nil)
+	host := NewGitHubRepoHost(nil, nil)
+
+	// They share the same ID but are distinct types
+	if tracker.ID() != host.ID() {
+		t.Fatalf("expected same ID, got tracker=%q host=%q", tracker.ID(), host.ID())
+	}
+
+	// The issue tracker should not implement RepoHost
+	if _, ok := any(tracker).(RepoHost); ok {
+		t.Error("expected standalone GitHubIssueTracker to NOT implement RepoHost")
+	}
+
+	// The repo host should not implement IssueTracker
+	if _, ok := any(host).(IssueTracker); ok {
+		t.Error("expected standalone GitHubRepoHost to NOT implement IssueTracker")
+	}
+}
+
+func TestWatchTargetEffectiveRepoBackendID(t *testing.T) {
+	cases := []struct {
+		name     string
+		target   state.WatchTarget
+		wantRepo string
+	}{
+		{"defaults to github", state.WatchTarget{}, "github"},
+		{"falls back to BackendID", state.WatchTarget{BackendID: "linear"}, "linear"},
+		{"uses RepoBackendID when set", state.WatchTarget{BackendID: "linear", RepoBackendID: "github"}, "github"},
+		{"RepoBackendID alone", state.WatchTarget{RepoBackendID: "gitlab"}, "gitlab"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.target.EffectiveRepoBackendID()
+			if got != tc.wantRepo {
+				t.Fatalf("EffectiveRepoBackendID() = %q, want %q", got, tc.wantRepo)
+			}
+		})
+	}
+}
+
+func TestSessionEffectiveRepoBackendID(t *testing.T) {
+	cases := []struct {
+		name     string
+		session  state.Session
+		wantRepo string
+	}{
+		{"defaults to github", state.Session{}, "github"},
+		{"falls back to BackendID", state.Session{BackendID: "linear"}, "linear"},
+		{"uses RepoBackendID when set", state.Session{BackendID: "linear", RepoBackendID: "github"}, "github"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := tc.session.EffectiveRepoBackendID()
+			if got != tc.wantRepo {
+				t.Fatalf("EffectiveRepoBackendID() = %q, want %q", got, tc.wantRepo)
+			}
+		})
+	}
+}

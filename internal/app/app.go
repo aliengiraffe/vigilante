@@ -87,8 +87,9 @@ type App struct {
 	state   *state.Store
 	logger  *slog.Logger
 	clock   func() time.Time
-	env     *environment.Environment
-	backend backend.Backend
+	env          *environment.Environment
+	issueTracker backend.IssueTracker
+	repoHost     backend.RepoHost
 
 	sessionMu                 sync.Mutex
 	sessionWG                 sync.WaitGroup
@@ -161,17 +162,34 @@ func New() *App {
 	}
 }
 
-// getBackend returns the backend, lazily constructing it from the current
-// env.Runner so that tests which swap the runner after New() see the change.
-func (a *App) getBackend() backend.Backend {
-	if a.backend == nil {
-		a.backend = backend.NewGitHubBackend(a.env.Runner, a.logger)
+// getBackend returns the issue tracker, lazily constructing it from the
+// current env.Runner so that tests which swap the runner after New() see
+// the change.
+func (a *App) getBackend() backend.IssueTracker {
+	if a.issueTracker == nil {
+		a.issueTracker = backend.NewGitHubBackend(a.env.Runner, a.logger)
 	}
-	return a.backend
+	return a.issueTracker
 }
 
-func (a *App) pullRequestManager() (backend.PullRequestManager, bool) {
-	return backend.AsPullRequestManager(a.getBackend())
+// getRepoHost returns the repo host, lazily constructing it from the current
+// env.Runner so that tests which swap the runner after New() see the change.
+func (a *App) getRepoHost() backend.RepoHost {
+	if a.repoHost == nil {
+		// If the issue tracker is a unified backend that also implements
+		// RepoHost, reuse it for backward compatibility.
+		if rh, ok := a.getBackend().(backend.RepoHost); ok {
+			a.repoHost = rh
+		} else {
+			a.repoHost = backend.NewGitHubRepoHost(a.env.Runner, a.logger)
+		}
+	}
+	return a.repoHost
+}
+
+func (a *App) pullRequestManager() (backend.RepoHost, bool) {
+	rh := a.getRepoHost()
+	return rh, rh != nil
 }
 
 func (a *App) labelManager() (backend.LabelManager, bool) {
