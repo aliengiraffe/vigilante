@@ -643,14 +643,12 @@ func TestProcessGitHubIterationRequestsForTargetAcceptsNewCommentAfterStoredCurs
 	}
 	app.repoLabelsProvisionedOnce["owner/repo"] = true
 
-	iterationContext := buildIterationPromptContext([]ghcli.IssueComment{
+	iterationContext := buildIterationPromptContext([]backend.Comment{
 		{
 			ID:        101,
 			Body:      "@vigilanteai current follow-up",
 			CreatedAt: now.Add(-1 * time.Minute),
-			User: struct {
-				Login string `json:"login"`
-			}{Login: "nicobistolfi"},
+			Author:    "nicobistolfi",
 		},
 	})
 	startSession := state.Session{
