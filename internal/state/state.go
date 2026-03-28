@@ -24,6 +24,7 @@ type WatchTarget struct {
 	Classification repo.Classification `json:"classification,omitempty"`
 	Provider       string              `json:"provider,omitempty"`
 	BackendID      string              `json:"backend_id,omitempty"`
+	RepoBackendID  string              `json:"repo_backend_id,omitempty"`
 	Labels         []string            `json:"labels,omitempty"`
 	Assignee       string              `json:"assignee,omitempty"`
 	MaxParallel    int                 `json:"max_parallel_sessions"`
@@ -31,13 +32,23 @@ type WatchTarget struct {
 	AddedAt        string              `json:"added_at,omitempty"`
 }
 
-// EffectiveBackendID returns the backend identifier for this watch target,
-// defaulting to "github" when not explicitly set (backward compatibility).
+// EffectiveBackendID returns the issue-tracker backend identifier for this
+// watch target, defaulting to "github" when not explicitly set.
 func (t WatchTarget) EffectiveBackendID() string {
 	if id := strings.TrimSpace(t.BackendID); id != "" {
 		return id
 	}
 	return "github"
+}
+
+// EffectiveRepoBackendID returns the repo-host backend identifier for this
+// watch target.  Falls back to BackendID, then to "github", so that existing
+// GitHub-only configurations continue to work without changes.
+func (t WatchTarget) EffectiveRepoBackendID() string {
+	if id := strings.TrimSpace(t.RepoBackendID); id != "" {
+		return id
+	}
+	return t.EffectiveBackendID()
 }
 
 type BranchMode string
@@ -86,6 +97,7 @@ type Session struct {
 	Repo                           string        `json:"repo"`
 	Provider                       string        `json:"provider,omitempty"`
 	BackendID                      string        `json:"backend_id,omitempty"`
+	RepoBackendID                  string        `json:"repo_backend_id,omitempty"`
 	IssueNumber                    int           `json:"issue_number"`
 	IssueTitle                     string        `json:"issue_title,omitempty"`
 	IssueBody                      string        `json:"issue_body,omitempty"`
@@ -154,13 +166,22 @@ type Session struct {
 	LastError                      string        `json:"last_error,omitempty"`
 }
 
-// EffectiveBackendID returns the backend identifier for this session,
-// defaulting to "github" when not explicitly set (backward compatibility).
+// EffectiveBackendID returns the issue-tracker backend identifier for this
+// session, defaulting to "github" when not explicitly set.
 func (s Session) EffectiveBackendID() string {
 	if id := strings.TrimSpace(s.BackendID); id != "" {
 		return id
 	}
 	return "github"
+}
+
+// EffectiveRepoBackendID returns the repo-host backend identifier for this
+// session.  Falls back to BackendID, then to "github".
+func (s Session) EffectiveRepoBackendID() string {
+	if id := strings.TrimSpace(s.RepoBackendID); id != "" {
+		return id
+	}
+	return s.EffectiveBackendID()
 }
 
 type Store struct {

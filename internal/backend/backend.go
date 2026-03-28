@@ -1,10 +1,17 @@
-// Package backend defines the project-management backend abstraction layer.
+// Package backend defines the project-management and repository-host
+// abstraction layers.
 //
-// Vigilante's orchestration loop depends on this interface instead of calling
-// GitHub-specific APIs directly.  The GitHub backend is the first (and
-// currently only) concrete implementation; additional backends such as Linear
-// or Jira can be added by implementing the Backend interface and, optionally,
-// the capability interfaces defined here.
+// Vigilante's orchestration loop depends on these interfaces instead of
+// calling GitHub-specific APIs directly.  The two primary interfaces are:
+//
+//   - IssueTracker: manages work items, comments, labels, and assignees.
+//     Implementations: GitHub Issues, and in the future Linear, Jira, etc.
+//   - RepoHost: manages pull requests, branches, and code-review state.
+//     Implementations: GitHub, and in the future GitLab, Bitbucket, etc.
+//
+// The issue-tracking backend may differ from the repository-management
+// backend.  For example, a team could track work items in Linear while
+// hosting code and pull requests on GitHub.
 package backend
 
 import (
@@ -35,8 +42,7 @@ type Comment struct {
 }
 
 // PullRequest represents a pull request or merge request associated with a
-// work item.  Not every backend supports pull requests natively; use the
-// PullRequestManager capability interface to check.
+// work item.
 type PullRequest struct {
 	Number           int
 	Title            string
@@ -90,11 +96,18 @@ type CreatedWorkItem struct {
 	URL    string
 }
 
-// Backend is the core interface every project-management backend must
-// implement.  It covers the minimum operations the orchestration loop needs:
-// resolving assignees, listing and inspecting work items, reading and posting
-// comments, detecting operator commands, and managing work-item lifecycle.
-type Backend interface {
+// ---------------------------------------------------------------------------
+// IssueTracker — project-management / issue-tracking abstraction
+// ---------------------------------------------------------------------------
+
+// IssueTracker is the core interface every project-management backend must
+// implement.  It covers the minimum operations the orchestration loop needs
+// for work-item management: resolving assignees, listing and inspecting work
+// items, reading and posting comments, detecting operator commands, and
+// managing work-item lifecycle.
+//
+// Implementations include GitHub Issues, and in the future Linear, Jira, etc.
+type IssueTracker interface {
 	// ID returns the backend identifier (e.g. "github", "linear", "jira").
 	ID() string
 
@@ -135,12 +148,46 @@ type Backend interface {
 	IsWorkItemUnavailable(err error) bool
 }
 
+// Backend is an alias for IssueTracker preserved for backward compatibility
+// during the transition period.  New code should use IssueTracker directly.
+type Backend = IssueTracker
+
+// ---------------------------------------------------------------------------
+// RepoHost — repository / code-management abstraction
+// ---------------------------------------------------------------------------
+
+// RepoHost is the interface for repository-management backends that handle
+// pull requests, branches, and code-review state.  The repo host may differ
+// from the issue tracker: for example, issues could live in Linear while
+// code and PRs live on GitHub.
+//
+// Implementations include GitHub, and in the future GitLab, Bitbucket, etc.
+type RepoHost interface {
+	// ID returns the repo-host identifier (e.g. "github", "gitlab").
+	ID() string
+
+	// FindPullRequestForBranch looks up a PR by its head branch name.
+	FindPullRequestForBranch(ctx context.Context, target string, branch string) (*PullRequest, error)
+
+	// GetPullRequestDetails fetches full details for a pull request.
+	GetPullRequestDetails(ctx context.Context, target string, number int) (*PullRequest, error)
+
+	// MergePullRequestSquash merges and deletes the branch via squash.
+	MergePullRequestSquash(ctx context.Context, target string, number int) error
+
+	// ClosePullRequest closes the pull request without merging.
+	ClosePullRequest(ctx context.Context, target string, number int) error
+
+	// DeleteRemoteBranch deletes a branch from the remote.
+	DeleteRemoteBranch(ctx context.Context, repoPath string, branch string) error
+}
+
 // ---------------------------------------------------------------------------
 // Optional capability interfaces
 // ---------------------------------------------------------------------------
 
-// LabelManager is implemented by backends that support label operations on
-// work items and projects.
+// LabelManager is implemented by issue trackers that support label operations
+// on work items and projects.
 type LabelManager interface {
 	// SyncWorkItemLabels reconciles the labels on a work item.  current is
 	// the set of labels currently on the item, desired is the target set,
@@ -159,27 +206,13 @@ type LabelManager interface {
 	LoadLabelSpecs() ([]LabelSpec, error)
 }
 
-// PullRequestManager is implemented by backends that support pull-request
-// (or merge-request) operations.
-type PullRequestManager interface {
-	// FindPullRequestForBranch looks up a PR by its head branch name.
-	FindPullRequestForBranch(ctx context.Context, target string, branch string) (*PullRequest, error)
-
-	// GetPullRequestDetails fetches full details for a pull request.
-	GetPullRequestDetails(ctx context.Context, target string, number int) (*PullRequest, error)
-
-	// MergePullRequestSquash merges and deletes the branch via squash.
-	MergePullRequestSquash(ctx context.Context, target string, number int) error
-
-	// ClosePullRequest closes the pull request without merging.
-	ClosePullRequest(ctx context.Context, target string, number int) error
-
-	// DeleteRemoteBranch deletes a branch from the remote.
-	DeleteRemoteBranch(ctx context.Context, repoPath string, branch string) error
-}
+// PullRequestManager is kept as a compatibility alias for RepoHost during the
+// transition.  New code should use RepoHost directly.
+type PullRequestManager = RepoHost
 
 // RateLimitChecker is implemented by backends that expose API quota
 // information so the orchestration loop can pause before hitting limits.
+// Both IssueTracker and RepoHost implementations may implement this.
 type RateLimitChecker interface {
 	CheckRateLimit(ctx context.Context) (*RateLimitSnapshot, error)
 }
@@ -188,47 +221,78 @@ type RateLimitChecker interface {
 // Capability helpers
 // ---------------------------------------------------------------------------
 
-// AsLabelManager returns the LabelManager if the backend supports it.
-func AsLabelManager(b Backend) (LabelManager, bool) {
+// AsLabelManager returns the LabelManager if the issue tracker supports it.
+func AsLabelManager(b IssueTracker) (LabelManager, bool) {
 	lm, ok := b.(LabelManager)
 	return lm, ok
 }
 
-// AsPullRequestManager returns the PullRequestManager if the backend
-// supports it.
-func AsPullRequestManager(b Backend) (PullRequestManager, bool) {
-	prm, ok := b.(PullRequestManager)
+// AsPullRequestManager returns the RepoHost if the issue tracker also
+// implements it.  This is a backward-compatibility helper for backends like
+// GitHub that serve as both issue tracker and repo host in a single type.
+func AsPullRequestManager(b IssueTracker) (RepoHost, bool) {
+	prm, ok := b.(RepoHost)
 	return prm, ok
 }
 
 // AsRateLimitChecker returns the RateLimitChecker if the backend supports it.
-func AsRateLimitChecker(b Backend) (RateLimitChecker, bool) {
+// Works with both IssueTracker and RepoHost implementations.
+func AsRateLimitChecker(b any) (RateLimitChecker, bool) {
 	rlc, ok := b.(RateLimitChecker)
 	return rlc, ok
 }
 
 // ---------------------------------------------------------------------------
-// Backend registry
+// IssueTracker registry
 // ---------------------------------------------------------------------------
 
-// BackendFactory creates a Backend from an environment.  The logger may be
-// nil.
-type BackendFactory func(logger *slog.Logger) Backend
+// IssueTrackerFactory creates an IssueTracker.  The logger may be nil.
+type IssueTrackerFactory func(logger *slog.Logger) IssueTracker
 
-var registry = map[string]BackendFactory{}
+// BackendFactory is a compatibility alias for IssueTrackerFactory.
+type BackendFactory = IssueTrackerFactory
 
-// Register adds a backend factory to the global registry.
-func Register(id string, factory BackendFactory) {
-	registry[id] = factory
+var issueTrackerRegistry = map[string]IssueTrackerFactory{}
+
+// Register adds an issue-tracker factory to the global registry.
+func Register(id string, factory IssueTrackerFactory) {
+	issueTrackerRegistry[id] = factory
 }
 
-// Lookup returns the factory for the given backend ID.
-func Lookup(id string) (BackendFactory, bool) {
-	f, ok := registry[id]
+// Lookup returns the issue-tracker factory for the given backend ID.
+func Lookup(id string) (IssueTrackerFactory, bool) {
+	f, ok := issueTrackerRegistry[id]
 	return f, ok
 }
 
-// DefaultBackendID is the backend used when no explicit backend is configured.
-//
-// Additional backends (e.g. "linear", "jira") can be registered at init time.
+// ---------------------------------------------------------------------------
+// RepoHost registry
+// ---------------------------------------------------------------------------
+
+// RepoHostFactory creates a RepoHost.  The logger may be nil.
+type RepoHostFactory func(logger *slog.Logger) RepoHost
+
+var repoHostRegistry = map[string]RepoHostFactory{}
+
+// RegisterRepoHost adds a repo-host factory to the global registry.
+func RegisterRepoHost(id string, factory RepoHostFactory) {
+	repoHostRegistry[id] = factory
+}
+
+// LookupRepoHost returns the repo-host factory for the given backend ID.
+func LookupRepoHost(id string) (RepoHostFactory, bool) {
+	f, ok := repoHostRegistry[id]
+	return f, ok
+}
+
+// ---------------------------------------------------------------------------
+// Default backend IDs
+// ---------------------------------------------------------------------------
+
+// DefaultBackendID is the issue-tracker backend used when no explicit backend
+// is configured.
 const DefaultBackendID = "github"
+
+// DefaultRepoHostID is the repo-host backend used when no explicit repo host
+// is configured.
+const DefaultRepoHostID = "github"

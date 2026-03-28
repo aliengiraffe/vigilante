@@ -13,44 +13,37 @@ import (
 
 const GitHubBackendID = "github"
 
-// GitHubBackend implements the Backend, LabelManager, PullRequestManager, and
+// ---------------------------------------------------------------------------
+// GitHubIssueTracker — IssueTracker + LabelManager + RateLimitChecker
+// ---------------------------------------------------------------------------
+
+// GitHubIssueTracker implements the IssueTracker, LabelManager, and
 // RateLimitChecker interfaces by delegating to the existing internal/github
 // package.
-type GitHubBackend struct {
+type GitHubIssueTracker struct {
 	runner environment.Runner
 	logger *slog.Logger
 }
 
 // Compile-time interface checks.
 var (
-	_ Backend            = (*GitHubBackend)(nil)
-	_ LabelManager       = (*GitHubBackend)(nil)
-	_ PullRequestManager = (*GitHubBackend)(nil)
-	_ RateLimitChecker   = (*GitHubBackend)(nil)
+	_ IssueTracker   = (*GitHubIssueTracker)(nil)
+	_ LabelManager   = (*GitHubIssueTracker)(nil)
+	_ RateLimitChecker = (*GitHubIssueTracker)(nil)
 )
 
-// NewGitHubBackend creates a GitHub backend using the provided runner.
-func NewGitHubBackend(runner environment.Runner, logger *slog.Logger) *GitHubBackend {
-	return &GitHubBackend{runner: runner, logger: logger}
+// NewGitHubIssueTracker creates a GitHub issue tracker using the provided runner.
+func NewGitHubIssueTracker(runner environment.Runner, logger *slog.Logger) *GitHubIssueTracker {
+	return &GitHubIssueTracker{runner: runner, logger: logger}
 }
 
-func init() {
-	Register(GitHubBackendID, func(logger *slog.Logger) Backend {
-		return NewGitHubBackend(environment.ExecRunner{}, logger)
-	})
-}
+func (g *GitHubIssueTracker) ID() string { return GitHubBackendID }
 
-// ---------------------------------------------------------------------------
-// Backend interface
-// ---------------------------------------------------------------------------
-
-func (g *GitHubBackend) ID() string { return GitHubBackendID }
-
-func (g *GitHubBackend) ResolveAssignee(ctx context.Context, assignee string) (string, error) {
+func (g *GitHubIssueTracker) ResolveAssignee(ctx context.Context, assignee string) (string, error) {
 	return ghcli.ResolveAssignee(ctx, g.runner, assignee)
 }
 
-func (g *GitHubBackend) ListWorkItems(ctx context.Context, target string, assignee string) ([]WorkItem, error) {
+func (g *GitHubIssueTracker) ListWorkItems(ctx context.Context, target string, assignee string) ([]WorkItem, error) {
 	issues, err := ghcli.ListOpenIssuesForAssignee(ctx, g.runner, target, assignee)
 	if err != nil {
 		return nil, err
@@ -62,7 +55,7 @@ func (g *GitHubBackend) ListWorkItems(ctx context.Context, target string, assign
 	return items, nil
 }
 
-func (g *GitHubBackend) GetWorkItem(ctx context.Context, target string, number int) (*WorkItem, error) {
+func (g *GitHubIssueTracker) GetWorkItem(ctx context.Context, target string, number int) (*WorkItem, error) {
 	details, err := ghcli.GetIssueDetails(ctx, g.runner, target, number)
 	if err != nil {
 		return nil, err
@@ -70,7 +63,7 @@ func (g *GitHubBackend) GetWorkItem(ctx context.Context, target string, number i
 	return ghIssueDetailsToWorkItem(details), nil
 }
 
-func (g *GitHubBackend) ListComments(ctx context.Context, target string, workItemID int) ([]Comment, error) {
+func (g *GitHubIssueTracker) ListComments(ctx context.Context, target string, workItemID int) ([]Comment, error) {
 	comments, err := ghcli.ListIssueComments(ctx, g.runner, target, workItemID)
 	if err != nil {
 		return nil, err
@@ -78,7 +71,7 @@ func (g *GitHubBackend) ListComments(ctx context.Context, target string, workIte
 	return ghCommentsToComments(comments), nil
 }
 
-func (g *GitHubBackend) PollComments(ctx context.Context, target string, workItemID int, purpose string) ([]Comment, error) {
+func (g *GitHubIssueTracker) PollComments(ctx context.Context, target string, workItemID int, purpose string) ([]Comment, error) {
 	comments, err := ghcli.ListIssueCommentsForPolling(ctx, g.runner, target, workItemID, purpose, g.logger)
 	if err != nil {
 		return nil, err
@@ -86,15 +79,15 @@ func (g *GitHubBackend) PollComments(ctx context.Context, target string, workIte
 	return ghCommentsToComments(comments), nil
 }
 
-func (g *GitHubBackend) PostComment(ctx context.Context, target string, workItemID int, body string) error {
+func (g *GitHubIssueTracker) PostComment(ctx context.Context, target string, workItemID int, body string) error {
 	return ghcli.CommentOnIssue(ctx, g.runner, target, workItemID, body)
 }
 
-func (g *GitHubBackend) AcknowledgeComment(ctx context.Context, target string, commentID int64, reaction string) error {
+func (g *GitHubIssueTracker) AcknowledgeComment(ctx context.Context, target string, commentID int64, reaction string) error {
 	return ghcli.AddIssueCommentReaction(ctx, g.runner, target, commentID, reaction)
 }
 
-func (g *GitHubBackend) CreateWorkItem(ctx context.Context, target string, title string, body string, labels []string, assignees []string) (*CreatedWorkItem, error) {
+func (g *GitHubIssueTracker) CreateWorkItem(ctx context.Context, target string, title string, body string, labels []string, assignees []string) (*CreatedWorkItem, error) {
 	created, err := ghcli.CreateIssue(ctx, g.runner, target, title, body, labels, assignees)
 	if err != nil {
 		return nil, err
@@ -102,20 +95,17 @@ func (g *GitHubBackend) CreateWorkItem(ctx context.Context, target string, title
 	return &CreatedWorkItem{Number: created.Number, URL: created.URL}, nil
 }
 
-func (g *GitHubBackend) CloseWorkItem(ctx context.Context, target string, number int) error {
+func (g *GitHubIssueTracker) CloseWorkItem(ctx context.Context, target string, number int) error {
 	return ghcli.CloseIssueNotPlanned(ctx, g.runner, target, number)
 }
 
-func (g *GitHubBackend) IsWorkItemUnavailable(err error) bool {
+func (g *GitHubIssueTracker) IsWorkItemUnavailable(err error) bool {
 	return ghcli.IsIssueUnavailableError(err)
 }
 
-// ---------------------------------------------------------------------------
-// LabelManager interface
-// ---------------------------------------------------------------------------
+// LabelManager implementation
 
-func (g *GitHubBackend) SyncWorkItemLabels(ctx context.Context, target string, number int, current []string, desired []string, managed []string) error {
-	// Convert string slices to ghcli.Label slice for the existing API.
+func (g *GitHubIssueTracker) SyncWorkItemLabels(ctx context.Context, target string, number int, current []string, desired []string, managed []string) error {
 	labels := make([]ghcli.Label, len(current))
 	for i, name := range current {
 		labels[i] = ghcli.Label{Name: name}
@@ -123,11 +113,11 @@ func (g *GitHubBackend) SyncWorkItemLabels(ctx context.Context, target string, n
 	return ghcli.SyncIssueLabels(ctx, g.runner, target, number, labels, desired, managed)
 }
 
-func (g *GitHubBackend) RemoveWorkItemLabel(ctx context.Context, target string, number int, label string) error {
+func (g *GitHubIssueTracker) RemoveWorkItemLabel(ctx context.Context, target string, number int, label string) error {
 	return ghcli.RemoveIssueLabel(ctx, g.runner, target, number, label)
 }
 
-func (g *GitHubBackend) EnsureProjectLabels(ctx context.Context, target string, specs []LabelSpec) error {
+func (g *GitHubIssueTracker) EnsureProjectLabels(ctx context.Context, target string, specs []LabelSpec) error {
 	ghSpecs := make([]ghcli.RepositoryLabelSpec, len(specs))
 	for i, spec := range specs {
 		ghSpecs[i] = ghcli.RepositoryLabelSpec{
@@ -139,7 +129,7 @@ func (g *GitHubBackend) EnsureProjectLabels(ctx context.Context, target string, 
 	return ghcli.EnsureRepositoryLabels(ctx, g.runner, target, ghSpecs)
 }
 
-func (g *GitHubBackend) LoadLabelSpecs() ([]LabelSpec, error) {
+func (g *GitHubIssueTracker) LoadLabelSpecs() ([]LabelSpec, error) {
 	ghSpecs, err := ghcli.LoadRepositoryLabelSpecs()
 	if err != nil {
 		return nil, err
@@ -155,11 +145,41 @@ func (g *GitHubBackend) LoadLabelSpecs() ([]LabelSpec, error) {
 	return specs, nil
 }
 
+// RateLimitChecker implementation
+
+func (g *GitHubIssueTracker) CheckRateLimit(ctx context.Context) (*RateLimitSnapshot, error) {
+	snapshot, err := ghcli.GetRateLimitSnapshot(ctx, g.runner)
+	if err != nil {
+		return nil, err
+	}
+	return ghRateLimitToSnapshot(snapshot), nil
+}
+
 // ---------------------------------------------------------------------------
-// PullRequestManager interface
+// GitHubRepoHost — RepoHost + RateLimitChecker
 // ---------------------------------------------------------------------------
 
-func (g *GitHubBackend) FindPullRequestForBranch(ctx context.Context, target string, branch string) (*PullRequest, error) {
+// GitHubRepoHost implements the RepoHost and RateLimitChecker interfaces by
+// delegating to the existing internal/github package.
+type GitHubRepoHost struct {
+	runner environment.Runner
+	logger *slog.Logger
+}
+
+// Compile-time interface checks.
+var (
+	_ RepoHost         = (*GitHubRepoHost)(nil)
+	_ RateLimitChecker = (*GitHubRepoHost)(nil)
+)
+
+// NewGitHubRepoHost creates a GitHub repo host using the provided runner.
+func NewGitHubRepoHost(runner environment.Runner, logger *slog.Logger) *GitHubRepoHost {
+	return &GitHubRepoHost{runner: runner, logger: logger}
+}
+
+func (g *GitHubRepoHost) ID() string { return GitHubBackendID }
+
+func (g *GitHubRepoHost) FindPullRequestForBranch(ctx context.Context, target string, branch string) (*PullRequest, error) {
 	pr, err := ghcli.FindPullRequestForBranch(ctx, g.runner, target, branch)
 	if err != nil {
 		return nil, err
@@ -170,7 +190,7 @@ func (g *GitHubBackend) FindPullRequestForBranch(ctx context.Context, target str
 	return ghPullRequestToPullRequest(pr), nil
 }
 
-func (g *GitHubBackend) GetPullRequestDetails(ctx context.Context, target string, number int) (*PullRequest, error) {
+func (g *GitHubRepoHost) GetPullRequestDetails(ctx context.Context, target string, number int) (*PullRequest, error) {
 	pr, err := ghcli.GetPullRequestDetails(ctx, g.runner, target, number)
 	if err != nil {
 		return nil, err
@@ -178,28 +198,74 @@ func (g *GitHubBackend) GetPullRequestDetails(ctx context.Context, target string
 	return ghPullRequestToPullRequest(pr), nil
 }
 
-func (g *GitHubBackend) MergePullRequestSquash(ctx context.Context, target string, number int) error {
+func (g *GitHubRepoHost) MergePullRequestSquash(ctx context.Context, target string, number int) error {
 	return ghcli.MergePullRequestSquash(ctx, g.runner, target, number)
 }
 
-func (g *GitHubBackend) ClosePullRequest(ctx context.Context, target string, number int) error {
+func (g *GitHubRepoHost) ClosePullRequest(ctx context.Context, target string, number int) error {
 	return ghcli.ClosePullRequest(ctx, g.runner, target, number)
 }
 
-func (g *GitHubBackend) DeleteRemoteBranch(ctx context.Context, repoPath string, branch string) error {
+func (g *GitHubRepoHost) DeleteRemoteBranch(ctx context.Context, repoPath string, branch string) error {
 	return ghcli.DeleteRemoteBranch(ctx, g.runner, repoPath, branch)
 }
 
-// ---------------------------------------------------------------------------
-// RateLimitChecker interface
-// ---------------------------------------------------------------------------
-
-func (g *GitHubBackend) CheckRateLimit(ctx context.Context) (*RateLimitSnapshot, error) {
+func (g *GitHubRepoHost) CheckRateLimit(ctx context.Context) (*RateLimitSnapshot, error) {
 	snapshot, err := ghcli.GetRateLimitSnapshot(ctx, g.runner)
 	if err != nil {
 		return nil, err
 	}
 	return ghRateLimitToSnapshot(snapshot), nil
+}
+
+// ---------------------------------------------------------------------------
+// GitHubBackend — unified type for backward compatibility
+// ---------------------------------------------------------------------------
+
+// GitHubBackend implements both IssueTracker and RepoHost for backward
+// compatibility.  It embeds both the issue tracker and repo host so that
+// existing code using AsPullRequestManager(backend) continues to work when
+// the backend is a single unified GitHub type.
+type GitHubBackend struct {
+	GitHubIssueTracker
+	GitHubRepoHost
+}
+
+// Compile-time interface checks.
+var (
+	_ IssueTracker   = (*GitHubBackend)(nil)
+	_ RepoHost       = (*GitHubBackend)(nil)
+	_ LabelManager   = (*GitHubBackend)(nil)
+	_ RateLimitChecker = (*GitHubBackend)(nil)
+)
+
+// NewGitHubBackend creates a unified GitHub backend that serves as both
+// issue tracker and repo host.  This is a convenience for the common case
+// where both roles are handled by GitHub.
+func NewGitHubBackend(runner environment.Runner, logger *slog.Logger) *GitHubBackend {
+	return &GitHubBackend{
+		GitHubIssueTracker: GitHubIssueTracker{runner: runner, logger: logger},
+		GitHubRepoHost:     GitHubRepoHost{runner: runner, logger: logger},
+	}
+}
+
+// ID returns the backend identifier.  Both embedded types return the same ID;
+// this explicit method avoids ambiguity.
+func (g *GitHubBackend) ID() string { return GitHubBackendID }
+
+// CheckRateLimit resolves the ambiguity between the two embedded
+// RateLimitChecker implementations.
+func (g *GitHubBackend) CheckRateLimit(ctx context.Context) (*RateLimitSnapshot, error) {
+	return g.GitHubIssueTracker.CheckRateLimit(ctx)
+}
+
+func init() {
+	Register(GitHubBackendID, func(logger *slog.Logger) IssueTracker {
+		return NewGitHubBackend(environment.ExecRunner{}, logger)
+	})
+	RegisterRepoHost(GitHubBackendID, func(logger *slog.Logger) RepoHost {
+		return NewGitHubRepoHost(environment.ExecRunner{}, logger)
+	})
 }
 
 // ---------------------------------------------------------------------------
