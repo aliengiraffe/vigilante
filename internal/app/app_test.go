@@ -741,7 +741,7 @@ func TestSyncIssueManagedLabelsQueued(t *testing.T) {
 		},
 	}
 
-	if err := app.syncIssueManagedLabels(context.Background(), "owner/repo", 7, []string{labelQueued}, nil, nil); err != nil {
+	if err := app.syncIssueManagedLabels(context.Background(), "", "owner/repo", 7, []string{labelQueued}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := shutdownTelemetry(); err != nil {
@@ -773,7 +773,7 @@ func TestSyncIssueManagedLabelsNoopDoesNotEmitTelemetry(t *testing.T) {
 		},
 	}
 
-	if err := app.syncIssueManagedLabels(context.Background(), "owner/repo", 7, []string{labelQueued}, nil, nil); err != nil {
+	if err := app.syncIssueManagedLabels(context.Background(), "", "owner/repo", 7, []string{labelQueued}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := shutdownTelemetry(); err != nil {
@@ -795,7 +795,7 @@ func TestCommentOnIssueEmitsTypedTelemetry(t *testing.T) {
 		},
 	}
 
-	if err := app.commentOnIssue(context.Background(), "owner/repo", 7, "body", "dispatch_failure", "dispatch"); err != nil {
+	if err := app.commentOnIssue(context.Background(), "", "owner/repo", 7, "body", "dispatch_failure", "dispatch"); err != nil {
 		t.Fatal(err)
 	}
 	if err := shutdownTelemetry(); err != nil {
@@ -935,7 +935,7 @@ func TestSyncIssueManagedLabelsProvisionMissingRepositoryLabels(t *testing.T) {
 		},
 	}
 
-	if err := app.syncIssueManagedLabels(context.Background(), "owner/repo", 7, []string{labelQueued}, nil, nil); err != nil {
+	if err := app.syncIssueManagedLabels(context.Background(), "", "owner/repo", 7, []string{labelQueued}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 }

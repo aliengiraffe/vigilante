@@ -27,8 +27,8 @@ type GitHubIssueTracker struct {
 
 // Compile-time interface checks.
 var (
-	_ IssueTracker   = (*GitHubIssueTracker)(nil)
-	_ LabelManager   = (*GitHubIssueTracker)(nil)
+	_ IssueTracker     = (*GitHubIssueTracker)(nil)
+	_ LabelManager     = (*GitHubIssueTracker)(nil)
 	_ RateLimitChecker = (*GitHubIssueTracker)(nil)
 )
 
@@ -233,9 +233,9 @@ type GitHubBackend struct {
 
 // Compile-time interface checks.
 var (
-	_ IssueTracker   = (*GitHubBackend)(nil)
-	_ RepoHost       = (*GitHubBackend)(nil)
-	_ LabelManager   = (*GitHubBackend)(nil)
+	_ IssueTracker     = (*GitHubBackend)(nil)
+	_ RepoHost         = (*GitHubBackend)(nil)
+	_ LabelManager     = (*GitHubBackend)(nil)
 	_ RateLimitChecker = (*GitHubBackend)(nil)
 )
 
