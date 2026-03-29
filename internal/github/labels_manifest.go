@@ -8,13 +8,10 @@ import (
 	"sync"
 
 	skillassets "github.com/nicobistolfi/vigilante"
+	"github.com/nicobistolfi/vigilante/internal/backend"
 )
 
-type RepositoryLabelSpec struct {
-	Name        string `json:"name"`
-	Color       string `json:"color"`
-	Description string `json:"description"`
-}
+type RepositoryLabelSpec = backend.RepositoryLabelSpec
 
 type labelsManifest struct {
 	Labels []RepositoryLabelSpec `json:"labels"`

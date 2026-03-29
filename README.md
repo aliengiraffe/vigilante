@@ -10,7 +10,9 @@
 [![License](https://img.shields.io/github/license/aliengiraffe/vigilante)](https://github.com/aliengiraffe/vigilante/blob/main/LICENSE)
 [![Release Workflow](https://img.shields.io/github/actions/workflow/status/aliengiraffe/vigilante/release.yml?label=release)](https://github.com/aliengiraffe/vigilante/actions/workflows/release.yml)
 
-`vigilante` is a GitHub-native control plane for autonomous software delivery. It watches repositories, selects executable issues, prepares isolated implementation environments, dispatches headless coding agents, keeps GitHub updated with progress, and maintains the delivery loop around pull requests.
+`vigilante` is a control plane for autonomous software delivery, extensible to multiple project-management backends. It watches repositories, selects executable work items, prepares isolated implementation environments, dispatches headless coding agents, keeps the issue-tracking system updated with progress, and maintains the delivery loop around pull requests.
+
+GitHub is the only fully implemented backend today, but the architecture supports additional backends such as Linear and Jira for issue tracking while retaining GitHub for git hosting and pull-request management.
 
 It is a Go CLI and background service that runs locally on top of the tools teams already use: `git`, `gh`, and a supported coding-agent CLI such as `codex`, `claude`, or `gemini`. The current target platforms are macOS and Ubuntu.
 
@@ -20,7 +22,7 @@ Want to see that workflow on this repository? Browse [Vigilante's closed issues]
 
 `vigilante` is the orchestration layer around coding agents. It is responsible for:
 
-- treating GitHub issues as the work queue
+- treating project-management work items as the work queue (GitHub issues today; Linear and Jira planned)
 - selecting eligible work based on labels, assignees, and repository limits
 - creating dedicated git worktrees and issue branches for each session
 - choosing the right execution playbook from repository classification
@@ -30,17 +32,36 @@ Want to see that workflow on this repository? Browse [Vigilante's closed issues]
 
 ## What Vigilante Is Not
 
-`vigilante` is not the code-generating model itself. Tools such as Codex, Claude Code, and Gemini are the execution engines that read prompts, edit code, run validation, and prepare pull requests. Keeping orchestration separate from code generation lets Vigilante stay provider-neutral while owning scheduling, worktree isolation, GitHub coordination, and PR maintenance.
+`vigilante` is not the code-generating model itself. Tools such as Codex, Claude Code, and Gemini are the execution engines that read prompts, edit code, run validation, and prepare pull requests. Keeping orchestration separate from code generation lets Vigilante stay provider-neutral while owning scheduling, worktree isolation, project-management coordination, and PR maintenance.
 
 ## Why Use Vigilante
 
 Vigilante turns a repository checkout into a controlled autonomous worker instead of a loose collection of scripts.
 
-- GitHub stays the operator surface for issue intake, progress, resume commands, cleanup, and PR visibility.
+- The project-management backend (GitHub today; Linear and Jira planned) stays the operator surface for issue intake, progress, resume commands, cleanup, and PR visibility.
 - Each issue runs in an isolated worktree, which keeps the main checkout stable and makes unattended execution safer.
 - Repository-aware skills let the same control plane adapt to standard repositories, monorepos, and supported build systems.
 - Session state persists locally, so Vigilante can recover from failures, clean up stalled work, and avoid duplicate dispatch.
 - Provider support is pluggable, so the orchestration layer remains stable even when teams change coding-agent runtimes.
+
+## Project-Management Backend Architecture
+
+Vigilante separates orchestration from backend-specific APIs through a provider abstraction layer. The core orchestration loop depends on backend interfaces rather than calling GitHub APIs directly:
+
+- **Issue Tracker** (`IssueTracker`): work item listing, details, comments, and operator commands
+- **Pull Request Manager** (`PullRequestManager`): PR discovery, status, merge, and branch lifecycle
+- **Label Manager** (`LabelManager`): label provisioning and synchronization
+- **Rate Limiter** (`RateLimiter`): optional API quota awareness
+
+The issue-tracking backend is allowed to differ from the git-hosting and pull-request backends. A watch target can combine:
+
+- GitHub issues + GitHub git remote + GitHub pull requests (current default)
+- Linear issues + GitHub git remote + GitHub pull requests (planned)
+- Jira issues + GitHub git remote + GitHub pull requests (planned)
+
+GitHub is the only fully implemented backend. The `internal/backend/` package defines the interfaces and neutral types, while `internal/backend/github/` provides the GitHub implementation. Adding a new backend requires implementing the relevant interfaces without restructuring the core dispatch or session lifecycle.
+
+Watch targets carry explicit backend identity fields (`issue_backend`, `git_backend`, `pr_backend`) that default to `"github"` when not set, preserving backward compatibility with existing configurations.
 
 ## Quickstart
 
@@ -652,16 +673,16 @@ The agent invocation remains a subprocess wrapper around an installed coding CLI
 
 ## GitHub Integration
 
-GitHub access should use `gh` rather than direct API client dependencies.
+GitHub access uses `gh` rather than direct API client dependencies, routed through the `IssueTracker`, `PullRequestManager`, `LabelManager`, and `RateLimiter` backend interfaces.
 
-Expected `gh` responsibilities:
+Expected `gh` responsibilities (for the GitHub backend):
 
 - detect authentication state
 - list open issues for a repository
 - post start/progress/error comments
 - optionally inspect issue metadata needed for scheduling
 
-This keeps the Go code smaller and delegates auth/session handling to the installed GitHub CLI.
+This keeps the Go code smaller and delegates auth/session handling to the installed GitHub CLI. Future backends (Linear, Jira) will use their own API clients behind the same interfaces.
 
 ## Worktree Strategy
 
