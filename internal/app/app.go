@@ -182,7 +182,7 @@ func (a *App) loadPullRequestForSession(ctx context.Context, session state.Sessi
 	if strings.TrimSpace(session.Branch) == "" {
 		return nil, nil
 	}
-	pr, err := ghcli.FindPullRequestForBranch(ctx, a.env.Runner, session.Repo, session.Branch)
+	pr, err := ghcli.FindPullRequestForHeadRef(ctx, a.env.Runner, session.Repo, pullRequestHeadRef(session))
 	if err != nil || pr == nil {
 		return pr, err
 	}
