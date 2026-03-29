@@ -2149,6 +2149,22 @@ func (a *App) tryAutoSquashMerge(ctx context.Context, session *state.Session, pr
 		return nil
 	}
 
+	if session.IterationInProgress {
+		reason := fmt.Sprintf("automerge blocked: iteration is in progress for issue #%d", session.IssueNumber)
+		session.LastMaintenanceError = reason
+		a.logger.Info("automerge blocked by active iteration", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "branch", session.Branch)
+		return nil
+	}
+
+	if pending, err := a.hasPendingIterationComment(ctx, session); err != nil {
+		a.logger.Error("automerge pending-iteration check failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "err", err)
+	} else if pending {
+		reason := fmt.Sprintf("automerge blocked: unclaimed iteration comment pending for issue #%d", session.IssueNumber)
+		session.LastMaintenanceError = reason
+		a.logger.Info("automerge blocked by pending iteration comment", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "branch", session.Branch)
+		return nil
+	}
+
 	if err := ghcli.MergePullRequestSquash(ctx, a.env.Runner, session.Repo, pr.Number); err != nil {
 		return fmt.Errorf("squash automerge pr #%d: %w", pr.Number, err)
 	}
@@ -4186,6 +4202,26 @@ func sessionSupportsIteration(session state.Session) bool {
 	default:
 		return false
 	}
+}
+
+func (a *App) hasPendingIterationComment(ctx context.Context, session *state.Session) (bool, error) {
+	if session.Repo == "" || session.IssueNumber <= 0 {
+		return false, nil
+	}
+	comments, err := ghcli.ListIssueCommentsForPolling(ctx, a.env.Runner, session.Repo, session.IssueNumber, "automerge_iteration_gate", a.logger)
+	if err != nil {
+		return false, err
+	}
+	comment := ghcli.FindIterationComment(comments, session.LastIterationCommentID, session.LastIterationCommentAt)
+	if comment == nil {
+		return false, nil
+	}
+	details, err := ghcli.GetIssueDetails(ctx, a.env.Runner, session.Repo, session.IssueNumber)
+	if err != nil {
+		return false, err
+	}
+	assignees := assigneeLogins(details.Assignees)
+	return loginMatchesAssignee(comment.User.Login, assignees), nil
 }
 
 func assigneeLogins(assignees []ghcli.IssueUserRef) []string {
