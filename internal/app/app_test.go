@@ -425,6 +425,82 @@ func TestProcessGitHubIterationRequestsForTargetRejectsNonAssignee(t *testing.T)
 	}
 }
 
+func TestProcessGitHubIterationRequestsForTargetDoesNotReplayHistoricalRejectedIteration(t *testing.T) {
+	now := time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)
+	repoPath := t.TempDir()
+	stateRoot := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", stateRoot)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.clock = func() time.Time { return now }
+	app.state = state.NewStore()
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1":          `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","labels":[{"name":"vigilante:ready-for-review"}],"assignees":[{"login":"nicobistolfi"}]}`,
+			"gh api repos/owner/repo/issues/1/comments": `[{"id":100,"body":"@vigilanteai stale request","created_at":"2026-03-19T11:58:00Z","user":{"login":"someoneelse"}},{"id":101,"body":"@vigilanteai latest invalid request","created_at":"2026-03-19T11:59:00Z","user":{"login":"someoneelse"}}]`,
+			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Iteration Ignored",
+				Emoji:      "🛂",
+				Percent:    100,
+				ETAMinutes: 1,
+				Items: []string{
+					"Ignored the latest `@vigilanteai` iteration request from `@someoneelse`.",
+					"Only a current issue assignee can request another implementation iteration for this issue.",
+					"Next step: ask an assignee to post the follow-up request if another pass is needed.",
+				},
+				Tagline: "Hands on the wheel, one driver at a time.",
+			}): "ok",
+		},
+	}
+
+	sessions := []state.Session{{
+		RepoPath:     repoPath,
+		Repo:         "owner/repo",
+		Provider:     "codex",
+		IssueNumber:  1,
+		IssueTitle:   "first",
+		IssueURL:     "https://github.com/owner/repo/issues/1",
+		Status:       state.SessionStatusSuccess,
+		Branch:       "vigilante/issue-1-first",
+		WorktreePath: filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1"),
+	}}
+
+	updated, started, err := app.processGitHubIterationRequestsForTarget(context.Background(), state.WatchTarget{
+		Path:   repoPath,
+		Repo:   "owner/repo",
+		Branch: "main",
+	}, sessions, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started != 0 {
+		t.Fatalf("expected no iteration dispatches on first scan, got %d", started)
+	}
+	if updated[0].LastIterationCommentID != 101 {
+		t.Fatalf("expected latest rejected iteration comment to be recorded, got %#v", updated[0])
+	}
+
+	updated, started, err = app.processGitHubIterationRequestsForTarget(context.Background(), state.WatchTarget{
+		Path:   repoPath,
+		Repo:   "owner/repo",
+		Branch: "main",
+	}, updated, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started != 0 {
+		t.Fatalf("expected no iteration dispatches on replay scan, got %d", started)
+	}
+	if updated[0].LastIterationCommentID != 101 {
+		t.Fatalf("expected the stored iteration cursor to remain on the latest rejected comment, got %#v", updated[0])
+	}
+}
+
 func TestProcessGitHubIterationRequestsForTargetDispatchesAssigneeComment(t *testing.T) {
 	now := time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)
 	repoPath := t.TempDir()
@@ -550,6 +626,120 @@ func TestProcessGitHubIterationRequestsForTargetDispatchesAssigneeComment(t *tes
 	}
 	if updated[0].Status != state.SessionStatusRunning {
 		t.Fatalf("expected in-memory session to be redispatched before completion, got %#v", updated[0])
+	}
+}
+
+func TestProcessGitHubIterationRequestsForTargetAcceptsNewCommentAfterStoredCursor(t *testing.T) {
+	now := time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)
+	repoPath := t.TempDir()
+	stateRoot := t.TempDir()
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	t.Setenv("VIGILANTE_HOME", stateRoot)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.clock = func() time.Time { return now }
+	app.state = state.NewStore()
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	app.repoLabelsProvisionedOnce["owner/repo"] = true
+
+	iterationContext := buildIterationPromptContext([]ghcli.IssueComment{
+		{
+			ID:        101,
+			Body:      "@vigilanteai current follow-up",
+			CreatedAt: now.Add(-1 * time.Minute),
+			User: struct {
+				Login string `json:"login"`
+			}{Login: "nicobistolfi"},
+		},
+	})
+	startSession := state.Session{
+		RepoPath:               repoPath,
+		Repo:                   "owner/repo",
+		Provider:               "codex",
+		IssueNumber:            1,
+		IssueTitle:             "first",
+		IssueURL:               "https://github.com/owner/repo/issues/1",
+		Status:                 state.SessionStatusSuccess,
+		Branch:                 "vigilante/issue-1-first",
+		WorktreePath:           worktreePath,
+		IssueBody:              "Original body",
+		IterationPromptContext: iterationContext,
+		IterationInProgress:    true,
+		LastIterationCommentID: 100,
+		LastIterationCommentAt: now.Add(-2 * time.Minute).Format(time.RFC3339),
+	}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1":          `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","labels":[{"name":"vigilante:ready-for-review"}],"assignees":[{"login":"nicobistolfi"}]}`,
+			"gh api repos/owner/repo/issues/1/comments": `[{"id":99,"body":"@vigilanteai old history","created_at":"2026-03-19T11:57:00Z","user":{"login":"nicobistolfi"}},{"id":100,"body":"@vigilanteai already handled","created_at":"2026-03-19T11:58:00Z","user":{"login":"nicobistolfi"}},{"id":101,"body":"@vigilanteai current follow-up","created_at":"2026-03-19T11:59:00Z","user":{"login":"nicobistolfi"}}]`,
+			"gh api --method POST -H Accept: application/vnd.github+json repos/owner/repo/issues/comments/101/reactions -f content=eyes": "ok",
+			"git worktree prune":                          "ok",
+			"git fetch origin main":                       "ok",
+			"git worktree list --porcelain":               "",
+			"git branch -f main refs/remotes/origin/main": "ok",
+			"git worktree add -b vigilante/issue-1-first " + worktreePath + " origin/main":                                                              "ok",
+			"gh issue edit --repo owner/repo 1 --add-label vigilante:iterating --add-label vigilante:running --remove-label vigilante:ready-for-review": "ok",
+			sessionStartCommentCommand("owner/repo", 1, worktreePath, state.Session{
+				Repo:                   "owner/repo",
+				IssueNumber:            1,
+				IssueTitle:             "first",
+				IssueBody:              "Issue body",
+				IssueURL:               "https://github.com/owner/repo/issues/1",
+				BaseBranch:             "main",
+				Branch:                 "vigilante/issue-1-first",
+				WorktreePath:           worktreePath,
+				Status:                 state.SessionStatusRunning,
+				Provider:               "codex",
+				IterationInProgress:    true,
+				IterationPromptContext: iterationContext,
+				LastIterationCommentID: 100,
+				LastIterationCommentAt: now.Add(-2 * time.Minute).Format(time.RFC3339),
+			}): "ok",
+			preflightPromptCommand(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", "vigilante/issue-1-first"): "ok",
+			issuePromptCommandForSession(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", state.Session{
+				WorktreePath:           worktreePath,
+				Branch:                 "vigilante/issue-1-first",
+				Provider:               "codex",
+				IssueBody:              "Issue body",
+				IterationPromptContext: iterationContext,
+				LastIterationCommentID: 100,
+				LastIterationCommentAt: now.Add(-2 * time.Minute).Format(time.RFC3339),
+			}): "done",
+			"gh issue edit --repo owner/repo 1 --add-label vigilante:ready-for-review --remove-label vigilante:iterating --remove-label vigilante:running": "ok",
+		},
+		Errors: map[string]error{
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-1-first": errors.New("exit status 1"),
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-1":       errors.New("exit status 1"),
+		},
+	}
+
+	sessions := []state.Session{startSession}
+	_, started, err := app.processGitHubIterationRequestsForTarget(context.Background(), state.WatchTarget{
+		Path:   repoPath,
+		Repo:   "owner/repo",
+		Branch: "main",
+	}, sessions, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if started != 1 {
+		t.Fatalf("expected one iteration dispatch for the new comment, got %d", started)
+	}
+	app.waitForSessions()
+
+	saved, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved) != 1 {
+		t.Fatalf("expected one saved session, got %#v", saved)
+	}
+	if saved[0].LastIterationCommentID != 101 {
+		t.Fatalf("expected the new iteration comment to advance the cursor, got %#v", saved[0])
 	}
 }
 

@@ -490,9 +490,10 @@ func FindRecreateComment(comments []IssueComment, claimedCommentID int64) *Issue
 	return findCommandComment(comments, "@vigilanteai recreate", claimedCommentID)
 }
 
-func FindIterationComment(comments []IssueComment, claimedCommentID int64) *IssueComment {
+func FindIterationComment(comments []IssueComment, claimedCommentID int64, claimedCommentAt string) *IssueComment {
+	claimedAt := parseClaimedCommentTime(claimedCommentAt)
 	for i := len(comments) - 1; i >= 0; i-- {
-		if claimedCommentID != 0 && comments[i].ID == claimedCommentID {
+		if !isCommentNewerThanClaim(comments[i], claimedAt, claimedCommentID) {
 			continue
 		}
 		if !IsIterationComment(comments[i]) {
@@ -586,6 +587,34 @@ func findCommandComment(comments []IssueComment, command string, claimedCommentI
 func normalizeVigilanteComment(body string) string {
 	fields := strings.Fields(strings.ToLower(strings.TrimSpace(body)))
 	return strings.Join(fields, " ")
+}
+
+func parseClaimedCommentTime(raw string) time.Time {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed.UTC()
+}
+
+func isCommentNewerThanClaim(comment IssueComment, claimedAt time.Time, claimedCommentID int64) bool {
+	if claimedCommentID == 0 && claimedAt.IsZero() {
+		return true
+	}
+	commentAt := comment.CreatedAt.UTC()
+	if !claimedAt.IsZero() {
+		if commentAt.Before(claimedAt) {
+			return false
+		}
+		if commentAt.After(claimedAt) {
+			return true
+		}
+	}
+	return comment.ID > claimedCommentID
 }
 
 func FindPullRequestForBranch(ctx context.Context, runner environment.Runner, repo string, branch string) (*PullRequest, error) {

@@ -473,12 +473,44 @@ func TestFindIterationCommentSkipsKnownCommands(t *testing.T) {
 		{ID: 11, Body: "@vigilanteai please adjust the copy", CreatedAt: now.Add(-1 * time.Minute)},
 	}
 
-	comment := FindIterationComment(comments, 0)
+	comment := FindIterationComment(comments, 0, "")
 	if comment == nil || comment.ID != 11 {
 		t.Fatalf("expected iteration comment to be found, got: %#v", comment)
 	}
-	if comment := FindIterationComment(comments, 11); comment != nil {
+	if comment := FindIterationComment(comments, 11, now.Add(-1*time.Minute).Format(time.RFC3339)); comment != nil {
 		t.Fatalf("expected claimed iteration comment to be ignored, got: %#v", comment)
+	}
+}
+
+func TestFindIterationCommentTreatsOlderHistoryAsConsumed(t *testing.T) {
+	now := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
+	comments := []IssueComment{
+		{ID: 10, Body: "@vigilanteai older request", CreatedAt: now.Add(-3 * time.Minute)},
+		{ID: 11, Body: "@vigilanteai claimed request", CreatedAt: now.Add(-2 * time.Minute)},
+		{ID: 12, Body: "@vigilanteai newer request", CreatedAt: now.Add(-1 * time.Minute)},
+	}
+
+	comment := FindIterationComment(comments, 11, now.Add(-2*time.Minute).Format(time.RFC3339))
+	if comment == nil || comment.ID != 12 {
+		t.Fatalf("expected only the newer iteration comment to be eligible, got %#v", comment)
+	}
+
+	if comment := FindIterationComment(comments[:2], 11, now.Add(-2*time.Minute).Format(time.RFC3339)); comment != nil {
+		t.Fatalf("expected historical iteration comments to stay consumed, got %#v", comment)
+	}
+}
+
+func TestFindIterationCommentUsesIDTieBreakerAtClaimTimestamp(t *testing.T) {
+	now := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
+	claimedAt := now.Add(-1 * time.Minute)
+	comments := []IssueComment{
+		{ID: 10, Body: "@vigilanteai already consumed", CreatedAt: claimedAt},
+		{ID: 11, Body: "@vigilanteai newer same-second request", CreatedAt: claimedAt},
+	}
+
+	comment := FindIterationComment(comments, 10, claimedAt.Format(time.RFC3339))
+	if comment == nil || comment.ID != 11 {
+		t.Fatalf("expected newer same-timestamp iteration comment to be eligible, got %#v", comment)
 	}
 }
 

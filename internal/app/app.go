@@ -4097,7 +4097,7 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 			continue
 		}
 
-		comment := ghcli.FindIterationComment(comments, session.LastIterationCommentID)
+		comment := ghcli.FindIterationComment(comments, session.LastIterationCommentID, session.LastIterationCommentAt)
 		if comment == nil {
 			continue
 		}
