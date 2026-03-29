@@ -2163,6 +2163,12 @@ func (a *App) tryAutoSquashMerge(ctx context.Context, session *state.Session, pr
 		return nil
 	}
 
+	if reason := a.iterationBlocksAutomerge(ctx, session); reason != "" {
+		session.LastMaintenanceError = reason
+		a.logger.Info("automerge waiting", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "branch", session.Branch, "reason", reason)
+		return nil
+	}
+
 	if err := a.prManager.MergePullRequest(ctx, session.Repo, pr.Number); err != nil {
 		return fmt.Errorf("squash automerge pr #%d: %w", pr.Number, err)
 	}
@@ -2192,6 +2198,31 @@ func (a *App) automergeEnabled(ctx context.Context, session *state.Session, pr g
 		}
 	}
 	return ghcli.HasAnyLabel(issue.Labels, automergeLabels...), nil
+}
+
+// iterationBlocksAutomerge returns a non-empty wait reason when a pending or
+// active iteration should prevent the PR from being automerged.  It checks
+// two conditions:
+//  1. The session has IterationInProgress set (belt-and-suspenders).
+//  2. There is an unclaimed iteration comment on the issue that has not yet
+//     been processed by processGitHubIterationRequestsForTarget.
+func (a *App) iterationBlocksAutomerge(ctx context.Context, session *state.Session) string {
+	if session.IterationInProgress {
+		return fmt.Sprintf("automerge blocked: iteration is in progress for issue #%d", session.IssueNumber)
+	}
+	if session.IssueNumber <= 0 || strings.TrimSpace(session.Repo) == "" {
+		return ""
+	}
+	comments, err := a.issueTracker.ListWorkItemCommentsForPolling(ctx, session.Repo, session.IssueNumber, "automerge_iteration_check", a.logger)
+	if err != nil {
+		a.logger.Error("automerge iteration comment check failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
+		return fmt.Sprintf("automerge blocked: unable to verify pending iterations for issue #%d", session.IssueNumber)
+	}
+	pending := ghcli.FindIterationComment(comments, session.LastIterationCommentID, session.LastIterationCommentAt)
+	if pending != nil {
+		return fmt.Sprintf("automerge blocked: pending iteration comment (ID %d) on issue #%d", pending.ID, session.IssueNumber)
+	}
+	return ""
 }
 
 func shouldDelaySuccessfulSessionPoll(session state.Session, now time.Time) bool {

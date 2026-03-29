@@ -6504,6 +6504,174 @@ func TestScanOnceDoesNotAutomergeUnlabeledPullRequest(t *testing.T) {
 	}
 }
 
+func TestScanOnceAutomergeBlockedByPendingIterationComment(t *testing.T) {
+	app, _ := newPullRequestMaintenanceTestApp(t, map[string]string{
+		"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
+		"git fetch origin main":  "ok",
+		"git status --porcelain": "",
+		"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
+		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": automergePRDetailsJSON("vigilante:automerge", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
+		"gh api repos/owner/repo/issues/1/comments": `[{"id":200,"body":"@vigilanteai please also fix the edge case","created_at":"2026-03-19T12:05:00Z","user":{"login":"nicobistolfi"}}]`,
+		"gh api user --jq .login":                   "nicobistolfi\n",
+		"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+	})
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.waitForSessions()
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sessions[0].LastMaintenanceError, "pending iteration comment") {
+		t.Fatalf("expected automerge blocked by pending iteration, got: %q", sessions[0].LastMaintenanceError)
+	}
+}
+
+func TestScanOnceAutomergeBlockedByIterationInProgress(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
+			"git fetch origin main":  "ok",
+			"git status --porcelain": "",
+			"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
+			"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": automergePRDetailsJSON("vigilante:automerge", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
+			"gh api repos/owner/repo/issues/1":          `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"open","labels":[]}`,
+			"gh api repos/owner/repo/issues/1/comments": `[]`,
+			"gh api user --jq .login":                   "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+	}
+
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:            "/tmp/repo",
+		Repo:                "owner/repo",
+		IssueNumber:         1,
+		IssueTitle:          "first",
+		IssueURL:            "https://github.com/owner/repo/issues/1",
+		Branch:              "vigilante/issue-1",
+		WorktreePath:        filepath.Join("/tmp/repo", ".worktrees", "vigilante", "issue-1"),
+		Status:              state.SessionStatusSuccess,
+		IterationInProgress: true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.waitForSessions()
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(sessions[0].LastMaintenanceError, "iteration is in progress") {
+		t.Fatalf("expected automerge blocked by active iteration, got: %q", sessions[0].LastMaintenanceError)
+	}
+}
+
+func TestScanOnceAutomergeProceedsWithNoIterationComments(t *testing.T) {
+	app, _ := newPullRequestMaintenanceTestApp(t, map[string]string{
+		"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
+		"git fetch origin main":  "ok",
+		"git status --porcelain": "",
+		"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
+		"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": automergePRDetailsJSON("vigilante:automerge", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
+		"gh pr merge --repo owner/repo 31 --squash --delete-branch": "ok",
+		"gh api user --jq .login":                                   "nicobistolfi\n",
+		"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+	})
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.waitForSessions()
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].LastMaintenanceError != "" {
+		t.Fatalf("expected automerge to proceed with no iteration comments, got: %q", sessions[0].LastMaintenanceError)
+	}
+}
+
+func TestScanOnceAutomergeProceedsWhenIterationAlreadyClaimed(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
+			"git fetch origin main":  "ok",
+			"git status --porcelain": "",
+			"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
+			"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": automergePRDetailsJSON("vigilante:automerge", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
+			"gh api repos/owner/repo/issues/1":          `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"open","labels":[]}`,
+			"gh api repos/owner/repo/issues/1/comments": `[{"id":200,"body":"@vigilanteai tighten the validation path","created_at":"2026-03-19T12:05:00Z","user":{"login":"nicobistolfi"}}]`,
+			"gh pr merge --repo owner/repo 31 --squash --delete-branch": "ok",
+			"gh api user --jq .login":                                   "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+	}
+
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:               "/tmp/repo",
+		Repo:                   "owner/repo",
+		IssueNumber:            1,
+		IssueTitle:             "first",
+		IssueURL:               "https://github.com/owner/repo/issues/1",
+		Branch:                 "vigilante/issue-1",
+		WorktreePath:           filepath.Join("/tmp/repo", ".worktrees", "vigilante", "issue-1"),
+		Status:                 state.SessionStatusSuccess,
+		LastIterationCommentID: 200,
+		LastIterationCommentAt: "2026-03-19T12:05:00Z",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.waitForSessions()
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].LastMaintenanceError != "" {
+		t.Fatalf("expected automerge to proceed after claimed iteration, got: %q", sessions[0].LastMaintenanceError)
+	}
+}
+
 func newPullRequestMaintenanceTestApp(t *testing.T, outputs map[string]string) (*App, *bytes.Buffer) {
 	t.Helper()
 
