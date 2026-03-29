@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	githubbackend "github.com/nicobistolfi/vigilante/internal/backend/github"
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
 	"github.com/nicobistolfi/vigilante/internal/repo"
@@ -57,7 +58,7 @@ func TestRunIssueSessionSuccess(t *testing.T) {
 		},
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
-	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
 	}
@@ -119,7 +120,7 @@ func TestRunIssueSessionStartCommentIncludesReusedRemoteBranchContext(t *testing
 		BranchDiffSummary:  "README.md | 2 ++",
 		Status:             state.SessionStatusRunning,
 	}
-	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
 	}
@@ -172,7 +173,7 @@ func TestRunIssueSessionFailureCommentsOnIssue(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
-	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 	if got.Status != state.SessionStatusBlocked {
 		t.Fatalf("unexpected status: %#v", got)
 	}
@@ -221,6 +222,7 @@ func TestRunConflictResolutionSessionFailureCommentsOnIssue(t *testing.T) {
 		context.Background(),
 		env,
 		store,
+		githubbackend.NewBackend(&env.Runner),
 		state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"},
 		state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, IssueTitle: "Demo", IssueBody: "Preserve the requested behavior.", IssueURL: "https://github.com/owner/repo/issues/7", BaseBranch: "main", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7"},
 		ghcli.PullRequest{Number: 17, Title: "Demo PR", Body: "PR body", URL: "https://github.com/owner/repo/pull/17", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"},
@@ -263,6 +265,7 @@ func TestRunCIRemediationSessionFailureCommentsOnIssue(t *testing.T) {
 		context.Background(),
 		env,
 		store,
+		githubbackend.NewBackend(&env.Runner),
 		state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"},
 		state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, IssueTitle: "Demo", IssueURL: "https://github.com/owner/repo/issues/7", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7"},
 		ghcli.PullRequest{Number: 17, URL: "https://github.com/owner/repo/pull/17"},
@@ -311,7 +314,7 @@ func TestRunIssueSessionSuccessWithClaudeProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: "claude", Status: state.SessionStatusRunning}
-	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
 	}
@@ -355,7 +358,7 @@ func TestRunIssueSessionSuccessWithGeminiProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: "gemini", Status: state.SessionStatusRunning}
-	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
 	}
@@ -407,7 +410,7 @@ func TestRunIssueSessionUsesMonorepoSkillWhenClassified(t *testing.T) {
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
 
-	got := RunIssueSession(context.Background(), env, store, target, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), target, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
@@ -460,7 +463,7 @@ func TestRunIssueSessionUsesNxSkillWhenClassified(t *testing.T) {
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
 
-	got := RunIssueSession(context.Background(), env, store, target, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), target, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
@@ -513,7 +516,7 @@ func TestRunIssueSessionUsesRushMonorepoSkillWhenClassified(t *testing.T) {
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
 
-	got := RunIssueSession(context.Background(), env, store, target, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), target, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 
 	if got.Status != state.SessionStatusSuccess {
 		t.Fatalf("unexpected status: %#v", got)
@@ -535,7 +538,7 @@ func TestRunIssueSessionFailsWhenProviderVersionIsIncompatible(t *testing.T) {
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
 
-	got := RunIssueSession(context.Background(), env, store, state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 
 	if got.Status != state.SessionStatusFailed {
 		t.Fatalf("unexpected status: %#v", got)

@@ -9,83 +9,24 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nicobistolfi/vigilante/internal/backend"
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	"github.com/nicobistolfi/vigilante/internal/state"
 )
 
-type Issue struct {
-	Number    int       `json:"number"`
-	Title     string    `json:"title"`
-	CreatedAt time.Time `json:"createdAt"`
-	URL       string    `json:"url"`
-	Labels    []Label   `json:"labels"`
-}
-
-type Label struct {
-	Name string `json:"name"`
-}
-
-type PullRequest struct {
-	Number            int               `json:"number"`
-	Title             string            `json:"title"`
-	Body              string            `json:"body"`
-	URL               string            `json:"url"`
-	State             string            `json:"state"`
-	BaseRefName       string            `json:"baseRefName"`
-	MergedAt          *time.Time        `json:"mergedAt"`
-	Labels            []Label           `json:"labels"`
-	IsDraft           bool              `json:"isDraft"`
-	Mergeable         string            `json:"mergeable"`
-	MergeStateStatus  string            `json:"mergeStateStatus"`
-	ReviewDecision    string            `json:"reviewDecision"`
-	StatusCheckRollup []StatusCheckRoll `json:"statusCheckRollup"`
-}
-
-type StatusCheckRoll struct {
-	Context    string `json:"context"`
-	Name       string `json:"name"`
-	State      string `json:"state"`
-	Conclusion string `json:"conclusion"`
-}
-
-type IssueComment struct {
-	ID        int64     `json:"id"`
-	Body      string    `json:"body"`
-	CreatedAt time.Time `json:"created_at"`
-	User      struct {
-		Login string `json:"login"`
-	} `json:"user"`
-}
-
-type IssueDetails struct {
-	Title     string         `json:"title"`
-	Body      string         `json:"body"`
-	URL       string         `json:"html_url"`
-	State     string         `json:"state"`
-	Labels    []Label        `json:"labels"`
-	Assignees []IssueUserRef `json:"assignees"`
-}
-
-type IssueUserRef struct {
-	Login string `json:"login"`
-}
-
-type RepositoryLabelDetails struct {
-	Name string `json:"name"`
-}
-
-type RateLimitResource struct {
-	Limit     int
-	Remaining int
-	ResetAt   time.Time
-}
-
-type RateLimitSnapshot struct {
-	Core    RateLimitResource
-	Rate    RateLimitResource
-	GraphQL RateLimitResource
-	Search  RateLimitResource
-}
+// Type aliases for backward compatibility. The canonical types live in
+// internal/backend so the orchestration loop can depend on backend-neutral
+// definitions while existing callers continue to use ghcli names.
+type Issue = backend.WorkItem
+type Label = backend.Label
+type PullRequest = backend.PullRequest
+type StatusCheckRoll = backend.StatusCheck
+type IssueComment = backend.WorkItemComment
+type IssueDetails = backend.WorkItemDetails
+type IssueUserRef = backend.UserRef
+type RepositoryLabelDetails = backend.RepositoryLabelDetails
+type RateLimitResource = backend.RateLimitResource
+type RateLimitSnapshot = backend.RateLimitSnapshot
 
 type rateLimitAPIResponse struct {
 	Resources struct {
@@ -676,10 +617,7 @@ func MergePullRequestSquash(ctx context.Context, runner environment.Runner, repo
 	return err
 }
 
-type CreatedIssue struct {
-	Number int    `json:"number"`
-	URL    string `json:"html_url"`
-}
+type CreatedIssue = backend.CreatedWorkItem
 
 func CreateIssue(ctx context.Context, runner environment.Runner, repo string, title string, body string, labels []string, assignees []string) (*CreatedIssue, error) {
 	args := []string{"gh", "api", "--method", "POST", "-H", "Accept: application/vnd.github+json", "repos/" + repo + "/issues", "-f", "title=" + title, "-f", "body=" + SanitizeGitHubVisibleText(body)}

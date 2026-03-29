@@ -28,6 +28,10 @@ type WatchTarget struct {
 	MaxParallel    int                 `json:"max_parallel_sessions"`
 	LastScanAt     string              `json:"last_scan_at,omitempty"`
 	AddedAt        string              `json:"added_at,omitempty"`
+	IssueBackend   string              `json:"issue_backend,omitempty"`
+	GitBackend     string              `json:"git_backend,omitempty"`
+	PRBackend      string              `json:"pr_backend,omitempty"`
+	ProjectRef     string              `json:"project_ref,omitempty"`
 }
 
 type BranchMode string
@@ -36,6 +40,42 @@ const (
 	BranchModeAuto   BranchMode = "auto"
 	BranchModePinned BranchMode = "pinned"
 )
+
+// EffectiveIssueBackend returns the issue-tracking backend for this target.
+// Defaults to "github" when not explicitly configured.
+func (t WatchTarget) EffectiveIssueBackend() string {
+	if b := strings.TrimSpace(t.IssueBackend); b != "" {
+		return b
+	}
+	return "github"
+}
+
+// EffectiveGitBackend returns the git-hosting backend for this target.
+// Defaults to "github" when not explicitly configured.
+func (t WatchTarget) EffectiveGitBackend() string {
+	if b := strings.TrimSpace(t.GitBackend); b != "" {
+		return b
+	}
+	return "github"
+}
+
+// EffectivePRBackend returns the pull-request backend for this target.
+// Defaults to "github" when not explicitly configured.
+func (t WatchTarget) EffectivePRBackend() string {
+	if b := strings.TrimSpace(t.PRBackend); b != "" {
+		return b
+	}
+	return "github"
+}
+
+// EffectiveProjectRef returns the backend-specific project reference.
+// For GitHub targets this falls back to the Repo slug.
+func (t WatchTarget) EffectiveProjectRef() string {
+	if ref := strings.TrimSpace(t.ProjectRef); ref != "" {
+		return ref
+	}
+	return t.Repo
+}
 
 func (t WatchTarget) EffectiveBranchMode() BranchMode {
 	switch t.BranchMode {
@@ -75,6 +115,9 @@ type Session struct {
 	RepoPath                       string        `json:"repo_path"`
 	Repo                           string        `json:"repo"`
 	Provider                       string        `json:"provider,omitempty"`
+	IssueBackend                   string        `json:"issue_backend,omitempty"`
+	GitBackend                     string        `json:"git_backend,omitempty"`
+	PRBackend                      string        `json:"pr_backend,omitempty"`
 	IssueNumber                    int           `json:"issue_number"`
 	IssueTitle                     string        `json:"issue_title,omitempty"`
 	IssueBody                      string        `json:"issue_body,omitempty"`

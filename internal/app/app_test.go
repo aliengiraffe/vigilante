@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	githubbackend "github.com/nicobistolfi/vigilante/internal/backend/github"
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
 	"github.com/nicobistolfi/vigilante/internal/repo"
@@ -71,15 +72,21 @@ func TestMaintainOpenPullRequestPropagatesAccessLogContext(t *testing.T) {
 			entries = append(entries, entry)
 		},
 	}
+	env := &environment.Environment{
+		OS:     "linux",
+		Runner: runner,
+	}
+	ghBackend := githubbackend.NewBackend(&env.Runner)
 	app := &App{
-		stdout: testutil.IODiscard{},
-		stderr: testutil.IODiscard{},
-		clock:  func() time.Time { return time.Date(2026, 3, 26, 20, 0, 0, 0, time.UTC) },
-		state:  store,
-		env: &environment.Environment{
-			OS:     "linux",
-			Runner: runner,
-		},
+		stdout:       testutil.IODiscard{},
+		stderr:       testutil.IODiscard{},
+		clock:        func() time.Time { return time.Date(2026, 3, 26, 20, 0, 0, 0, time.UTC) },
+		state:        store,
+		issueTracker: ghBackend,
+		labelManager: ghBackend,
+		prManager:    ghBackend,
+		rateLimiter:  ghBackend,
+		env:          env,
 	}
 	session := &state.Session{
 		Repo:         "owner/repo",

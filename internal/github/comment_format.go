@@ -4,16 +4,11 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/nicobistolfi/vigilante/internal/backend"
 )
 
-type ProgressComment struct {
-	Stage      string
-	Emoji      string
-	Percent    int
-	ETAMinutes int
-	Items      []string
-	Tagline    string
-}
+type ProgressComment = backend.ProgressComment
 
 func FormatProgressComment(comment ProgressComment) string {
 	header := strings.TrimSpace(comment.Stage)
@@ -39,13 +34,7 @@ func FormatProgressComment(comment ProgressComment) string {
 	return strings.Join(lines, "\n")
 }
 
-type DispatchFailureComment struct {
-	Stage        string
-	Summary      string
-	Branch       string
-	WorktreePath string
-	NextStep     string
-}
+type DispatchFailureComment = backend.DispatchFailureComment
 
 func FormatDispatchFailureComment(comment DispatchFailureComment) string {
 	stage := strings.TrimSpace(comment.Stage)

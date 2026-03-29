@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nicobistolfi/vigilante/internal/backend"
 	"github.com/nicobistolfi/vigilante/internal/blocking"
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
@@ -17,7 +18,7 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/telemetry"
 )
 
-func RunIssueSession(ctx context.Context, env *environment.Environment, store *state.Store, target state.WatchTarget, issue ghcli.Issue, session state.Session) state.Session {
+func RunIssueSession(ctx context.Context, env *environment.Environment, store *state.Store, issueTracker backend.IssueTracker, target state.WatchTarget, issue ghcli.Issue, session state.Session) state.Session {
 	if session.Repo == "" {
 		session.Repo = target.Repo
 	}
@@ -79,7 +80,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		Tagline:    "Make it simple, but significant.",
 	})
 	appendSessionLog(logPath, "session started", session, "")
-	if err := ghcli.CommentOnIssue(ctx, env.Runner, target.Repo, issue.Number, startBody); err != nil {
+	if err := issueTracker.CommentOnWorkItem(ctx, target.Repo, issue.Number, startBody); err != nil {
 		session.Status = state.SessionStatusFailed
 		session.IterationInProgress = false
 		session.LastError = err.Error()
@@ -129,7 +130,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 			Items:      blockedPreflightItems(blocked, selectedProvider.ID(), preflightOutput, session.ResumeHint),
 			Tagline:    "Strong foundations make calm debugging sessions.",
 		})
-		_ = ghcli.CommentOnIssue(ctx, env.Runner, target.Repo, issue.Number, body)
+		_ = issueTracker.CommentOnWorkItem(ctx, target.Repo, issue.Number, body)
 		return session
 	}
 	appendSessionLog(logPath, fmt.Sprintf("issue preflight succeeded duration=%s output_bytes=%d", time.Since(preflightStart).Truncate(time.Second), len(preflightOutput)), session, preflightOutput)
@@ -174,7 +175,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 			},
 			Tagline: "Plans are only good intentions unless they immediately degenerate into hard work.",
 		})
-		_ = ghcli.CommentOnIssue(ctx, env.Runner, target.Repo, issue.Number, body)
+		_ = issueTracker.CommentOnWorkItem(ctx, target.Repo, issue.Number, body)
 		return session
 	}
 
@@ -191,7 +192,7 @@ func fallbackSessionText(value string, fallback string) string {
 	return value
 }
 
-func RunConflictResolutionSession(ctx context.Context, env *environment.Environment, store *state.Store, target state.WatchTarget, session state.Session, pr ghcli.PullRequest) error {
+func RunConflictResolutionSession(ctx context.Context, env *environment.Environment, store *state.Store, issueTracker backend.IssueTracker, target state.WatchTarget, session state.Session, pr ghcli.PullRequest) error {
 	repoSlug := session.Repo
 	if repoSlug == "" {
 		repoSlug = target.Repo
@@ -237,7 +238,7 @@ func RunConflictResolutionSession(ctx context.Context, env *environment.Environm
 			},
 			Tagline: "An obstacle is often a stepping stone.",
 		})
-		_ = ghcli.CommentOnIssue(ctx, env.Runner, target.Repo, session.IssueNumber, body)
+		_ = issueTracker.CommentOnWorkItem(ctx, target.Repo, session.IssueNumber, body)
 		return err
 	}
 
@@ -245,7 +246,7 @@ func RunConflictResolutionSession(ctx context.Context, env *environment.Environm
 	return nil
 }
 
-func RunCIRemediationSession(ctx context.Context, env *environment.Environment, store *state.Store, target state.WatchTarget, session state.Session, pr ghcli.PullRequest, failingChecks []ghcli.StatusCheckRoll) error {
+func RunCIRemediationSession(ctx context.Context, env *environment.Environment, store *state.Store, issueTracker backend.IssueTracker, target state.WatchTarget, session state.Session, pr ghcli.PullRequest, failingChecks []ghcli.StatusCheckRoll) error {
 	repoSlug := session.Repo
 	if repoSlug == "" {
 		repoSlug = target.Repo
@@ -291,7 +292,7 @@ func RunCIRemediationSession(ctx context.Context, env *environment.Environment, 
 			},
 			Tagline: "Stop the loop before it turns into noise.",
 		})
-		_ = ghcli.CommentOnIssue(ctx, env.Runner, target.Repo, session.IssueNumber, body)
+		_ = issueTracker.CommentOnWorkItem(ctx, target.Repo, session.IssueNumber, body)
 		return err
 	}
 
