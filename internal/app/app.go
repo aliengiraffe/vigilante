@@ -552,6 +552,8 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		return a.runDaemonCommand(ctx, args[1:])
 	case "completion":
 		return a.runCompletionCommand(args[1:])
+	case "issue":
+		return a.runIssueCommand(ctx, args[1:])
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -5135,6 +5137,122 @@ func isHelpToken(value string) bool {
 	return value == "-h" || value == "--help"
 }
 
+func (a *App) runIssueCommand(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		a.printIssueUsage(a.stderr)
+		return errors.New("usage: vigilante issue <subcommand>")
+	}
+	if len(args) == 1 && isHelpToken(args[0]) {
+		a.printIssueUsage(a.stdout)
+		return nil
+	}
+	switch args[0] {
+	case "create":
+		return a.runIssueCreateCommand(ctx, args[1:])
+	default:
+		return fmt.Errorf("unknown issue subcommand %q", args[0])
+	}
+}
+
+func (a *App) printIssueUsage(w io.Writer) {
+	fmt.Fprintln(w, "usage:")
+	fmt.Fprintln(w, "  vigilante issue create --repo <owner/name> [--provider value] <prompt...>")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Use \"vigilante issue <subcommand> --help\" for subcommand-specific usage.")
+}
+
+func (a *App) runIssueCreateCommand(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("issue create", flag.ContinueOnError)
+	configureFlagSet(fs, func(w io.Writer) {
+		fmt.Fprintln(w, "usage: vigilante issue create --repo <owner/name> [--provider value] <prompt...>")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Turn a free-form prompt into an implementation-ready issue using a coding")
+		fmt.Fprintln(w, "agent and the vigilante-create-issue skill, then create the issue on the")
+		fmt.Fprintln(w, "issue tracker configured for the target repository.")
+		fmt.Fprintln(w)
+		fs.SetOutput(w)
+		fs.PrintDefaults()
+	})
+	repoSlug := fs.String("repo", "", "repository slug (owner/name)")
+	selectedProvider := fs.String("provider", "", "coding agent provider override")
+	if err := parseFlagSet(fs, args, a.stdout); err != nil {
+		if errors.Is(err, errHelpHandled) {
+			return nil
+		}
+		return err
+	}
+	if strings.TrimSpace(*repoSlug) == "" {
+		return errors.New("usage: vigilante issue create --repo <owner/name> [--provider value] <prompt...>\n\n--repo is required")
+	}
+	if fs.NArg() == 0 {
+		return errors.New("usage: vigilante issue create --repo <owner/name> [--provider value] <prompt...>\n\nissue prompt is required")
+	}
+	prompt := strings.Join(fs.Args(), " ")
+	return a.issueCreate(ctx, *repoSlug, strings.TrimSpace(*selectedProvider), prompt)
+}
+
+func (a *App) issueCreate(ctx context.Context, repoSlug string, providerOverride string, prompt string) error {
+	targets, err := a.state.LoadWatchTargets()
+	if err != nil {
+		return fmt.Errorf("load watch targets: %w", err)
+	}
+	var target *state.WatchTarget
+	for i := range targets {
+		if strings.EqualFold(targets[i].Repo, repoSlug) {
+			target = &targets[i]
+			break
+		}
+	}
+	if target == nil {
+		return fmt.Errorf("repository %q is not watched by Vigilante; register it with 'vigilante watch' first so the issue tracker can be resolved", repoSlug)
+	}
+
+	issueBackend := target.EffectiveIssueBackend()
+	switch issueBackend {
+	case "github", "linear":
+		// supported
+	default:
+		return fmt.Errorf("unsupported issue backend %q for repository %s", issueBackend, repoSlug)
+	}
+
+	providerID := providerOverride
+	if providerID == "" {
+		providerID = target.Provider
+	}
+	selectedProvider, err := provider.Resolve(providerID)
+	if err != nil {
+		return err
+	}
+
+	for _, tool := range provider.RequiredToolset(selectedProvider) {
+		if _, err := a.env.Runner.LookPath(tool); err != nil {
+			return fmt.Errorf("%s is required but not found: %w", tool, err)
+		}
+	}
+
+	invocation, err := selectedProvider.BuildIssueCreateInvocation(provider.IssueCreateTask{
+		Target: *target,
+		Prompt: prompt,
+	})
+	if err != nil {
+		return fmt.Errorf("build issue create invocation: %w", err)
+	}
+
+	fmt.Fprintf(a.stdout, "Creating issue on %s backend for %s using %s...\n", issueBackend, repoSlug, selectedProvider.DisplayName())
+
+	output, err := a.env.Runner.Run(ctx, invocation.Dir, invocation.Name, invocation.Args...)
+	if err != nil {
+		return fmt.Errorf("agent invocation failed: %w", err)
+	}
+
+	output = strings.TrimSpace(output)
+	if output != "" {
+		fmt.Fprintln(a.stdout, output)
+	}
+
+	return nil
+}
+
 func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage:")
 	fmt.Fprintln(w, "  vigilante setup [--provider value]")
@@ -5151,6 +5269,7 @@ func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  vigilante resume --all-blocked")
 	fmt.Fprintln(w, "  vigilante service restart")
 	fmt.Fprintln(w, "  vigilante daemon run [--once] [--interval duration]")
+	fmt.Fprintln(w, "  vigilante issue create --repo <owner/name> [--provider value] <prompt...>")
 	fmt.Fprintln(w, "  vigilante completion <bash|fish|zsh>")
 	fmt.Fprintln(w, "  vigilante <gh|git|docker> ...")
 	fmt.Fprintln(w)

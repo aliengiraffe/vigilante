@@ -73,3 +73,15 @@ func (claudeProvider) BuildCIRemediationInvocation(task CIRemediationTask) (Invo
 		},
 	}, nil
 }
+
+func (claudeProvider) BuildIssueCreateInvocation(task IssueCreateTask) (Invocation, error) {
+	return Invocation{
+		Dir:  task.Target.Path,
+		Name: "claude",
+		Args: []string{
+			"--print",
+			"--dangerously-skip-permissions",
+			skill.BuildIssueCreatePrompt(skill.RuntimeClaude, task.Target, task.Prompt),
+		},
+	}, nil
+}
