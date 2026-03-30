@@ -98,6 +98,34 @@ GitHub is the only fully implemented backend today. The architecture already sep
 - `vigilante cleanup`, `vigilante redispatch`, `vigilante resume`: recover or restart stuck work safely
 - `vigilante daemon run`: run the watcher loop in the foreground
 
+### Fork Mode
+
+Use fork mode when the authenticated GitHub identity should open pull requests from a fork instead of pushing issue branches directly to the upstream watched repository.
+
+```sh
+vigilante watch --fork ~/hello-world-app
+```
+
+What changes in fork mode:
+
+- Vigilante uses `gh api user` to resolve the authenticated GitHub login when `--fork-owner` is not set.
+- It creates or reuses `<fork-owner>/<repo>` through the GitHub API and verifies that the existing repository is actually a fork of the watched upstream repository.
+- It adds or updates a local git remote named `fork` that points at the fork repository.
+- Issue worktrees still use the upstream repository for issue context, base branch selection, and pull request target selection.
+- Coding agents still use the normal issue-implementation skill flow, but pushes go to the `fork` remote and pull requests are opened back to the upstream repository.
+
+Use an explicit owner when the fork should live under a bot or organization account:
+
+```sh
+vigilante watch --fork --fork-owner my-bot-org ~/hello-world-app
+```
+
+Operational notes:
+
+- `--fork-owner` requires `--fork`.
+- The authenticated `gh` account must be able to create or access the selected fork and open a pull request back to the upstream repository.
+- Existing branch tracking stays deterministic inside the worktree: the issue branch pushes to `fork`, while the pull request base remains the watched repository's configured base branch.
+
 For command details and full flags, see [DOCS.md](DOCS.md).
 
 ## Architecture At A Glance
