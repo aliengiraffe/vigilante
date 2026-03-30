@@ -205,11 +205,27 @@ func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue 
 	}
 	if strings.TrimSpace(session.ReusedRemoteBranch) != "" {
 		baseBranch := promptBaseBranch(target, session)
+		reusedRemote := "origin"
+		if remote := strings.TrimSpace(session.PushRemote); remote != "" {
+			reusedRemote = remote
+		}
 		lines = append(lines,
-			fmt.Sprintf("Existing remote issue branch detected: origin/%s", session.ReusedRemoteBranch),
+			fmt.Sprintf("Existing remote issue branch detected: %s/%s", reusedRemote, session.ReusedRemoteBranch),
 			fmt.Sprintf("Base branch for comparison: %s", baseBranch),
 			fmt.Sprintf("Diff summary against `%s`: %s", baseBranch, fallbackPromptText(session.BranchDiffSummary, "Diff analysis was requested but no summary was recorded.")),
 			"Continue from the reused branch state and build on top of the existing diff instead of restarting from scratch.",
+		)
+	}
+	if strings.TrimSpace(session.PushRemote) != "" && strings.TrimSpace(session.PushRemote) != "origin" {
+		headSelector := session.Branch
+		if owner := strings.TrimSpace(session.ForkOwner); owner != "" {
+			headSelector = owner + ":" + session.Branch
+		}
+		lines = append(lines,
+			fmt.Sprintf("Fork mode is enabled for this run. Upstream repository context remains `%s`.", target.Repo),
+			fmt.Sprintf("Push the branch to remote `%s` (repo `%s`) rather than `origin`.", session.PushRemote, fallbackPromptText(session.PushRepo, "fork repo not recorded")),
+			fmt.Sprintf("Open the pull request against `%s` with head `%s` so the PR is cross-repo from the fork.", target.Repo, headSelector),
+			"Include a concise implementation summary and a short `Benefits` section in the PR body in addition to the required closing line.",
 		)
 	}
 	if normalizedRepoShape(target) == string(repo.ShapeMonorepo) {

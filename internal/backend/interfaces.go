@@ -80,7 +80,7 @@ type PullRequestManager interface {
 	ClosePullRequest(ctx context.Context, repo string, number int) error
 
 	// DeleteRemoteBranch deletes a remote branch from the repository.
-	DeleteRemoteBranch(ctx context.Context, repoPath string, branch string) error
+	DeleteRemoteBranch(ctx context.Context, repoPath string, remote string, branch string) error
 }
 
 // RateLimiter provides rate limit awareness for backends that enforce API quotas.

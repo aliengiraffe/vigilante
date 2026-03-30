@@ -114,8 +114,8 @@ func (b *Backend) ClosePullRequest(ctx context.Context, repo string, number int)
 	return ghcli.ClosePullRequest(ctx, b.runner(), repo, number)
 }
 
-func (b *Backend) DeleteRemoteBranch(ctx context.Context, repoPath string, branch string) error {
-	return ghcli.DeleteRemoteBranch(ctx, b.runner(), repoPath, branch)
+func (b *Backend) DeleteRemoteBranch(ctx context.Context, repoPath string, remote string, branch string) error {
+	return ghcli.DeleteRemoteBranch(ctx, b.runner(), repoPath, remote, branch)
 }
 
 // --- RateLimiter ---

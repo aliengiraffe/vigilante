@@ -24,6 +24,7 @@ import (
 	linearbackend "github.com/nicobistolfi/vigilante/internal/backend/linear"
 	"github.com/nicobistolfi/vigilante/internal/blocking"
 	"github.com/nicobistolfi/vigilante/internal/environment"
+	forkmode "github.com/nicobistolfi/vigilante/internal/fork"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
 	"github.com/nicobistolfi/vigilante/internal/logging"
 	"github.com/nicobistolfi/vigilante/internal/provider"
@@ -125,6 +126,9 @@ type watchBranchOptions struct {
 	trackDefaultBranch  bool
 	branchFlagSet       bool
 	trackDefaultFlagSet bool
+	forkMode            bool
+	forkFlagSet         bool
+	forkOwner           string
 }
 
 type watchIssueOptions struct {
@@ -286,7 +290,7 @@ func (a *App) loadPullRequestForSession(ctx context.Context, session state.Sessi
 	if strings.TrimSpace(session.Branch) == "" {
 		return nil, nil
 	}
-	pr, err := prManager.FindPullRequestForBranch(ctx, session.Repo, session.Branch)
+	pr, err := prManager.FindPullRequestForBranch(ctx, session.Repo, pullRequestHeadSelector(session))
 	if err != nil || pr == nil {
 		return pr, err
 	}
@@ -562,7 +566,7 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 	case "watch":
 		fs := flag.NewFlagSet("watch", flag.ContinueOnError)
 		configureFlagSet(fs, func(w io.Writer) {
-			fmt.Fprintln(w, "usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] <path>")
+			fmt.Fprintln(w, "usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] [--fork [--fork-owner value]] <path>")
 			fmt.Fprintln(w)
 			fmt.Fprintln(w, "Register a local repository for issue monitoring.")
 			fmt.Fprintln(w)
@@ -578,6 +582,8 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		issueStage := fs.String("issue-tracker-stage", "", "issue tracker stage filter; Linear defaults to Todo")
 		branch := fs.String("branch", "", "pin the watched repository to a specific base branch")
 		trackDefaultBranch := fs.Bool("track-default-branch", false, "track the repository default branch automatically")
+		forkMode := fs.Bool("fork", false, "push implementation branches to a GitHub fork and open PRs back to the watched repository")
+		forkOwner := fs.String("fork-owner", "", "GitHub owner that should host the fork (defaults to the authenticated gh user)")
 		if err := parseFlagSet(fs, args[1:], a.stdout); err != nil {
 			if errors.Is(err, errHelpHandled) {
 				return nil
@@ -585,7 +591,7 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 			return err
 		}
 		if fs.NArg() != 1 {
-			return errors.New("usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] <path>")
+			return errors.New("usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] [--fork [--fork-owner value]] <path>")
 		}
 		parsedMaxParallel := unsetMaxParallel
 		branchOptions := watchBranchOptions{}
@@ -597,12 +603,21 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 				branchOptions.branchFlagSet = true
 			case "track-default-branch":
 				branchOptions.trackDefaultFlagSet = true
+			case "fork":
+				branchOptions.forkFlagSet = true
+			case "fork-owner":
+				branchOptions.forkFlagSet = true
 			}
 		})
 		branchOptions.pinnedBranch = strings.TrimSpace(*branch)
 		branchOptions.trackDefaultBranch = *trackDefaultBranch
+		branchOptions.forkMode = *forkMode || strings.TrimSpace(*forkOwner) != ""
+		branchOptions.forkOwner = strings.TrimSpace(*forkOwner)
 		if branchOptions.branchFlagSet && branchOptions.trackDefaultFlagSet {
 			return errors.New("watch accepts either --branch or --track-default-branch, not both")
+		}
+		if branchOptions.forkOwner != "" && !branchOptions.forkMode {
+			return errors.New("watch requires --fork when --fork-owner is set")
 		}
 		return a.watchWithOptions(ctx, fs.Arg(0), labels, *assignee, parsedMaxParallel, *selectedProvider, watchIssueOptions{
 			issueBackend: *issueBackend,
@@ -1163,6 +1178,14 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []str
 			if maxParallel >= 0 {
 				targets[i].MaxParallel = maxParallel
 			}
+			if branchOptions.forkFlagSet {
+				targets[i].ForkMode = branchOptions.forkMode
+				targets[i].ForkOwner = branchOptions.forkOwner
+				if !branchOptions.forkMode {
+					targets[i].PushRemote = ""
+					targets[i].PushRepo = ""
+				}
+			}
 			switch {
 			case branchOptions.branchFlagSet:
 				targets[i].BranchMode = state.BranchModePinned
@@ -1197,6 +1220,8 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []str
 			Repo:           info.Repo,
 			BranchMode:     state.BranchModeAuto,
 			Branch:         info.Branch,
+			ForkMode:       branchOptions.forkMode,
+			ForkOwner:      branchOptions.forkOwner,
 			Classification: info.Classification,
 			Provider:       provider.DefaultID,
 			Labels:         labels,
@@ -1258,6 +1283,17 @@ func (a *App) printWatchRuntimeGuidance(ctx context.Context) {
 		fmt.Fprintln(a.stdout, "managed service is not installed.")
 		fmt.Fprintln(a.stdout, "next step: run `vigilante setup` to install it, or `vigilante daemon run` to process the watchlist in the foreground.")
 	}
+}
+
+func (a *App) prepareExecutionTarget(ctx context.Context, target state.WatchTarget) (state.WatchTarget, error) {
+	if !target.ForkMode {
+		target.PushRemote = target.EffectivePushRemote()
+		if strings.TrimSpace(target.PushRepo) == "" {
+			target.PushRepo = target.Repo
+		}
+		return target, nil
+	}
+	return forkmode.PrepareTarget(ctx, a.env.Runner, target)
 }
 
 func (a *App) Unwatch(rawPath string) error {
@@ -1551,8 +1587,24 @@ func (a *App) ScanOnce(ctx context.Context) error {
 					continue
 				}
 				target.Branch = resolvedBranch
+				preparedTarget, err := a.prepareExecutionTarget(issueCtx, *target)
+				if err != nil {
+					session := blockedIssueSessionForDispatchFailure(*target, next, selectedProvider, err, a.clock())
+					previous, _ := findSession(sessions, target.Repo, next.Number)
+					a.commentDispatchFailure(ctx, previous, &session, "dispatch")
+					a.logger.Info("scan repo dispatch blocked", "repo", target.Repo, "issue", next.Number, "err", err)
+					sessions = upsertSession(sessions, session)
+					if err := a.state.SaveSessions(sessions); err != nil {
+						return err
+					}
+					a.emitSessionTransition(previous.Status, session, "dispatch")
+					a.syncSessionIssueLabelsBestEffort(ctx, &session, nil, nil, issueDetailsCache)
+					fmt.Fprintf(a.stdout, "repo: %s blocked issue #%d: %s\n", target.Repo, next.Number, summarizeText(err.Error()))
+					continue
+				}
+				*target = preparedTarget
 
-				wt, err := worktree.CreateIssueWorktree(issueCtx, a.env.Runner, *target, next.Number, next.Title)
+				wt, err := worktree.CreateIssueWorktree(issueCtx, a.env.Runner, preparedTarget, next.Number, next.Title)
 				if err != nil {
 					session := blockedIssueSessionForDispatchFailure(*target, next, selectedProvider, err, a.clock())
 					previous, _ := findSession(sessions, target.Repo, next.Number)
@@ -1604,6 +1656,10 @@ func (a *App) ScanOnce(ctx context.Context) error {
 					BaseBranch:         target.Branch,
 					Branch:             wt.Branch,
 					WorktreePath:       wt.Path,
+					ForkMode:           target.ForkMode,
+					ForkOwner:          target.ForkOwner,
+					PushRemote:         target.EffectivePushRemote(),
+					PushRepo:           target.PushRepo,
 					ReusedRemoteBranch: wt.ReusedRemoteBranch,
 					BranchDiffSummary:  diffSummary,
 					Status:             state.SessionStatusRunning,
@@ -1937,7 +1993,7 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 			continue
 		}
 
-		pr, err := a.prManager.FindPullRequestForBranch(sessionCtx, session.Repo, session.Branch)
+		pr, err := a.prManager.FindPullRequestForBranch(sessionCtx, session.Repo, pullRequestHeadSelector(*session))
 		if err != nil {
 			session.LastMaintenanceError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
@@ -2701,7 +2757,7 @@ func (a *App) recreateSessionInline(ctx context.Context, session *state.Session,
 	}
 
 	if session.Branch != "" {
-		if err := a.prManager.DeleteRemoteBranch(ctx, session.RepoPath, session.Branch); err != nil {
+		if err := a.prManager.DeleteRemoteBranch(ctx, session.RepoPath, effectivePushRemoteForSession(*session), session.Branch); err != nil {
 			cleanupErrors = append(cleanupErrors, fmt.Sprintf("delete remote branch %s: %s", session.Branch, err))
 		}
 	}
@@ -3003,6 +3059,10 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 	if err != nil {
 		return err
 	}
+	target, err = a.prepareExecutionTarget(ctx, target)
+	if err != nil {
+		return err
+	}
 
 	wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, target, selectedIssue.Number, selectedIssue.Title)
 	if err != nil {
@@ -3011,22 +3071,28 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 
 	now := a.clock().Format(time.RFC3339)
 	session := state.Session{
-		RepoPath:        target.Path,
-		Repo:            target.Repo,
-		Provider:        selectedProvider,
-		IssueBackend:    target.EffectiveIssueBackend(),
-		GitBackend:      target.EffectiveGitBackend(),
-		PRBackend:       target.EffectivePRBackend(),
-		IssueNumber:     selectedIssue.Number,
-		IssueTitle:      selectedIssue.Title,
-		IssueURL:        selectedIssue.URL,
-		Branch:          wt.Branch,
-		WorktreePath:    wt.Path,
-		Status:          state.SessionStatusRunning,
-		ProcessID:       os.Getpid(),
-		StartedAt:       now,
-		LastHeartbeatAt: now,
-		UpdatedAt:       now,
+		RepoPath:           target.Path,
+		Repo:               target.Repo,
+		Provider:           selectedProvider,
+		IssueBackend:       target.EffectiveIssueBackend(),
+		GitBackend:         target.EffectiveGitBackend(),
+		PRBackend:          target.EffectivePRBackend(),
+		IssueNumber:        selectedIssue.Number,
+		IssueTitle:         selectedIssue.Title,
+		IssueURL:           selectedIssue.URL,
+		BaseBranch:         target.Branch,
+		Branch:             wt.Branch,
+		WorktreePath:       wt.Path,
+		ForkMode:           target.ForkMode,
+		ForkOwner:          target.ForkOwner,
+		PushRemote:         target.EffectivePushRemote(),
+		PushRepo:           target.PushRepo,
+		ReusedRemoteBranch: wt.ReusedRemoteBranch,
+		Status:             state.SessionStatusRunning,
+		ProcessID:          os.Getpid(),
+		StartedAt:          now,
+		LastHeartbeatAt:    now,
+		UpdatedAt:          now,
 	}
 	if previous, ok := findSession(sessions, repoSlug, issue); ok {
 		if source == "cli" {
@@ -3126,7 +3192,7 @@ func (a *App) RecreateSession(ctx context.Context, repoSlug string, issue int, s
 
 		// Delete remote branch.
 		if session.Branch != "" {
-			if err := a.prManager.DeleteRemoteBranch(ctx, session.RepoPath, session.Branch); err != nil {
+			if err := a.prManager.DeleteRemoteBranch(ctx, session.RepoPath, effectivePushRemoteForSession(*session), session.Branch); err != nil {
 				cleanupErrors = append(cleanupErrors, fmt.Sprintf("delete remote branch %s: %s", session.Branch, err))
 			}
 		}
@@ -3456,7 +3522,7 @@ func (a *App) preflightResume(ctx context.Context, session state.Session) error 
 
 func (a *App) resumeBlockedMaintenance(ctx context.Context, session *state.Session) error {
 	ctx = withSessionAccessLogContext(ctx, "maintenance", *session)
-	pr, err := a.prManager.FindPullRequestForBranch(ctx, session.Repo, session.Branch)
+	pr, err := a.prManager.FindPullRequestForBranch(ctx, session.Repo, pullRequestHeadSelector(*session))
 	if err != nil {
 		return err
 	}
@@ -3521,7 +3587,7 @@ func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Se
 }
 
 func (a *App) resumeBlockedConflictResolution(ctx context.Context, session *state.Session) error {
-	pr, err := a.prManager.FindPullRequestForBranch(ctx, session.Repo, session.Branch)
+	pr, err := a.prManager.FindPullRequestForBranch(ctx, session.Repo, pullRequestHeadSelector(*session))
 	if err != nil {
 		return err
 	}
@@ -3686,7 +3752,7 @@ func shouldAutoRecoverBlockedSession(session state.Session) bool {
 }
 
 func (a *App) autoRecoverBlockedMaintenanceSession(ctx context.Context, session *state.Session, timeout time.Duration) error {
-	pr, err := a.prManager.FindPullRequestForBranch(ctx, session.Repo, session.Branch)
+	pr, err := a.prManager.FindPullRequestForBranch(ctx, session.Repo, pullRequestHeadSelector(*session))
 	if err != nil {
 		return err
 	}
@@ -4014,6 +4080,10 @@ func watchTargetForSession(session state.Session, fallbackTarget state.WatchTarg
 		Repo:           session.Repo,
 		BranchMode:     state.BranchModePinned,
 		Branch:         effectiveSessionBaseBranch(session, fallbackTarget),
+		ForkMode:       session.ForkMode,
+		ForkOwner:      session.ForkOwner,
+		PushRemote:     session.PushRemote,
+		PushRepo:       session.PushRepo,
 		Classification: fallbackTarget.Classification,
 		Provider:       fallbackTarget.Provider,
 		Labels:         fallbackTarget.Labels,
@@ -4040,7 +4110,32 @@ func (a *App) fallbackWatchTargetForSession(session state.Session) state.WatchTa
 		Repo:       session.Repo,
 		BranchMode: state.BranchModePinned,
 		Branch:     strings.TrimSpace(session.BaseBranch),
+		ForkMode:   session.ForkMode,
+		ForkOwner:  session.ForkOwner,
+		PushRemote: session.PushRemote,
+		PushRepo:   session.PushRepo,
 	}
+}
+
+func pullRequestHeadSelector(session state.Session) string {
+	branch := strings.TrimSpace(session.Branch)
+	if branch == "" {
+		return ""
+	}
+	if owner := strings.TrimSpace(session.ForkOwner); owner != "" && strings.TrimSpace(session.PushRemote) != "" && strings.TrimSpace(session.PushRemote) != "origin" {
+		return owner + ":" + branch
+	}
+	return branch
+}
+
+func effectivePushRemoteForSession(session state.Session) string {
+	if remote := strings.TrimSpace(session.PushRemote); remote != "" {
+		return remote
+	}
+	if session.ForkMode {
+		return forkmode.RemoteName
+	}
+	return "origin"
 }
 
 func pullRequestStatusFingerprint(session state.Session, pr ghcli.PullRequest) string {
@@ -4206,8 +4301,13 @@ func blockedIssueSessionForDispatchFailure(target state.WatchTarget, issue ghcli
 		IssueNumber:  issue.Number,
 		IssueTitle:   issue.Title,
 		IssueURL:     issue.URL,
+		BaseBranch:   target.Branch,
 		Branch:       worktree.IssueBranchName(issue.Number, issue.Title),
 		WorktreePath: worktree.IssueWorktreePath(target.Path, issue.Number),
+		ForkMode:     target.ForkMode,
+		ForkOwner:    target.ForkOwner,
+		PushRemote:   target.EffectivePushRemote(),
+		PushRepo:     target.PushRepo,
 		Status:       state.SessionStatusFailed,
 		StartedAt:    now.Format(time.RFC3339),
 		UpdatedAt:    now.Format(time.RFC3339),
@@ -4444,6 +4544,10 @@ func buildIterationPromptContext(comments []ghcli.IssueComment) string {
 }
 
 func (a *App) dispatchIssueSession(ctx context.Context, target state.WatchTarget, issue ghcli.Issue, selectedProvider string, previous state.Session, issueBody string, iterationContext string, triggeringComment *ghcli.IssueComment) (state.Session, error) {
+	target, err := a.prepareExecutionTarget(ctx, target)
+	if err != nil {
+		return blockedIssueSessionForDispatchFailure(target, issue, selectedProvider, err, a.clock()), err
+	}
 	wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, target, issue.Number, issue.Title)
 	if err != nil {
 		if triggeringComment != nil && strings.Contains(strings.ToLower(err.Error()), "worktree already exists") {
@@ -4485,6 +4589,10 @@ func (a *App) dispatchIssueSession(ctx context.Context, target state.WatchTarget
 	session.BaseBranch = target.Branch
 	session.Branch = wt.Branch
 	session.WorktreePath = wt.Path
+	session.ForkMode = target.ForkMode
+	session.ForkOwner = target.ForkOwner
+	session.PushRemote = target.EffectivePushRemote()
+	session.PushRepo = target.PushRepo
 	session.ReusedRemoteBranch = wt.ReusedRemoteBranch
 	session.BranchDiffSummary = diffSummary
 	session.Status = state.SessionStatusRunning
@@ -5438,7 +5546,7 @@ func (a *App) issueCreate(ctx context.Context, repoSlug string, providerOverride
 func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage:")
 	fmt.Fprintln(w, "  vigilante setup [--provider value]")
-	fmt.Fprintln(w, "  vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] <path>")
+	fmt.Fprintln(w, "  vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] [--fork [--fork-owner value]] <path>")
 	fmt.Fprintln(w, "  vigilante unwatch <path>")
 	fmt.Fprintln(w, "  vigilante list [--blocked | --running]")
 	fmt.Fprintln(w, "  vigilante status [-w]")
@@ -5501,7 +5609,7 @@ _vigilante()
             return
             ;;
         watch)
-            COMPREPLY=( $(compgen -W "--label --assignee --max-parallel --provider --issue-tracker --issue-tracker-stage --branch --track-default-branch" -- "$cur") )
+            COMPREPLY=( $(compgen -W "--label --assignee --max-parallel --provider --issue-tracker --issue-tracker-stage --branch --track-default-branch --fork --fork-owner" -- "$cur") )
             return
             ;;
         list)
@@ -5576,6 +5684,8 @@ complete -c vigilante -n '__fish_seen_subcommand_from watch' -l issue-tracker
 complete -c vigilante -n '__fish_seen_subcommand_from watch' -l issue-tracker-stage
 complete -c vigilante -n '__fish_seen_subcommand_from watch' -l branch
 complete -c vigilante -n '__fish_seen_subcommand_from watch' -l track-default-branch
+complete -c vigilante -n '__fish_seen_subcommand_from watch' -l fork
+complete -c vigilante -n '__fish_seen_subcommand_from watch' -l fork-owner
 complete -c vigilante -n '__fish_seen_subcommand_from list' -l blocked
 complete -c vigilante -n '__fish_seen_subcommand_from list' -l running
 complete -c vigilante -n '__fish_seen_subcommand_from cleanup' -l repo
@@ -5626,7 +5736,7 @@ _vigilante() {
       compadd -- --provider
       ;;
     watch)
-      compadd -- --label --assignee --max-parallel --provider --issue-tracker --issue-tracker-stage --branch --track-default-branch
+      compadd -- --label --assignee --max-parallel --provider --issue-tracker --issue-tracker-stage --branch --track-default-branch --fork --fork-owner
       ;;
     list)
       compadd -- --blocked --running

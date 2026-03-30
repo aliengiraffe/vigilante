@@ -220,6 +220,33 @@ func TestCreateIssueWorktreePrefersPrimaryRemoteBranchOverLegacyFallback(t *test
 	}
 }
 
+func TestCreateIssueWorktreeReusesForkRemoteBranchWhenConfigured(t *testing.T) {
+	branch := "vigilante/issue-9-add-daemon-status-command"
+	path := filepath.Join("/tmp/repo", ".worktrees", "vigilante", "issue-9")
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"git worktree prune": "ok",
+			"git ls-remote --exit-code --heads fork " + branch: "abcdef\trefs/heads/" + branch + "\n",
+			"git fetch fork " + branch + ":" + branch:          "ok",
+			"git worktree add " + path + " " + branch:          "ok",
+		},
+	}
+
+	worktree, err := CreateIssueWorktree(context.Background(), runner, state.WatchTarget{
+		Path:       "/tmp/repo",
+		Repo:       "owner/repo",
+		Branch:     "main",
+		ForkMode:   true,
+		PushRemote: "fork",
+	}, 9, "Add daemon status command")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if worktree.Branch != branch || worktree.ReusedRemoteBranch != branch {
+		t.Fatalf("unexpected fork worktree reuse: %#v", worktree)
+	}
+}
+
 func TestCreateIssueWorktreeRefreshesDetachedConfiguredBaseBranch(t *testing.T) {
 	home := t.TempDir()
 	repo := filepath.Join(home, "repo")

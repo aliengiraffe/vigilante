@@ -667,8 +667,12 @@ func ClosePullRequest(ctx context.Context, runner environment.Runner, repo strin
 	return err
 }
 
-func DeleteRemoteBranch(ctx context.Context, runner environment.Runner, repoPath string, branch string) error {
-	_, err := runner.Run(ctx, repoPath, "git", "push", "origin", "--delete", branch)
+func DeleteRemoteBranch(ctx context.Context, runner environment.Runner, repoPath string, remote string, branch string) error {
+	remote = strings.TrimSpace(remote)
+	if remote == "" {
+		remote = "origin"
+	}
+	_, err := runner.Run(ctx, repoPath, "git", "push", remote, "--delete", branch)
 	return err
 }
 
