@@ -21,6 +21,7 @@ import (
 
 	"github.com/nicobistolfi/vigilante/internal/backend"
 	githubbackend "github.com/nicobistolfi/vigilante/internal/backend/github"
+	linearbackend "github.com/nicobistolfi/vigilante/internal/backend/linear"
 	"github.com/nicobistolfi/vigilante/internal/blocking"
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
@@ -90,10 +91,13 @@ type App struct {
 	clock  func() time.Time
 	env    *environment.Environment
 
-	issueTracker backend.IssueTracker
-	labelManager backend.LabelManager
-	prManager    backend.PullRequestManager
-	rateLimiter  backend.RateLimiter
+	issueTracker  backend.IssueTracker
+	labelManager  backend.LabelManager
+	prManager     backend.PullRequestManager
+	rateLimiter   backend.RateLimiter
+	issueTrackers map[string]backend.IssueTracker
+	labelManagers map[string]backend.LabelManager
+	prManagers    map[string]backend.PullRequestManager
 
 	sessionMu                 sync.Mutex
 	sessionWG                 sync.WaitGroup
@@ -121,6 +125,11 @@ type watchBranchOptions struct {
 	trackDefaultBranch  bool
 	branchFlagSet       bool
 	trackDefaultFlagSet bool
+}
+
+type watchIssueOptions struct {
+	issueBackend string
+	issueStage   string
 }
 
 func (f *stringListFlag) String() string {
@@ -154,17 +163,29 @@ func New() *App {
 		Runner: runner,
 	}
 	ghBackend := githubbackend.NewBackend(&env.Runner)
+	linearBackend := linearbackend.NewBackend(&env.Runner)
 	return &App{
-		stdin:                     os.Stdin,
-		stdout:                    os.Stdout,
-		stderr:                    os.Stderr,
-		state:                     store,
-		logger:                    logger,
-		clock:                     time.Now().UTC,
-		issueTracker:              ghBackend,
-		labelManager:              ghBackend,
-		prManager:                 ghBackend,
-		rateLimiter:               ghBackend,
+		stdin:        os.Stdin,
+		stdout:       os.Stdout,
+		stderr:       os.Stderr,
+		state:        store,
+		logger:       logger,
+		clock:        time.Now().UTC,
+		issueTracker: ghBackend,
+		labelManager: ghBackend,
+		prManager:    ghBackend,
+		rateLimiter:  ghBackend,
+		issueTrackers: map[string]backend.IssueTracker{
+			string(backend.BackendGitHub): ghBackend,
+			string(backend.BackendLinear): linearBackend,
+		},
+		labelManagers: map[string]backend.LabelManager{
+			string(backend.BackendGitHub): ghBackend,
+			string(backend.BackendLinear): linearBackend,
+		},
+		prManagers: map[string]backend.PullRequestManager{
+			string(backend.BackendGitHub): ghBackend,
+		},
 		cancels:                   make(map[string]context.CancelFunc),
 		repoLabelsProvisionedOnce: make(map[string]bool),
 		proxyExec:                 runProxyBinary,
@@ -179,7 +200,13 @@ func (a *App) loadIssueDetailsForScan(ctx context.Context, cache scanIssueDetail
 			return details, nil
 		}
 	}
-	details, err := a.issueTracker.GetWorkItemDetails(ctx, repo, issueNumber)
+	tracker := a.issueTracker
+	project := repo
+	if target, ok := a.watchTargetByRepo(repo); ok {
+		tracker = a.issueTrackerForTarget(target)
+		project = target.EffectiveProjectRef()
+	}
+	details, err := tracker.GetWorkItemDetails(ctx, project, issueNumber)
 	if err != nil {
 		return nil, err
 	}
@@ -189,18 +216,81 @@ func (a *App) loadIssueDetailsForScan(ctx context.Context, cache scanIssueDetail
 	return details, nil
 }
 
+func (a *App) issueTrackerForBackend(id string) backend.IssueTracker {
+	if tracker := a.issueTrackers[strings.TrimSpace(id)]; tracker != nil {
+		return tracker
+	}
+	return a.issueTracker
+}
+
+func (a *App) labelManagerForBackend(id string) backend.LabelManager {
+	if manager := a.labelManagers[strings.TrimSpace(id)]; manager != nil {
+		return manager
+	}
+	return a.labelManager
+}
+
+func (a *App) prManagerForBackend(id string) backend.PullRequestManager {
+	if manager := a.prManagers[strings.TrimSpace(id)]; manager != nil {
+		return manager
+	}
+	return a.prManager
+}
+
+func (a *App) issueTrackerForTarget(target state.WatchTarget) backend.IssueTracker {
+	return a.issueTrackerForBackend(target.EffectiveIssueBackend())
+}
+
+func (a *App) labelManagerForTarget(target state.WatchTarget) backend.LabelManager {
+	return a.labelManagerForBackend(target.EffectiveIssueBackend())
+}
+
+func (a *App) prManagerForTarget(target state.WatchTarget) backend.PullRequestManager {
+	return a.prManagerForBackend(target.EffectivePRBackend())
+}
+
+func (a *App) issueTrackerForSession(session state.Session) backend.IssueTracker {
+	return a.issueTrackerForTarget(a.fallbackWatchTargetForSession(session))
+}
+
+func (a *App) labelManagerForSession(session state.Session) backend.LabelManager {
+	return a.labelManagerForTarget(a.fallbackWatchTargetForSession(session))
+}
+
+func (a *App) prManagerForSession(session state.Session) backend.PullRequestManager {
+	return a.prManagerForTarget(a.fallbackWatchTargetForSession(session))
+}
+
+func (a *App) issueProjectForTarget(target state.WatchTarget) string {
+	return target.EffectiveProjectRef()
+}
+
+func (a *App) issueProjectForSession(session state.Session) string {
+	target := a.fallbackWatchTargetForSession(session)
+	return target.EffectiveProjectRef()
+}
+
+func (a *App) watchTargetByRepo(repo string) (state.WatchTarget, bool) {
+	targets, err := a.state.LoadWatchTargets()
+	if err != nil {
+		return state.WatchTarget{}, false
+	}
+	return findWatchTargetByRepo(targets, repo)
+}
+
 func (a *App) loadPullRequestForSession(ctx context.Context, session state.Session) (*ghcli.PullRequest, error) {
+	prManager := a.prManagerForSession(session)
 	if session.PullRequestNumber > 0 {
-		return a.prManager.GetPullRequestDetails(ctx, session.Repo, session.PullRequestNumber)
+		return prManager.GetPullRequestDetails(ctx, session.Repo, session.PullRequestNumber)
 	}
 	if strings.TrimSpace(session.Branch) == "" {
 		return nil, nil
 	}
-	pr, err := a.prManager.FindPullRequestForBranch(ctx, session.Repo, session.Branch)
+	pr, err := prManager.FindPullRequestForBranch(ctx, session.Repo, session.Branch)
 	if err != nil || pr == nil {
 		return pr, err
 	}
-	return a.prManager.GetPullRequestDetails(ctx, session.Repo, pr.Number)
+	return prManager.GetPullRequestDetails(ctx, session.Repo, pr.Number)
 }
 
 func (a *App) reconcileStaleRunningSession(ctx context.Context, session *state.Session, issueCache scanIssueDetailsCache, reason string, commentOnRecovery bool) (bool, error) {
@@ -363,7 +453,13 @@ func (a *App) emitGitHubRateLimitEvent(state string, snapshot ghcli.RateLimitSna
 
 func (a *App) commentOnIssue(ctx context.Context, repo string, issue int, body string, commentType string, source string) error {
 	ctx = a.withIssueAccessLogContext(ctx, "", repo, issue, "", "")
-	if err := a.issueTracker.CommentOnWorkItem(ctx, repo, issue, body); err != nil {
+	tracker := a.issueTracker
+	project := repo
+	if target, ok := a.watchTargetByRepo(repo); ok {
+		tracker = a.issueTrackerForTarget(target)
+		project = target.EffectiveProjectRef()
+	}
+	if err := tracker.CommentOnWorkItem(ctx, project, issue, body); err != nil {
 		return err
 	}
 	a.emitCommentEvent(commentType, source)
@@ -466,7 +562,7 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 	case "watch":
 		fs := flag.NewFlagSet("watch", flag.ContinueOnError)
 		configureFlagSet(fs, func(w io.Writer) {
-			fmt.Fprintln(w, "usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--branch value | --track-default-branch] <path>")
+			fmt.Fprintln(w, "usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] <path>")
 			fmt.Fprintln(w)
 			fmt.Fprintln(w, "Register a local repository for issue monitoring.")
 			fmt.Fprintln(w)
@@ -478,6 +574,8 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		assignee := fs.String("assignee", "", "issue assignee filter (defaults to me)")
 		maxParallel := fs.Int("max-parallel", 0, "maximum concurrent issue sessions for this repository (0 = unlimited)")
 		selectedProvider := fs.String("provider", "", "coding agent provider")
+		issueBackend := fs.String("issue-tracker", "", "issue tracker backend (github or linear)")
+		issueStage := fs.String("issue-tracker-stage", "", "issue tracker stage filter; Linear defaults to Todo")
 		branch := fs.String("branch", "", "pin the watched repository to a specific base branch")
 		trackDefaultBranch := fs.Bool("track-default-branch", false, "track the repository default branch automatically")
 		if err := parseFlagSet(fs, args[1:], a.stdout); err != nil {
@@ -487,7 +585,7 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 			return err
 		}
 		if fs.NArg() != 1 {
-			return errors.New("usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--branch value | --track-default-branch] <path>")
+			return errors.New("usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] <path>")
 		}
 		parsedMaxParallel := unsetMaxParallel
 		branchOptions := watchBranchOptions{}
@@ -506,7 +604,10 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		if branchOptions.branchFlagSet && branchOptions.trackDefaultFlagSet {
 			return errors.New("watch accepts either --branch or --track-default-branch, not both")
 		}
-		return a.watchWithOptions(ctx, fs.Arg(0), labels, *assignee, parsedMaxParallel, *selectedProvider, branchOptions)
+		return a.watchWithOptions(ctx, fs.Arg(0), labels, *assignee, parsedMaxParallel, *selectedProvider, watchIssueOptions{
+			issueBackend: *issueBackend,
+			issueStage:   *issueStage,
+		}, branchOptions)
 	case "unwatch":
 		if len(args) != 2 {
 			return errors.New("usage: vigilante unwatch <path>")
@@ -970,10 +1071,10 @@ func (a *App) Watch(ctx context.Context, rawPath string, labels []string, assign
 }
 
 func (a *App) WatchWithProvider(ctx context.Context, rawPath string, labels []string, assignee string, maxParallel int, providerID string) error {
-	return a.watchWithOptions(ctx, rawPath, labels, assignee, maxParallel, providerID, watchBranchOptions{})
+	return a.watchWithOptions(ctx, rawPath, labels, assignee, maxParallel, providerID, watchIssueOptions{}, watchBranchOptions{})
 }
 
-func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []string, assignee string, maxParallel int, providerID string, branchOptions watchBranchOptions) error {
+func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []string, assignee string, maxParallel int, providerID string, issueOptions watchIssueOptions, branchOptions watchBranchOptions) error {
 	a.logger.Info("watch start", "raw_path", rawPath, "assignee", assignee, "max_parallel", maxParallel)
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
@@ -991,6 +1092,13 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []str
 		}
 		providerID = resolvedProvider.ID()
 	}
+	issueBackend := strings.TrimSpace(strings.ToLower(issueOptions.issueBackend))
+	if issueBackend != "" {
+		if a.issueTrackerForBackend(issueBackend) == nil {
+			return fmt.Errorf("unsupported issue tracker %q", issueBackend)
+		}
+	}
+	issueStage := strings.TrimSpace(issueOptions.issueStage)
 
 	repoPath, err := ExpandPath(rawPath)
 	if err != nil {
@@ -1006,6 +1114,21 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []str
 	if err != nil {
 		return err
 	}
+	existingTarget := findWatchTargetByPath(targets, info.Path)
+	effectiveIssueBackend := existingTarget.EffectiveIssueBackend()
+	if issueBackend != "" {
+		effectiveIssueBackend = issueBackend
+	}
+	effectiveIssueStage := existingTarget.IssueStage
+	if issueStage != "" {
+		effectiveIssueStage = issueStage
+	}
+	if existingTarget.Path == "" && effectiveIssueBackend == string(backend.BackendLinear) && strings.TrimSpace(effectiveIssueStage) == "" {
+		effectiveIssueStage = "Todo"
+	}
+	if err := a.ensureIssueTrackerReady(ctx, effectiveIssueBackend); err != nil {
+		return err
+	}
 
 	labels = normalizeLabels(labels)
 
@@ -1019,6 +1142,15 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []str
 			}
 			if providerID != "" {
 				targets[i].Provider = providerID
+			}
+			if issueBackend != "" {
+				targets[i].IssueBackend = issueBackend
+			}
+			if issueStage != "" {
+				targets[i].IssueStage = issueStage
+			}
+			if targets[i].EffectiveIssueBackend() == string(backend.BackendLinear) && strings.TrimSpace(targets[i].IssueStage) == "" {
+				targets[i].IssueStage = "Todo"
 			}
 			targets[i].Labels = labels
 			if assignee != "" {
@@ -1069,6 +1201,8 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []str
 			Assignee:       assigneeOrDefault(assignee),
 			MaxParallel:    configuredMaxParallel(maxParallel),
 			AddedAt:        a.clock().Format(time.RFC3339),
+			IssueBackend:   effectiveIssueBackend,
+			IssueStage:     effectiveIssueStage,
 		}
 		if providerID != "" {
 			target.Provider = providerID
@@ -1343,9 +1477,11 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			startedCount += started
 			a.logger.Info("scan repo classified", "repo", target.Repo, "shape", target.Classification.Shape, "hints", len(target.Classification.ProcessHints.WorkspaceConfigFiles))
 			a.logger.Info("scan repo start", "repo", target.Repo, "path", target.Path, "max_parallel", target.MaxParallel)
+			issueTracker := a.issueTrackerForTarget(*target)
+			projectRef := a.issueProjectForTarget(*target)
 			resolvedAssignee, ok := resolvedAssignees[target.Assignee]
 			if !ok {
-				resolvedAssignee, err = a.issueTracker.ResolveAssignee(targetCtx, target.Assignee)
+				resolvedAssignee, err = issueTracker.ResolveAssignee(targetCtx, target.Assignee)
 				if err == nil {
 					resolvedAssignees[target.Assignee] = resolvedAssignee
 				}
@@ -1356,7 +1492,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				fmt.Fprintf(a.stdout, "repo: %s scan failed: %s\n", target.Repo, summarizeText(err.Error()))
 				continue
 			}
-			issues, err := a.issueTracker.ListOpenWorkItems(targetCtx, target.Repo, resolvedAssignee)
+			issues, err := issueTracker.ListOpenWorkItems(targetCtx, projectRef, resolvedAssignee)
 			target.LastScanAt = a.clock().Format(time.RFC3339)
 			if err != nil {
 				a.logger.Error("scan repo issues failed", "repo", target.Repo, "err", err)
@@ -1457,6 +1593,9 @@ func (a *App) ScanOnce(ctx context.Context) error {
 					RepoPath:           target.Path,
 					Repo:               target.Repo,
 					Provider:           selectedProvider,
+					IssueBackend:       target.EffectiveIssueBackend(),
+					GitBackend:         target.EffectiveGitBackend(),
+					PRBackend:          target.EffectivePRBackend(),
 					IssueNumber:        next.Number,
 					IssueTitle:         next.Title,
 					IssueURL:           next.URL,
@@ -1933,7 +2072,7 @@ func (a *App) launchIssueSession(ctx context.Context, target state.WatchTarget, 
 		defer a.sessionWG.Done()
 		defer a.clearSessionCancel(key)
 
-		result := issuerunner.RunIssueSession(runCtx, a.env, a.state, a.issueTracker, target, issue, session)
+		result := issuerunner.RunIssueSession(runCtx, a.env, a.state, a.issueTrackerForTarget(target), target, issue, session)
 
 		a.sessionMu.Lock()
 		defer a.sessionMu.Unlock()
@@ -2087,7 +2226,7 @@ func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Sessio
 func (a *App) dispatchConflictResolution(ctx context.Context, session *state.Session, pr ghcli.PullRequest, issueDetails *ghcli.IssueDetails) error {
 	if issueDetails == nil {
 		var err error
-		issueDetails, err = a.issueTracker.GetWorkItemDetails(ctx, session.Repo, session.IssueNumber)
+		issueDetails, err = a.issueTrackerForSession(*session).GetWorkItemDetails(ctx, a.issueProjectForSession(*session), session.IssueNumber)
 		if err != nil {
 			return err
 		}
@@ -2118,7 +2257,7 @@ func (a *App) dispatchConflictResolution(ctx context.Context, session *state.Ses
 	}
 
 	target := watchTargetForSession(*session, a.fallbackWatchTargetForSession(*session))
-	if conflictErr := issuerunner.RunConflictResolutionSession(ctx, a.env, a.state, a.issueTracker, target, *session, pr); conflictErr != nil {
+	if conflictErr := issuerunner.RunConflictResolutionSession(ctx, a.env, a.state, a.issueTrackerForTarget(target), target, *session, pr); conflictErr != nil {
 		return conflictErr
 	}
 
@@ -2213,7 +2352,7 @@ func (a *App) iterationBlocksAutomerge(ctx context.Context, session *state.Sessi
 	if session.IssueNumber <= 0 || strings.TrimSpace(session.Repo) == "" {
 		return ""
 	}
-	comments, err := a.issueTracker.ListWorkItemCommentsForPolling(ctx, session.Repo, session.IssueNumber, "automerge_iteration_check", a.logger)
+	comments, err := a.issueTrackerForSession(*session).ListWorkItemCommentsForPolling(ctx, a.issueProjectForSession(*session), session.IssueNumber, "automerge_iteration_check", a.logger)
 	if err != nil {
 		a.logger.Error("automerge iteration comment check failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 		return fmt.Sprintf("automerge blocked: unable to verify pending iterations for issue #%d", session.IssueNumber)
@@ -2324,7 +2463,7 @@ func (a *App) handleFailingPullRequestChecks(ctx context.Context, session *state
 	a.commentOnIssueBestEffort(ctx, session.Repo, session.IssueNumber, startBody, "ci remediation start")
 
 	target := watchTargetForSession(*session, a.fallbackWatchTargetForSession(*session))
-	if err := issuerunner.RunCIRemediationSession(ctx, a.env, a.state, a.issueTracker, target, *session, pr, failingChecks); err != nil {
+	if err := issuerunner.RunCIRemediationSession(ctx, a.env, a.state, a.issueTrackerForTarget(target), target, *session, pr, failingChecks); err != nil {
 		blocked := classifyBlockedReason("ci_remediation", "coding agent remediation", err)
 		markSessionBlocked(session, "ci_remediation", blocked, a.clock())
 		session.LastMaintenanceError = err.Error()
@@ -2403,7 +2542,7 @@ func (a *App) processGitHubCleanupRequests(ctx context.Context, sessions []state
 			continue
 		}
 
-		comments, err := a.issueTracker.ListWorkItemCommentsForPolling(ctx, session.Repo, session.IssueNumber, "cleanup", a.logger)
+		comments, err := a.issueTrackerForSession(*session).ListWorkItemCommentsForPolling(ctx, a.issueProjectForSession(*session), session.IssueNumber, "cleanup", a.logger)
 		if err != nil {
 			a.logger.Error("cleanup comment lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 			session.LastError = err.Error()
@@ -2414,7 +2553,7 @@ func (a *App) processGitHubCleanupRequests(ctx context.Context, sessions []state
 		if comment == nil {
 			continue
 		}
-		if err := a.issueTracker.AddCommentReaction(ctx, session.Repo, comment.ID, "+1"); err != nil {
+		if err := a.issueTrackerForSession(*session).AddCommentReaction(ctx, a.issueProjectForSession(*session), comment.ID, "+1"); err != nil {
 			a.logger.Error("cleanup reaction failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
@@ -2465,7 +2604,7 @@ func (a *App) processGitHubRecreateRequests(ctx context.Context, sessions []stat
 			continue
 		}
 
-		comments, err := a.issueTracker.ListWorkItemCommentsForPolling(ctx, session.Repo, session.IssueNumber, "recreate", a.logger)
+		comments, err := a.issueTrackerForSession(*session).ListWorkItemCommentsForPolling(ctx, a.issueProjectForSession(*session), session.IssueNumber, "recreate", a.logger)
 		if err != nil {
 			a.logger.Error("recreate comment lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 			session.LastError = err.Error()
@@ -2476,7 +2615,7 @@ func (a *App) processGitHubRecreateRequests(ctx context.Context, sessions []stat
 		if comment == nil {
 			continue
 		}
-		if err := a.issueTracker.AddCommentReaction(ctx, session.Repo, comment.ID, "eyes"); err != nil {
+		if err := a.issueTrackerForSession(*session).AddCommentReaction(ctx, a.issueProjectForSession(*session), comment.ID, "eyes"); err != nil {
 			a.logger.Error("recreate reaction failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
 			session.LastError = err.Error()
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
@@ -2517,8 +2656,9 @@ func (a *App) processGitHubRecreateRequests(ctx context.Context, sessions []stat
 func (a *App) recreateSessionInline(ctx context.Context, session *state.Session, sessions []state.Session, source string) error {
 	repoSlug := session.Repo
 	issue := session.IssueNumber
+	target := a.fallbackWatchTargetForSession(*session)
 
-	details, err := a.issueTracker.GetWorkItemDetails(ctx, repoSlug, issue)
+	details, err := a.issueTrackerForTarget(target).GetWorkItemDetails(ctx, a.issueProjectForTarget(target), issue)
 	if err != nil {
 		return fmt.Errorf("get issue details: %w", err)
 	}
@@ -2536,7 +2676,7 @@ func (a *App) recreateSessionInline(ctx context.Context, session *state.Session,
 	}
 
 	newBody := details.Body + fmt.Sprintf("\n\n---\n_Recreated from #%d by Vigilante._", issue)
-	created, err := a.issueTracker.CreateWorkItem(ctx, repoSlug, details.Title, newBody, labelNames, assigneeLogins)
+	created, err := a.issueTrackerForTarget(target).CreateWorkItem(ctx, a.issueProjectForTarget(target), details.Title, newBody, labelNames, assigneeLogins)
 	if err != nil {
 		return fmt.Errorf("create replacement issue: %w", err)
 	}
@@ -2544,7 +2684,7 @@ func (a *App) recreateSessionInline(ctx context.Context, session *state.Session,
 	crossLinkBody := fmt.Sprintf("## ♻️ Issue Recreated\n\nThis issue has been recreated as #%d.\n\nThe original issue is being closed as `not planned` and stale artifacts are being cleaned up.\n\nSource: `%s`.", created.Number, source)
 	a.commentOnIssueBestEffort(ctx, repoSlug, issue, crossLinkBody, "recreate cross-link")
 
-	if err := a.issueTracker.CloseWorkItem(ctx, repoSlug, issue); err != nil {
+	if err := a.issueTrackerForTarget(target).CloseWorkItem(ctx, a.issueProjectForTarget(target), issue); err != nil {
 		return fmt.Errorf("close original issue: %w", err)
 	}
 
@@ -2615,7 +2755,7 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 			labelRemovalFailed := false
 			for _, label := range []string{"resume", "vigilante:resume"} {
 				if ghcli.HasAnyLabel(details.Labels, label) {
-					if err := a.labelManager.RemoveWorkItemLabel(ctx, session.Repo, session.IssueNumber, label); err != nil {
+					if err := a.labelManagerForSession(*session).RemoveWorkItemLabel(ctx, a.issueProjectForSession(*session), session.IssueNumber, label); err != nil {
 						a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), "gh issue edit --remove-label", err)
 						a.logger.Error("resume label removal failed", "repo", session.Repo, "issue", session.IssueNumber, "label", label, "err", err)
 						labelRemovalFailed = true
@@ -2635,7 +2775,7 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 			continue
 		}
 
-		comments, err := a.issueTracker.ListWorkItemCommentsForPolling(ctx, session.Repo, session.IssueNumber, "resume", a.logger)
+		comments, err := a.issueTrackerForSession(*session).ListWorkItemCommentsForPolling(ctx, a.issueProjectForSession(*session), session.IssueNumber, "resume", a.logger)
 		if err != nil {
 			a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), "gh issue comments", err)
 			a.logger.Error("resume comment lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
@@ -2645,7 +2785,7 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 		if comment == nil {
 			continue
 		}
-		if err := a.issueTracker.AddCommentReaction(ctx, session.Repo, comment.ID, "eyes"); err != nil {
+		if err := a.issueTrackerForSession(*session).AddCommentReaction(ctx, a.issueProjectForSession(*session), comment.ID, "eyes"); err != nil {
 			a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), "gh api issue comment reactions", err)
 			a.logger.Error("resume reaction failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
 			continue
@@ -2831,11 +2971,12 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 		break
 	}
 
-	resolvedAssignee, err := a.issueTracker.ResolveAssignee(ctx, target.Assignee)
+	issueTracker := a.issueTrackerForTarget(target)
+	resolvedAssignee, err := issueTracker.ResolveAssignee(ctx, target.Assignee)
 	if err != nil {
 		return err
 	}
-	issues, err := a.issueTracker.ListOpenWorkItems(ctx, target.Repo, resolvedAssignee)
+	issues, err := issueTracker.ListOpenWorkItems(ctx, a.issueProjectForTarget(target), resolvedAssignee)
 	if err != nil {
 		return err
 	}
@@ -2847,7 +2988,7 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 			break
 		}
 	}
-	if selectedIssue == nil || !issueMatchesLabelAllowlist(*selectedIssue, target.Labels) {
+	if selectedIssue == nil || !issueMatchesSelectionFilters(*selectedIssue, target) {
 		return fmt.Errorf("issue #%d is not open and eligible for redispatch in watched repo %s", issue, repoSlug)
 	}
 
@@ -2871,6 +3012,9 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 		RepoPath:        target.Path,
 		Repo:            target.Repo,
 		Provider:        selectedProvider,
+		IssueBackend:    target.EffectiveIssueBackend(),
+		GitBackend:      target.EffectiveGitBackend(),
+		PRBackend:       target.EffectivePRBackend(),
 		IssueNumber:     selectedIssue.Number,
 		IssueTitle:      selectedIssue.Title,
 		IssueURL:        selectedIssue.URL,
@@ -2918,11 +3062,12 @@ func (a *App) RecreateSession(ctx context.Context, repoSlug string, issue int, s
 	if err != nil {
 		return err
 	}
-	if _, ok := findWatchTargetByRepo(targets, repoSlug); !ok {
+	target, ok := findWatchTargetByRepo(targets, repoSlug)
+	if !ok {
 		return fmt.Errorf("watch target not found for %s", repoSlug)
 	}
 
-	details, err := a.issueTracker.GetWorkItemDetails(ctx, repoSlug, issue)
+	details, err := a.issueTrackerForTarget(target).GetWorkItemDetails(ctx, a.issueProjectForTarget(target), issue)
 	if err != nil {
 		return fmt.Errorf("get issue details: %w", err)
 	}
@@ -2941,7 +3086,7 @@ func (a *App) RecreateSession(ctx context.Context, repoSlug string, issue int, s
 	}
 
 	newBody := details.Body + fmt.Sprintf("\n\n---\n_Recreated from #%d by Vigilante._", issue)
-	created, err := a.issueTracker.CreateWorkItem(ctx, repoSlug, details.Title, newBody, labelNames, assigneeLogins)
+	created, err := a.issueTrackerForTarget(target).CreateWorkItem(ctx, a.issueProjectForTarget(target), details.Title, newBody, labelNames, assigneeLogins)
 	if err != nil {
 		return fmt.Errorf("create replacement issue: %w", err)
 	}
@@ -2950,7 +3095,7 @@ func (a *App) RecreateSession(ctx context.Context, repoSlug string, issue int, s
 	crossLinkBody := fmt.Sprintf("## ♻️ Issue Recreated\n\nThis issue has been recreated as #%d.\n\nThe original issue is being closed as `not planned` and stale artifacts are being cleaned up.\n\nSource: `%s`.", created.Number, source)
 	a.commentOnIssueBestEffort(ctx, repoSlug, issue, crossLinkBody, "recreate cross-link")
 
-	if err := a.issueTracker.CloseWorkItem(ctx, repoSlug, issue); err != nil {
+	if err := a.issueTrackerForTarget(target).CloseWorkItem(ctx, a.issueProjectForTarget(target), issue); err != nil {
 		return fmt.Errorf("close original issue: %w", err)
 	}
 
@@ -3291,7 +3436,7 @@ func (a *App) preflightResume(ctx context.Context, session state.Session) error 
 		if _, err := a.env.Runner.Run(ctx, "", "gh", "auth", "status"); err != nil {
 			return err
 		}
-		_, err = a.issueTracker.GetWorkItemDetails(ctx, session.Repo, session.IssueNumber)
+		_, err = a.issueTrackerForSession(session).GetWorkItemDetails(ctx, a.issueProjectForSession(session), session.IssueNumber)
 		return err
 	case "provider_missing":
 		_, err = a.env.Runner.LookPath(tool)
@@ -3385,7 +3530,7 @@ func (a *App) resumeBlockedConflictResolution(ctx context.Context, session *stat
 		session.PullRequestBaseBranch = strings.TrimSpace(pr.BaseRefName)
 	}
 	target := watchTargetForSession(*session, a.fallbackWatchTargetForSession(*session))
-	if err := issuerunner.RunConflictResolutionSession(ctx, a.env, a.state, a.issueTracker, target, *session, *pr); err != nil {
+	if err := issuerunner.RunConflictResolutionSession(ctx, a.env, a.state, a.issueTrackerForTarget(target), target, *session, *pr); err != nil {
 		return err
 	}
 	session.Status = state.SessionStatusSuccess
@@ -3469,7 +3614,7 @@ func maintenanceAutoRecoveryTimeout(config state.ServiceConfig) time.Duration {
 }
 
 func (a *App) blockedSessionExceededInactivityTimeout(ctx context.Context, session state.Session, timeout time.Duration) (bool, error) {
-	comments, err := a.issueTracker.ListWorkItemCommentsForPolling(ctx, session.Repo, session.IssueNumber, "blocked-inactivity", a.logger)
+	comments, err := a.issueTrackerForSession(session).ListWorkItemCommentsForPolling(ctx, a.issueProjectForSession(session), session.IssueNumber, "blocked-inactivity", a.logger)
 	if err != nil {
 		return false, err
 	}
@@ -3872,6 +4017,11 @@ func watchTargetForSession(session state.Session, fallbackTarget state.WatchTarg
 		Labels:         fallbackTarget.Labels,
 		Assignee:       fallbackTarget.Assignee,
 		MaxParallel:    fallbackTarget.MaxParallel,
+		IssueBackend:   fallbackText(session.IssueBackend, fallbackTarget.IssueBackend),
+		IssueStage:     fallbackTarget.IssueStage,
+		GitBackend:     fallbackText(session.GitBackend, fallbackTarget.GitBackend),
+		PRBackend:      fallbackText(session.PRBackend, fallbackTarget.PRBackend),
+		ProjectRef:     fallbackTarget.ProjectRef,
 	}
 	return target
 }
@@ -4048,6 +4198,9 @@ func blockedIssueSessionForDispatchFailure(target state.WatchTarget, issue ghcli
 		RepoPath:     target.Path,
 		Repo:         target.Repo,
 		Provider:     selectedProvider,
+		IssueBackend: target.EffectiveIssueBackend(),
+		GitBackend:   target.EffectiveGitBackend(),
+		PRBackend:    target.EffectivePRBackend(),
 		IssueNumber:  issue.Number,
 		IssueTitle:   issue.Title,
 		IssueURL:     issue.URL,
@@ -4137,7 +4290,7 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 			continue
 		}
 
-		comments, err := a.issueTracker.ListWorkItemCommentsForPolling(ctx, session.Repo, session.IssueNumber, "iteration", a.logger)
+		comments, err := a.issueTrackerForSession(*session).ListWorkItemCommentsForPolling(ctx, a.issueProjectForSession(*session), session.IssueNumber, "iteration", a.logger)
 		if err != nil {
 			a.logger.Error("iteration comment lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 			session.LastError = err.Error()
@@ -4176,7 +4329,7 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 			continue
 		}
 
-		if err := a.issueTracker.AddCommentReaction(ctx, session.Repo, comment.ID, "eyes"); err != nil {
+		if err := a.issueTrackerForSession(*session).AddCommentReaction(ctx, a.issueProjectForSession(*session), comment.ID, "eyes"); err != nil {
 			a.logger.Error("iteration reaction failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
 		}
 
@@ -4464,7 +4617,13 @@ func (a *App) syncIssueManagedLabels(ctx context.Context, repo string, issueNumb
 		issueDetails = details
 	}
 	toAdd, toRemove := ghcli.PlanIssueLabelSync(issueDetails.Labels, desired, managedIssueLabels)
-	if err := a.labelManager.SyncWorkItemLabels(ctx, repo, issueNumber, issueDetails.Labels, desired, managedIssueLabels); err != nil {
+	labelManager := a.labelManager
+	project := repo
+	if target, ok := a.watchTargetByRepo(repo); ok {
+		labelManager = a.labelManagerForTarget(target)
+		project = target.EffectiveProjectRef()
+	}
+	if err := labelManager.SyncWorkItemLabels(ctx, project, issueNumber, issueDetails.Labels, desired, managedIssueLabels); err != nil {
 		return err
 	}
 	a.emitLabelSyncEvent(toAdd, toRemove)
@@ -4488,7 +4647,13 @@ func (a *App) ensureRepositoryLabelsProvisioned(ctx context.Context, repo string
 	if err != nil {
 		return fmt.Errorf("load Vigilante label manifest: %w", err)
 	}
-	if err := a.labelManager.EnsureProjectLabels(ctx, repo, labels); err != nil {
+	labelManager := a.labelManager
+	project := repo
+	if target, ok := a.watchTargetByRepo(repo); ok {
+		labelManager = a.labelManagerForTarget(target)
+		project = target.EffectiveProjectRef()
+	}
+	if err := labelManager.EnsureProjectLabels(ctx, project, labels); err != nil {
 		return fmt.Errorf("provision Vigilante labels for repo %s: %w", repo, err)
 	}
 
@@ -5104,6 +5269,23 @@ func (a *App) ensureTooling(ctx context.Context, selectedProvider provider.Provi
 	return nil
 }
 
+func (a *App) ensureIssueTrackerReady(ctx context.Context, issueBackend string) error {
+	switch strings.TrimSpace(issueBackend) {
+	case "", string(backend.BackendGitHub):
+		return nil
+	case string(backend.BackendLinear):
+		if _, err := a.env.Runner.LookPath("linear"); err != nil {
+			return fmt.Errorf("linear issue tracker requires the linear CLI to be installed and available on PATH: %w", err)
+		}
+		if _, err := a.env.Runner.Run(ctx, "", "linear", "auth", "whoami"); err != nil {
+			return fmt.Errorf("linear issue tracker requires an authenticated Linear CLI session; run `linear auth login` and try again: %w", err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported issue tracker %q", issueBackend)
+	}
+}
+
 func providerRuntimeTool(selectedProvider provider.Provider) string {
 	tools := selectedProvider.RequiredTools()
 	if len(tools) == 0 {
@@ -5138,7 +5320,7 @@ func isHelpToken(value string) bool {
 func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage:")
 	fmt.Fprintln(w, "  vigilante setup [--provider value]")
-	fmt.Fprintln(w, "  vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--branch value | --track-default-branch] <path>")
+	fmt.Fprintln(w, "  vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] <path>")
 	fmt.Fprintln(w, "  vigilante unwatch <path>")
 	fmt.Fprintln(w, "  vigilante list [--blocked | --running]")
 	fmt.Fprintln(w, "  vigilante status [-w]")
@@ -5200,7 +5382,7 @@ _vigilante()
             return
             ;;
         watch)
-            COMPREPLY=( $(compgen -W "--label --assignee --max-parallel --provider --branch --track-default-branch" -- "$cur") )
+            COMPREPLY=( $(compgen -W "--label --assignee --max-parallel --provider --issue-tracker --issue-tracker-stage --branch --track-default-branch" -- "$cur") )
             return
             ;;
         list)
@@ -5271,6 +5453,8 @@ complete -c vigilante -n '__fish_seen_subcommand_from watch' -l label
 complete -c vigilante -n '__fish_seen_subcommand_from watch' -l assignee
 complete -c vigilante -n '__fish_seen_subcommand_from watch' -l max-parallel
 complete -c vigilante -n '__fish_seen_subcommand_from watch' -l provider
+complete -c vigilante -n '__fish_seen_subcommand_from watch' -l issue-tracker
+complete -c vigilante -n '__fish_seen_subcommand_from watch' -l issue-tracker-stage
 complete -c vigilante -n '__fish_seen_subcommand_from watch' -l branch
 complete -c vigilante -n '__fish_seen_subcommand_from watch' -l track-default-branch
 complete -c vigilante -n '__fish_seen_subcommand_from list' -l blocked
@@ -5323,7 +5507,7 @@ _vigilante() {
       compadd -- --provider
       ;;
     watch)
-      compadd -- --label --assignee --max-parallel --provider --branch --track-default-branch
+      compadd -- --label --assignee --max-parallel --provider --issue-tracker --issue-tracker-stage --branch --track-default-branch
       ;;
     list)
       compadd -- --blocked --running
@@ -5409,18 +5593,9 @@ func findWatchTargetByPath(targets []state.WatchTarget, path string) state.Watch
 	return state.WatchTarget{}
 }
 
-func issueMatchesLabelAllowlist(issue ghcli.Issue, allowlist []string) bool {
-	if len(allowlist) == 0 {
-		return true
-	}
-	for _, configured := range allowlist {
-		for _, label := range issue.Labels {
-			if label.Name == configured {
-				return true
-			}
-		}
-	}
-	return false
+func issueMatchesSelectionFilters(issue ghcli.Issue, target state.WatchTarget) bool {
+	selected := ghcli.SelectIssues([]ghcli.Issue{issue}, nil, target, 1)
+	return len(selected) == 1
 }
 
 func containsString(values []string, needle string) bool {

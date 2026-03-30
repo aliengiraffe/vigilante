@@ -266,6 +266,12 @@ func formatWatchTargetRow(status watchedRepoStatus) string {
 		fmt.Sprintf("branch %s (%s)", valueOrUnknown(target.Branch), target.EffectiveBranchMode()),
 		fmt.Sprintf("provider %s", valueOrUnknown(target.Provider)),
 	}
+	if issueBackend := strings.TrimSpace(target.EffectiveIssueBackend()); issueBackend != "" && issueBackend != "github" {
+		fields = append(fields, fmt.Sprintf("issues %s", issueBackend))
+	}
+	if issueStage := strings.TrimSpace(target.EffectiveIssueStage()); issueStage != "" && target.EffectiveIssueBackend() == "linear" {
+		fields = append(fields, fmt.Sprintf("stage %s", issueStage))
+	}
 	if assignee := strings.TrimSpace(target.Assignee); assignee != "" {
 		fields = append(fields, fmt.Sprintf("assignee %s", assignee))
 	}

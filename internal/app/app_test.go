@@ -1162,6 +1162,8 @@ func TestRunSupportsSubcommandHelp(t *testing.T) {
 		"usage: vigilante watch",
 		"Register a local repository for issue monitoring.",
 		"-assignee",
+		"-issue-tracker",
+		"-issue-tracker-stage",
 		"-label",
 		"-max-parallel",
 		"-provider",
@@ -1733,6 +1735,149 @@ func TestWatchRejectsNegativeMaxParallel(t *testing.T) {
 	err := app.runCommand(context.Background(), []string{"watch", "--max-parallel", "-1", "/tmp/repo"})
 	if err == nil || err.Error() != "max parallel must be at least 0" {
 		t.Fatalf("expected negative max_parallel rejection, got %v", err)
+	}
+}
+
+func TestWatchWithLinearIssueTrackerPersistsStageAndBackend(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"linear": "/usr/bin/linear"},
+		Outputs: map[string]string{
+			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                  "true\n",
+			testutil.Key("git", "remote", "get-url", "origin"):                         "git@github.com:nicobistolfi/vigilante.git\n",
+			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): "origin/main\n",
+			"linear auth whoami": "Jane Developer",
+		},
+	}
+
+	if err := app.runCommand(context.Background(), []string{"watch", "--issue-tracker", "linear", "--issue-tracker-stage", "todo", repoPath}); err != nil {
+		t.Fatal(err)
+	}
+
+	targets, err := app.state.LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("unexpected targets: %#v", targets)
+	}
+	if targets[0].IssueBackend != "linear" || targets[0].IssueStage != "todo" {
+		t.Fatalf("expected linear watch target to persist backend and stage: %#v", targets[0])
+	}
+}
+
+func TestWatchWithLinearIssueTrackerDefaultsStageToTodo(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"linear": "/usr/bin/linear"},
+		Outputs: map[string]string{
+			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                  "true\n",
+			testutil.Key("git", "remote", "get-url", "origin"):                         "git@github.com:nicobistolfi/vigilante.git\n",
+			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): "origin/main\n",
+			"linear auth whoami": "Jane Developer",
+		},
+	}
+
+	if err := app.runCommand(context.Background(), []string{"watch", "--issue-tracker", "linear", repoPath}); err != nil {
+		t.Fatal(err)
+	}
+
+	targets, err := app.state.LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].EffectiveIssueStage() != "Todo" {
+		t.Fatalf("expected default Linear stage to be Todo: %#v", targets)
+	}
+}
+
+func TestWatchWithLinearIssueTrackerFailsWhenCLIIsMissing(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                  "true\n",
+			testutil.Key("git", "remote", "get-url", "origin"):                         "git@github.com:nicobistolfi/vigilante.git\n",
+			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): "origin/main\n",
+		},
+	}
+
+	err := app.runCommand(context.Background(), []string{"watch", "--issue-tracker", "linear", repoPath})
+	if err == nil || !strings.Contains(err.Error(), "linear issue tracker requires the linear CLI") {
+		t.Fatalf("expected missing Linear CLI failure, got %v", err)
+	}
+	targets, loadErr := app.state.LoadWatchTargets()
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(targets) != 0 {
+		t.Fatalf("expected no persisted targets after failure: %#v", targets)
+	}
+}
+
+func TestWatchWithLinearIssueTrackerFailsWhenUnauthenticated(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"linear": "/usr/bin/linear"},
+		Outputs: map[string]string{
+			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                  "true\n",
+			testutil.Key("git", "remote", "get-url", "origin"):                         "git@github.com:nicobistolfi/vigilante.git\n",
+			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): "origin/main\n",
+		},
+		Errors: map[string]error{
+			"linear auth whoami": errors.New("not authenticated"),
+		},
+	}
+
+	err := app.runCommand(context.Background(), []string{"watch", "--issue-tracker", "linear", repoPath})
+	if err == nil || !strings.Contains(err.Error(), "run `linear auth login`") {
+		t.Fatalf("expected Linear auth failure, got %v", err)
+	}
+	targets, loadErr := app.state.LoadWatchTargets()
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if len(targets) != 0 {
+		t.Fatalf("expected no persisted targets after failure: %#v", targets)
 	}
 }
 

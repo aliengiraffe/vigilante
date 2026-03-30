@@ -112,6 +112,9 @@ func SelectIssues(issues []Issue, sessions []state.Session, target state.WatchTa
 		if active[issues[i].Number] {
 			continue
 		}
+		if !matchesConfiguredStage(issues[i], target.EffectiveIssueStage()) {
+			continue
+		}
 		if !matchesLabelAllowlist(issues[i], target.Labels) {
 			continue
 		}
@@ -164,6 +167,21 @@ func matchesLabelAllowlist(issue Issue, allowlist []string) bool {
 		}
 	}
 	return false
+}
+
+func matchesConfiguredStage(issue Issue, configured string) bool {
+	configured = normalizeIssueStage(configured)
+	if configured == "" {
+		return true
+	}
+	return normalizeIssueStage(issue.Stage) == configured
+}
+
+func normalizeIssueStage(stage string) string {
+	stage = strings.TrimSpace(strings.ToLower(stage))
+	stage = strings.ReplaceAll(stage, "-", " ")
+	stage = strings.Join(strings.Fields(stage), " ")
+	return stage
 }
 
 func CommentOnIssue(ctx context.Context, runner environment.Runner, repo string, number int, body string) error {
