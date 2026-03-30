@@ -19,6 +19,20 @@ func TestWatchTargetEffectiveIssueBackendRespectsExplicit(t *testing.T) {
 	}
 }
 
+func TestWatchTargetEffectiveIssueStageDefaultsLinearToTodo(t *testing.T) {
+	target := WatchTarget{Repo: "owner/repo", IssueBackend: "linear"}
+	if got := target.EffectiveIssueStage(); got != "Todo" {
+		t.Fatalf("expected Todo, got %q", got)
+	}
+}
+
+func TestWatchTargetEffectiveIssueStageRespectsExplicit(t *testing.T) {
+	target := WatchTarget{Repo: "owner/repo", IssueBackend: "linear", IssueStage: "In Progress"}
+	if got := target.EffectiveIssueStage(); got != "In Progress" {
+		t.Fatalf("expected In Progress, got %q", got)
+	}
+}
+
 func TestWatchTargetEffectiveGitBackendDefaultsToGitHub(t *testing.T) {
 	target := WatchTarget{Repo: "owner/repo"}
 	if got := target.EffectiveGitBackend(); got != "github" {

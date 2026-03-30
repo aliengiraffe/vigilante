@@ -23,6 +23,7 @@ type WorkItem struct {
 	CreatedAt time.Time `json:"createdAt"`
 	URL       string    `json:"url"`
 	Labels    []Label   `json:"labels"`
+	Stage     string    `json:"stage,omitempty"`
 }
 
 // Label represents a label or tag on a work item.

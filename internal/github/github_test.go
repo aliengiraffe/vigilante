@@ -104,6 +104,23 @@ func TestSelectIssuesHonorsRequestedLimit(t *testing.T) {
 	}
 }
 
+func TestSelectIssuesHonorsConfiguredStageForLinearTargets(t *testing.T) {
+	issues := []Issue{
+		{Number: 1, Labels: []Label{{Name: "to-do"}}, Stage: "Todo"},
+		{Number: 2, Labels: []Label{{Name: "to-do"}}, Stage: "In Progress"},
+	}
+
+	selected := SelectIssues(issues, nil, state.WatchTarget{
+		Repo:         "owner/repo",
+		IssueBackend: "linear",
+		IssueStage:   "todo",
+		Labels:       []string{"to-do"},
+	}, 2)
+	if len(selected) != 1 || selected[0].Number != 1 {
+		t.Fatalf("unexpected selected issues: %#v", selected)
+	}
+}
+
 func TestActiveSessionCountCountsOnlyActiveExecutionSessions(t *testing.T) {
 	count := ActiveSessionCount([]state.Session{
 		{Repo: "owner/repo", IssueNumber: 1, Status: state.SessionStatusRunning},

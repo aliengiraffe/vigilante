@@ -221,7 +221,7 @@ Upgrade later with:
 brew upgrade vigilante
 ```
 
-### `vigilante watch [--assignee <value>] [--max-parallel <value>] [--provider <codex|claude|gemini>] [--branch <name> | --track-default-branch] <path>`
+### `vigilante watch [--assignee <value>] [--max-parallel <value>] [--provider <codex|claude|gemini>] [--issue-tracker <github|linear>] [--issue-tracker-stage <value>] [--branch <name> | --track-default-branch] <path>`
 
 Register a local repository for issue monitoring.
 
@@ -236,6 +236,9 @@ Expected behavior:
 - defaults the assignee filter to `me` unless overridden
 - defaults `--max-parallel` to `0` when not configured, where `0` means unlimited
 - defaults `--provider` to `codex` unless overridden
+- defaults `--issue-tracker` to `github` unless overridden
+- when `--issue-tracker linear` is selected, verifies the local `linear` CLI is installed and authenticated before saving the watch target
+- accepts an optional `--issue-tracker-stage` filter; Linear defaults to `Todo` when the flag is omitted
 - resolves `me` to the authenticated GitHub login at runtime before issue queries
 - preserves an existing target's branch mode unless one of the branch flags is supplied
 - stores the target in `~/.vigilante/watchlist.json`

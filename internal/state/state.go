@@ -29,6 +29,7 @@ type WatchTarget struct {
 	LastScanAt     string              `json:"last_scan_at,omitempty"`
 	AddedAt        string              `json:"added_at,omitempty"`
 	IssueBackend   string              `json:"issue_backend,omitempty"`
+	IssueStage     string              `json:"issue_tracker_stage,omitempty"`
 	GitBackend     string              `json:"git_backend,omitempty"`
 	PRBackend      string              `json:"pr_backend,omitempty"`
 	ProjectRef     string              `json:"project_ref,omitempty"`
@@ -48,6 +49,19 @@ func (t WatchTarget) EffectiveIssueBackend() string {
 		return b
 	}
 	return "github"
+}
+
+// EffectiveIssueStage returns the configured issue-tracker stage.
+// Linear-backed targets default to "Todo" when the field is not set.
+func (t WatchTarget) EffectiveIssueStage() string {
+	stage := strings.TrimSpace(t.IssueStage)
+	if stage != "" {
+		return stage
+	}
+	if t.EffectiveIssueBackend() == "linear" {
+		return "Todo"
+	}
+	return ""
 }
 
 // EffectiveGitBackend returns the git-hosting backend for this target.
