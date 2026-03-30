@@ -969,3 +969,61 @@ func TestBazelMonorepoSkillCoversTargetSelectionAndDatabaseFlows(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildIssueCreatePromptContainsExpectedFields(t *testing.T) {
+	target := state.WatchTarget{
+		Repo:         "owner/repo",
+		Path:         "/home/user/repo",
+		IssueBackend: "github",
+		ProjectRef:   "owner/repo",
+	}
+	prompt := "add dark mode support"
+
+	for _, runtime := range []string{RuntimeCodex, RuntimeClaude, RuntimeGemini} {
+		t.Run(runtime, func(t *testing.T) {
+			result := BuildIssueCreatePrompt(runtime, target, prompt)
+			for _, want := range []string{
+				"owner/repo",
+				"/home/user/repo",
+				"github",
+				"add dark mode support",
+				VigilanteCreateIssue,
+			} {
+				if !strings.Contains(result, want) {
+					t.Fatalf("expected prompt for runtime %s to contain %q", runtime, want)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildIssueCreatePromptUsesInlineHeaderForClaudeAndGemini(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+	}
+	for _, runtime := range []string{RuntimeClaude, RuntimeGemini} {
+		t.Run(runtime, func(t *testing.T) {
+			result := BuildIssueCreatePrompt(runtime, target, "test")
+			if !strings.Contains(result, "Follow these") {
+				t.Fatalf("expected inline skill header for %s", runtime)
+			}
+		})
+	}
+
+	result := BuildIssueCreatePrompt(RuntimeCodex, target, "test")
+	if !strings.Contains(result, "Use the `vigilante-create-issue` skill") {
+		t.Fatalf("expected codex to reference skill by name, got: %s", result[:200])
+	}
+}
+
+func TestBuildIssueCreatePromptDefaultUsesCodexRuntime(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+	}
+	result := BuildIssueCreatePromptDefault(target, "test prompt")
+	if !strings.Contains(result, "Use the `vigilante-create-issue` skill") {
+		t.Fatalf("expected default to use codex runtime")
+	}
+}

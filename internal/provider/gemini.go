@@ -70,3 +70,15 @@ func (geminiProvider) BuildCIRemediationInvocation(task CIRemediationTask) (Invo
 		},
 	}, nil
 }
+
+func (geminiProvider) BuildIssueCreateInvocation(task IssueCreateTask) (Invocation, error) {
+	return Invocation{
+		Dir:  task.Target.Path,
+		Name: "gemini",
+		Args: []string{
+			"--prompt",
+			skill.BuildIssueCreatePrompt(skill.RuntimeGemini, task.Target, task.Prompt),
+			"--yolo",
+		},
+	}, nil
+}

@@ -141,6 +141,29 @@ func InlineSkillHeader(name string) string {
 	}, "\n")
 }
 
+func BuildIssueCreatePrompt(runtime string, target state.WatchTarget, prompt string) string {
+	lines := []string{}
+	if runtimeUsesInlineSkillHeader(runtime) {
+		lines = append(lines, InlineSkillHeader(VigilanteCreateIssue))
+	} else {
+		lines = append(lines, fmt.Sprintf("Use the `%s` skill for this task.", VigilanteCreateIssue))
+	}
+	lines = append(lines,
+		fmt.Sprintf("Repository: %s", target.Repo),
+		fmt.Sprintf("Local repository path: %s", target.Path),
+		fmt.Sprintf("Issue backend: %s", target.EffectiveIssueBackend()),
+		fmt.Sprintf("Project ref: %s", target.EffectiveProjectRef()),
+		"",
+		"User prompt:",
+		prompt,
+	)
+	return strings.Join(lines, "\n")
+}
+
+func BuildIssueCreatePromptDefault(target state.WatchTarget, prompt string) string {
+	return BuildIssueCreatePrompt(RuntimeCodex, target, prompt)
+}
+
 func BuildIssuePrompt(target state.WatchTarget, issue ghcli.Issue, session state.Session) string {
 	return BuildIssuePromptForRuntime(RuntimeCodex, target, issue, session)
 }

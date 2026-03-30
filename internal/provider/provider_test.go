@@ -324,3 +324,48 @@ func (p testProvider) BuildConflictResolutionInvocation(task ConflictTask) (Invo
 func (p testProvider) BuildCIRemediationInvocation(task CIRemediationTask) (Invocation, error) {
 	return Invocation{}, nil
 }
+
+func (p testProvider) BuildIssueCreateInvocation(task IssueCreateTask) (Invocation, error) {
+	return Invocation{}, nil
+}
+
+func TestBuildIssueCreateInvocationForAllProviders(t *testing.T) {
+	task := IssueCreateTask{
+		Target: state.WatchTarget{
+			Repo: "owner/repo",
+			Path: "/tmp/repo",
+		},
+		Prompt: "add dark mode",
+	}
+
+	for _, id := range RegisteredIDs() {
+		t.Run(id, func(t *testing.T) {
+			p, err := Resolve(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			inv, err := p.BuildIssueCreateInvocation(task)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if inv.Name == "" {
+				t.Fatal("expected non-empty invocation name")
+			}
+			// Codex uses --cd flag instead of Dir
+			if id != DefaultID && inv.Dir != "/tmp/repo" {
+				t.Fatalf("expected dir %q, got %q", "/tmp/repo", inv.Dir)
+			}
+			// Verify the prompt text is somewhere in the args
+			found := false
+			for _, arg := range inv.Args {
+				if strings.Contains(arg, "add dark mode") {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Fatal("expected prompt text in invocation args")
+			}
+		})
+	}
+}

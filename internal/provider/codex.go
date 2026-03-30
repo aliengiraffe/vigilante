@@ -70,3 +70,15 @@ func (codexProvider) BuildCIRemediationInvocation(task CIRemediationTask) (Invoc
 		},
 	}, nil
 }
+
+func (codexProvider) BuildIssueCreateInvocation(task IssueCreateTask) (Invocation, error) {
+	return Invocation{
+		Name: "codex",
+		Args: []string{
+			"exec",
+			"--cd", task.Target.Path,
+			"--dangerously-bypass-approvals-and-sandbox",
+			skill.BuildIssueCreatePromptDefault(task.Target, task.Prompt),
+		},
+	}, nil
+}
