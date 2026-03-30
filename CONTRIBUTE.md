@@ -25,6 +25,14 @@ If you need local setup first, follow the install and development guidance in [R
 
 If you want to use Vigilante itself while contributing back to this project, you can use Vigilante's forks workflow so the tool works from your fork and opens changes back toward `aliengiraffe/vigilante`.
 
+Example:
+
+1. Fork `aliengiraffe/vigilante` to your own GitHub account and clone your fork locally.
+2. Run `vigilante watch /path/to/your/vigilante-fork` so Vigilante operates from that forked checkout.
+3. Let Vigilante prepare the issue branch, make the change, and open the pull request from your fork back to `aliengiraffe/vigilante`.
+
+That gives you the same normal contributor flow, but with Vigilante doing the work from your fork instead of from the main repository checkout.
+
 ## Keep It Simple
 
 - Prefer narrow pull requests over large refactors.
