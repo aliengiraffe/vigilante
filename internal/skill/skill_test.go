@@ -190,6 +190,33 @@ func TestBuildIssuePromptIncludesIssueBodyAndIterationContext(t *testing.T) {
 	}
 }
 
+func TestBuildIssuePromptIncludesForkInstructions(t *testing.T) {
+	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main", ForkMode: true, ForkOwner: "forker", PushRemote: "fork", PushRepo: "forker/repo"}
+	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	session := state.Session{
+		WorktreePath: "/tmp/worktree",
+		Branch:       "vigilante/issue-12",
+		BaseBranch:   "main",
+		Provider:     "Codex",
+		ForkMode:     true,
+		ForkOwner:    "forker",
+		PushRemote:   "fork",
+		PushRepo:     "forker/repo",
+	}
+
+	prompt := BuildIssuePrompt(target, issue, session)
+	for _, text := range []string{
+		"Fork mode is enabled for this run.",
+		"Push the branch to remote `fork` (repo `forker/repo`) rather than `origin`.",
+		"Open the pull request against `owner/repo` with head `forker:vigilante/issue-12` so the PR is cross-repo from the fork.",
+		"Benefits",
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q: %s", text, prompt)
+		}
+	}
+}
+
 func TestVigilanteSkillNamesIncludesLocalServiceDependencies(t *testing.T) {
 	foundLocalServices := false
 	foundComposeLaunch := false

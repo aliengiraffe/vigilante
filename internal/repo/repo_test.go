@@ -26,6 +26,23 @@ func TestParseGitHubRepo(t *testing.T) {
 	}
 }
 
+func TestRewriteGitHubRemote(t *testing.T) {
+	tests := map[string]string{
+		"git@github.com:owner/repo.git":   "git@github.com:forker/repo.git",
+		"https://github.com/owner/repo":   "https://github.com/forker/repo.git",
+		"ssh://git@github.com/owner/repo": "ssh://git@github.com/forker/repo.git",
+	}
+	for input, want := range tests {
+		got, err := RewriteGitHubRemote(input, "forker/repo")
+		if err != nil {
+			t.Fatalf("%s: %v", input, err)
+		}
+		if got != want {
+			t.Fatalf("%s: got %s want %s", input, got, want)
+		}
+	}
+}
+
 func TestDiscoverRepositoryWithRealGit(t *testing.T) {
 	dir := t.TempDir()
 	runner := environment.ExecRunner{}

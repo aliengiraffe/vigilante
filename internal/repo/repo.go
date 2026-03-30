@@ -266,6 +266,34 @@ func ParseGitHubRepo(remote string) (string, error) {
 	return "", fmt.Errorf("unsupported remote format %q", remote)
 }
 
+func RewriteGitHubRemote(remote string, repoSlug string) (string, error) {
+	repoSlug = strings.TrimSpace(repoSlug)
+	if repoSlug == "" {
+		return "", errors.New("empty GitHub repo slug")
+	}
+	if _, err := normalizeGitHubPath(repoSlug); err != nil {
+		return "", err
+	}
+
+	remote = strings.TrimSpace(remote)
+	switch {
+	case strings.HasPrefix(remote, "git@github.com:"):
+		return "git@github.com:" + repoSlug + ".git", nil
+	case strings.HasPrefix(remote, "ssh://"), strings.HasPrefix(remote, "https://"), strings.HasPrefix(remote, "http://"):
+		parsed, err := url.Parse(remote)
+		if err != nil {
+			return "", err
+		}
+		if !strings.EqualFold(parsed.Host, "github.com") {
+			return "", fmt.Errorf("unsupported remote host %q", parsed.Host)
+		}
+		parsed.Path = "/" + repoSlug + ".git"
+		return parsed.String(), nil
+	default:
+		return "", fmt.Errorf("unsupported remote format %q", remote)
+	}
+}
+
 func normalizeGitHubPath(path string) (string, error) {
 	path = strings.TrimSuffix(path, ".git")
 	parts := strings.Split(strings.Trim(path, "/"), "/")

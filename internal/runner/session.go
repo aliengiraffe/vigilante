@@ -11,6 +11,7 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/backend"
 	"github.com/nicobistolfi/vigilante/internal/blocking"
 	"github.com/nicobistolfi/vigilante/internal/environment"
+	forkmode "github.com/nicobistolfi/vigilante/internal/fork"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
 	"github.com/nicobistolfi/vigilante/internal/logtime"
 	"github.com/nicobistolfi/vigilante/internal/provider"
@@ -53,22 +54,45 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		appendSessionLog(logPath, "session provider compatibility failed", session, err.Error())
 		return session
 	}
+	if err := forkmode.ConfigureWorktree(ctx, env.Runner, session); err != nil {
+		session.Status = state.SessionStatusFailed
+		session.IterationInProgress = false
+		session.LastError = err.Error()
+		session.EndedAt = time.Now().UTC().Format(time.RFC3339)
+		session.UpdatedAt = session.EndedAt
+		appendSessionLog(logPath, "fork worktree configuration failed", session, err.Error())
+		return session
+	}
 	startItems := []string{
 		fmt.Sprintf("Vigilante launched this implementation session in `%s`.", session.WorktreePath),
 		fmt.Sprintf("Branch: `%s`.", session.Branch),
 		fmt.Sprintf("Current stage: handing the issue off to the configured coding agent (`%s`) for investigation and implementation.", selectedProvider.DisplayName()),
 		"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
 	}
+	if strings.TrimSpace(session.PushRemote) != "" && strings.TrimSpace(session.PushRemote) != "origin" {
+		startItems = append(startItems[:2], append([]string{
+			fmt.Sprintf("Push target: `%s` (`%s`). Upstream issue and PR context remain `%s`.", session.PushRemote, fallbackSessionText(session.PushRepo, "fork repo pending"), session.Repo),
+		}, startItems[2:]...)...)
+	}
 	if strings.TrimSpace(session.ReusedRemoteBranch) != "" {
+		reusedRemote := fallbackSessionText(session.PushRemote, "origin")
+		if reusedRemote == "" {
+			reusedRemote = "origin"
+		}
 		baseBranch := strings.TrimSpace(session.BaseBranch)
 		if baseBranch == "" {
 			baseBranch = "main"
 		}
 		startItems = []string{
-			fmt.Sprintf("Vigilante launched this implementation session in `%s` from existing remote branch `origin/%s`.", session.WorktreePath, session.ReusedRemoteBranch),
+			fmt.Sprintf("Vigilante launched this implementation session in `%s` from existing remote branch `%s/%s`.", session.WorktreePath, reusedRemote, session.ReusedRemoteBranch),
 			fmt.Sprintf("Diff summary against `%s`: %s", baseBranch, fallbackSessionText(session.BranchDiffSummary, "diff summary unavailable")),
 			fmt.Sprintf("Current stage: handing the issue off to the configured coding agent (`%s`) to continue the existing implementation.", selectedProvider.DisplayName()),
 			"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
+		}
+		if strings.TrimSpace(session.PushRemote) != "" && strings.TrimSpace(session.PushRemote) != "origin" {
+			startItems = append(startItems[:2], append([]string{
+				fmt.Sprintf("Push target: `%s` (`%s`). Upstream issue and PR context remain `%s`.", session.PushRemote, fallbackSessionText(session.PushRepo, "fork repo pending"), session.Repo),
+			}, startItems[2:]...)...)
 		}
 	}
 	startBody := ghcli.FormatProgressComment(ghcli.ProgressComment{

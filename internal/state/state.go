@@ -21,6 +21,10 @@ type WatchTarget struct {
 	Repo           string              `json:"repo"`
 	BranchMode     BranchMode          `json:"branch_mode,omitempty"`
 	Branch         string              `json:"branch"`
+	ForkMode       bool                `json:"fork_mode,omitempty"`
+	ForkOwner      string              `json:"fork_owner,omitempty"`
+	PushRemote     string              `json:"push_remote,omitempty"`
+	PushRepo       string              `json:"push_repo,omitempty"`
 	Classification repo.Classification `json:"classification,omitempty"`
 	Provider       string              `json:"provider,omitempty"`
 	Labels         []string            `json:"labels,omitempty"`
@@ -100,6 +104,16 @@ func (t WatchTarget) EffectiveBranchMode() BranchMode {
 	}
 }
 
+func (t WatchTarget) EffectivePushRemote() string {
+	if remote := strings.TrimSpace(t.PushRemote); remote != "" {
+		return remote
+	}
+	if t.ForkMode {
+		return "fork"
+	}
+	return "origin"
+}
+
 const DefaultMaxParallelSessions = 0
 const DefaultBlockedSessionInactivityTimeout = 20 * time.Minute
 
@@ -139,6 +153,10 @@ type Session struct {
 	BaseBranch                     string        `json:"base_branch,omitempty"`
 	Branch                         string        `json:"branch"`
 	WorktreePath                   string        `json:"worktree_path"`
+	ForkMode                       bool          `json:"fork_mode,omitempty"`
+	ForkOwner                      string        `json:"fork_owner,omitempty"`
+	PushRemote                     string        `json:"push_remote,omitempty"`
+	PushRepo                       string        `json:"push_repo,omitempty"`
 	ReusedRemoteBranch             string        `json:"reused_remote_branch,omitempty"`
 	BranchDiffSummary              string        `json:"branch_diff_summary,omitempty"`
 	Status                         SessionStatus `json:"status"`
