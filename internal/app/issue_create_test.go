@@ -372,11 +372,11 @@ func TestIssueSubcommandUnknown(t *testing.T) {
 
 // invocationCapture is a test runner that captures the last command invocation.
 type invocationCapture struct {
-	base          testutil.FakeRunner
-	onCapture     func(dir, name string, args []string)
-	capturedDir   string
-	capturedName  string
-	capturedArgs  []string
+	base         testutil.FakeRunner
+	onCapture    func(dir, name string, args []string)
+	capturedDir  string
+	capturedName string
+	capturedArgs []string
 }
 
 func (r *invocationCapture) Run(ctx context.Context, dir string, name string, args ...string) (string, error) {

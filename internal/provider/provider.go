@@ -43,7 +43,6 @@ type IssueCreateTask struct {
 	Prompt string
 }
 
-
 type Provider interface {
 	ID() string
 	DisplayName() string
