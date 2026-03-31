@@ -80,3 +80,4 @@ Include the failing command, the missing prerequisite or observed error, the rel
 - Do not assume every repository uses containers.
 - Do not silently generate infrastructure when the repository already documents a supported path.
 - Do not hide cleanup expectations.
+- Do not create commits in this workflow. If a later handoff unexpectedly requires recording code changes, use `vigilante commit` only and never `git commit` or GitHub CLI commit flows directly.

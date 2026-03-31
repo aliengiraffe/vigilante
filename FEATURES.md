@@ -99,7 +99,7 @@ Key capabilities:
   - issue implementation
   - conflict resolution
 - Shared prompt assembly with repo context, issue context, and operational instructions.
-- Shared commit-identity policy that preserves the user's git author, committer, and signing configuration and forbids agent attribution trailers.
+- Shared commit policy that requires `vigilante commit`, preserves the user's git author, committer, and signing configuration, and forbids agent attribution trailers.
 - Skill installation into provider-specific runtime homes during setup.
 
 Why it matters:
@@ -126,7 +126,7 @@ Key capabilities:
 - Local service dependency workflow for repository-native service startup.
 - Docker Compose helper workflow for worktree-scoped local services.
 - Standardized expectations for issue comments, validation, branch push, and PR creation.
-- Consistent commit-authorship guidance across implementation, CI remediation, and conflict-resolution skills.
+- Consistent `vigilante commit` guidance across implementation, CI remediation, and conflict-resolution skills.
 
 Why it matters:
 

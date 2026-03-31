@@ -5,7 +5,8 @@ This repository is designed to be worked by both humans and coding-agent runs la
 ## Local Development Notes
 
 - Work from an isolated branch or issue worktree instead of editing the primary checkout directly.
-- Preserve the existing git author, committer, and signing configuration for any commit or history rewrite.
+- Use `vigilante commit` for any commit, amend, or history rewrite that records code changes. Do not use `git commit`, GitHub CLI commit flows, or other direct commit commands.
+- Ensure `vigilante commit` preserves the existing git author, committer, and signing configuration so commits remain user-authored and signed according to the user's git configuration.
 - Prefer repository-native commands and targeted Go tests for the area you changed.
 
 ## Fork-Based Workflow

@@ -43,3 +43,4 @@ Return a concise structured summary using these fields:
 - Do not assume every repository needs Docker Compose.
 - Do not replace a documented repository-native startup flow with a generated one unless the native path is unusable.
 - Do not claim success until the requested service is accepting connections.
+- Do not create commits in this workflow. If a later handoff unexpectedly requires recording code changes, use `vigilante commit` only and never `git commit` or GitHub CLI commit flows directly.

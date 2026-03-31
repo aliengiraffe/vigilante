@@ -134,7 +134,7 @@ func TestBuildIssuePrompt(t *testing.T) {
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 	prompt := BuildIssuePrompt(target, issue, session)
-	for _, text := range []string{"Use the `vigilante-issue-implementation` skill", "Detected repo shape: traditional", `Repo process context JSON: {"shape":"traditional"}`, "Selected issue implementation skill: vigilante-issue-implementation", "Issue: #12 - Fix bug", "Worktree path: /tmp/worktree", "vigilante gh issue comment", "vigilante git push", "vigilante gh pr create", "Closes #12", "Coding Agent Launched: Codex", "@vigilanteai resume", "@vigilanteai cleanup", "issue-comment commands rather than shell commands", "10-cell progress bar", "ETA: ~N minutes", "preserve the user's existing git author, committer, and signing configuration", "Do not add `Co-authored by:` trailers"} {
+	for _, text := range []string{"Use the `vigilante-issue-implementation` skill", "Detected repo shape: traditional", `Repo process context JSON: {"shape":"traditional"}`, "Selected issue implementation skill: vigilante-issue-implementation", "Issue: #12 - Fix bug", "Worktree path: /tmp/worktree", "vigilante gh issue comment", "vigilante git push", "vigilante gh pr create", "Closes #12", "Coding Agent Launched: Codex", "@vigilanteai resume", "@vigilanteai cleanup", "issue-comment commands rather than shell commands", "10-cell progress bar", "ETA: ~N minutes", "Use `vigilante commit`", "preserve the user's existing git author, committer, and signing configuration", "Do not add `Co-authored by:` trailers"} {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q: %s", text, prompt)
 		}
@@ -537,7 +537,7 @@ func TestBuildConflictResolutionPrompt(t *testing.T) {
 	session := state.Session{IssueNumber: 12, IssueTitle: "Fix bug", IssueBody: "Preserve the original validation behavior.", IssueURL: "https://example.com/issues/12", BaseBranch: "main", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", BranchDiffSummary: "Keep the error-state form inputs intact."}
 	pr := ghcli.PullRequest{Number: 88, URL: "https://example.com/pull/88", Title: "Fix bug", Body: "This PR keeps the original UX behavior.", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"}
 	prompt := BuildConflictResolutionPrompt(target, session, pr)
-	for _, text := range []string{"Use the `vigilante-conflict-resolution` skill", "Issue specification: Preserve the original validation behavior.", "Pull Request title: Fix bug", "GitHub mergeability: mergeable=CONFLICTING mergeStateStatus=DIRTY", "Work through the rebase commit by commit.", "preserve the user's existing git author, committer, and signing configuration", "Do not add `Co-authored by:` trailers", "vigilante logs --repo <owner/name> --issue <n>", "go test ./...", "Existing branch summary: Keep the error-state form inputs intact."} {
+	for _, text := range []string{"Use the `vigilante-conflict-resolution` skill", "Issue specification: Preserve the original validation behavior.", "Pull Request title: Fix bug", "GitHub mergeability: mergeable=CONFLICTING mergeStateStatus=DIRTY", "Work through the rebase commit by commit.", "Use `vigilante commit`", "preserve the user's existing git author, committer, and signing configuration", "Do not add `Co-authored by:` trailers", "vigilante logs --repo <owner/name> --issue <n>", "go test ./...", "Existing branch summary: Keep the error-state form inputs intact."} {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q: %s", text, prompt)
 		}
@@ -549,7 +549,7 @@ func TestBuildCIRemediationPrompt(t *testing.T) {
 	session := state.Session{IssueNumber: 12, IssueTitle: "Fix bug", IssueURL: "https://example.com/issues/12", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12"}
 	pr := ghcli.PullRequest{Number: 88, URL: "https://example.com/pull/88"}
 	prompt := BuildCIRemediationPrompt(target, session, pr, []ghcli.StatusCheckRoll{{Context: "test", Conclusion: "FAILURE"}})
-	for _, text := range []string{"Use the `vigilante-issue-implementation` skill", "Pull Request: #88", "CI remediation context", "Failing check: test", "preserve the user's existing git author, committer, and signing configuration", "Do not add `Co-authored by:` trailers", "do not open a new pull request", "exit with a non-zero status"} {
+	for _, text := range []string{"Use the `vigilante-issue-implementation` skill", "Pull Request: #88", "CI remediation context", "Failing check: test", "Use `vigilante commit`", "preserve the user's existing git author, committer, and signing configuration", "Do not add `Co-authored by:` trailers", "do not open a new pull request", "exit with a non-zero status"} {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q: %s", text, prompt)
 		}
@@ -593,6 +593,7 @@ func TestEnsureInstalledCommitProducingSkillsIncludeCommitIdentityPolicy(t *test
 		}
 		body := strings.ToLower(string(data))
 		for _, text := range []string{
+			"use `vigilante commit`",
 			"preserve the user's existing git author, committer, and signing configuration",
 			"do not add `co-authored by:` trailers",
 		} {

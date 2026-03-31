@@ -133,7 +133,8 @@ For each watched repository:
    - passes the detected repo/process context into the prompt
    - instructs the agent to comment on the issue when work starts
    - instructs the agent to keep commenting as progress is made
-   - instructs the agent to preserve the user's git author, committer, and signing identity for any commit-related operation
+   - instructs the agent to use `vigilante commit` only for any commit-related operation and never `git commit` or GitHub CLI commit flows directly
+   - instructs the agent that `vigilante commit` must preserve the user's git author, committer, and signing identity
    - instructs the agent not to add agent `Co-authored by:` trailers or similar commit attribution
    - instructs the agent to report errors back to the issue
 9. Track the session state locally so the daemon does not duplicate work.
@@ -652,7 +653,8 @@ When `vigilante` launches a coding agent for an issue, it should:
 - ensure the issue implementation skill is available
 - instruct the agent to post a GitHub comment when the session starts
 - instruct the agent to post progress comments during execution
-- instruct the agent to preserve the user's existing git identity and signing configuration for commits, amends, rebases, and other history edits
+- instruct the agent to use `vigilante commit` only for commits, amends, rebases, and other history edits, never `git commit` or GitHub CLI commit flows directly
+- instruct the agent that `vigilante commit` must preserve the user's existing git identity and signing configuration
 - instruct the agent not to add coding-agent `Co-authored by:` trailers or similar attribution
 - instruct the agent to report failures on the issue if execution aborts
 

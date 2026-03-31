@@ -54,7 +54,8 @@ Service dependencies:
 
 6. Commit and push the branch
 - Commit only issue-relevant changes in the assigned branch.
-- Any commit or amend must preserve the user's existing git author, committer, and signing configuration. Commit on behalf of the user and do not overwrite `git config` with a coding-agent identity.
+- Use `vigilante commit` for every commit, amend, rebase rewrite, or conflict-resolution commit. Do not use `git commit`, GitHub CLI commit flows, or other direct commit commands.
+- `vigilante commit` must preserve the user's existing git author, committer, and signing configuration so commits remain user-authored and signed according to the user's git configuration. Commit on behalf of the user and do not overwrite `git config` with a coding-agent identity.
 - Do not add `Co-authored by:` trailers or any other agent attribution for Codex, Claude, Gemini, or similar coding-agent identities.
 - Push the assigned branch to the remote with `vigilante git push`.
 - Do not leave completed implementation work only in the local worktree.
@@ -102,6 +103,7 @@ Service dependencies:
 - Never work outside the assigned worktree.
 - Never ignore `AGENTS.md` or repository documentation that constrains implementation.
 - Never make unrelated refactors unless they are required to complete the issue safely.
+- Never use `git commit`, GitHub CLI commit flows, or any non-`vigilante commit` path to record code changes.
 - Never rewrite commit authorship, committer identity, signing configuration, or commit trailers to attribute work to the coding agent.
 - Never silently fail; report errors or blockers back to the issue.
 - Never claim validation passed unless the corresponding command actually succeeded.

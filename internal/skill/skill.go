@@ -561,7 +561,8 @@ func runtimeUsesInlineSkillHeader(runtime string) bool {
 
 func commitIdentityPolicyLines() []string {
 	return []string{
-		"Any commit, amend, rebase rewrite, or conflict-resolution commit must preserve the user's existing git author, committer, and signing configuration. Commit on behalf of the user and do not overwrite `git config` with a coding-agent identity.",
+		"Use `vigilante commit` for every commit, amend, rebase rewrite, or conflict-resolution commit. Do not use `git commit`, GitHub CLI commit flows, or other direct commit commands.",
+		"`vigilante commit` must preserve the user's existing git author, committer, and signing configuration so commits remain user-authored and signed according to the user's git configuration. Commit on behalf of the user and do not overwrite `git config` with a coding-agent identity.",
 		"Do not add `Co-authored by:` trailers or any other agent attribution for Codex, Claude, Gemini, or similar coding-agent identities.",
 	}
 }

@@ -122,6 +122,7 @@ Every issue draft should cover these sections when relevant:
 - Do not hide key constraints inside prose if they materially affect implementation.
 - Do not invent repository details that were not provided. Flag missing context instead.
 - Do not overload the issue with speculative architecture unless the decision matters to execution.
+- Do document commit-path constraints when they materially affect implementation. For Vigilante-managed code changes, specify that coding agents must use `vigilante commit` only and must not use `git commit` or GitHub CLI commit flows directly.
 - Do include non-goals so the eventual implementation stays narrow.
 - Do include exact commands, files, components, or workflows when they are already known.
 
@@ -196,6 +197,7 @@ Before creating the issue or returning the fallback draft, verify that:
 - the testing section names the expected validation
 - the body includes the type-specific details that matter for the selected class instead of only a label
 - the issue gives Vigilante enough direction to implement without guessing the basics
+- any commit-related implementation constraint states that coding agents must use `vigilante commit` only rather than `git commit` or GitHub CLI commit flows
 - the target repository is known before attempting issue creation
 - the final response includes the created issue URL or number when creation succeeds
 - the final response says whether the native sub-issue relationship was created or whether issue creation fell back to body-only linking
