@@ -43,6 +43,7 @@ const (
 	TechStackPython        TechStack = "python"
 	TechStackDotNet        TechStack = "dotnet"
 	TechStackJVM           TechStack = "java_kotlin"
+	TechStackPHP           TechStack = "php"
 )
 
 type ProcessHints struct {
@@ -238,6 +239,7 @@ func Classify(path string) Classification {
 	detectPythonTechStack(absPath, &classification)
 	detectDotNetTechStack(absPath, &classification)
 	detectJVMTechStack(absPath, &classification)
+	detectPHPTechStack(absPath, &classification)
 
 	slices.Sort(classification.ProcessHints.GradleSettingsFiles)
 	slices.Sort(classification.ProcessHints.GradleRootBuildFiles)
@@ -593,6 +595,14 @@ func detectDotNetTechStack(absPath string, classification *Classification) {
 }
 
 var errStopWalk = errors.New("stop walk")
+
+func detectPHPTechStack(absPath string, classification *Classification) {
+	if !fileExists(filepath.Join(absPath, "composer.json")) {
+		return
+	}
+	classification.TechStacks = append(classification.TechStacks, TechStackPHP)
+}
+
 
 func isGradleMultiProject(path string, settingsFiles []string) bool {
 	for _, name := range settingsFiles {

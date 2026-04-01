@@ -1128,6 +1128,66 @@ func TestClassifyKubernetesNotDetectedFromNonK8sYAML(t *testing.T) {
 	}
 }
 
+func TestClassifyPHPRepoFromComposerJSON(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "composer.json"), []byte("{\"name\":\"vendor/demo\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if got.Shape != ShapeTraditional {
+		t.Fatalf("expected traditional shape, got %#v", got.Shape)
+	}
+	if len(got.TechStacks) != 1 || got.TechStacks[0] != TechStackPHP {
+		t.Fatalf("expected php tech stack, got %#v", got.TechStacks)
+	}
+}
+
+func TestClassifyNonPHPRepoHasNoPHPTechStack(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.py"), []byte("print('hello')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	for _, stack := range got.TechStacks {
+		if stack == TechStackPHP {
+			t.Fatalf("unexpected php tech stack for non-PHP repo")
+		}
+	}
+}
+
+func TestClassifyPHPAndNodeJSRepoDetectsBoth(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "composer.json"), []byte("{\"name\":\"vendor/demo\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte("{\"name\":\"demo\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	hasPHP := false
+	hasNodeJS := false
+	for _, stack := range got.TechStacks {
+		if stack == TechStackPHP {
+			hasPHP = true
+		}
+		if stack == TechStackNodeJS {
+			hasNodeJS = true
+		}
+	}
+	if !hasPHP {
+		t.Fatalf("expected php tech stack, got %#v", got.TechStacks)
+	}
+	if !hasNodeJS {
+		t.Fatalf("expected nodejs tech stack, got %#v", got.TechStacks)
+	}
+}
+
 func TestExpandPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vigilante PHP Issue Implementation"
+  short_description: "Implement a Vigilante-dispatched issue in a PHP repository with Composer, static analysis, and security guidance"
+  default_prompt: "Use $vigilante-issue-implementation-on-php to implement the assigned PHP issue in the provided worktree, follow repo-standard PHP conventions, comment on the issue, and open a PR."

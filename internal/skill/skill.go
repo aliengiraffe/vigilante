@@ -32,6 +32,7 @@ const VigilanteIssueImplementationOnKubernetes = "vigilante-issue-implementation
 const VigilanteIssueImplementationOnPython = "vigilante-issue-implementation-on-python"
 const VigilanteIssueImplementationOnDotNet = "vigilante-issue-implementation-on-dotnet"
 const VigilanteIssueImplementationOnJavaKotlin = "vigilante-issue-implementation-on-java-kotlin"
+const VigilanteIssueImplementationOnPHP = "vigilante-issue-implementation-on-php"
 const VigilanteConflictResolution = "vigilante-conflict-resolution"
 const VigilanteCreateIssue = "vigilante-create-issue"
 const VigilanteLocalServiceDependencies = "vigilante-local-service-dependencies"
@@ -60,6 +61,7 @@ func VigilanteSkillNames() []string {
 		VigilanteIssueImplementationOnKubernetes,
 		VigilanteIssueImplementationOnPython,
 		VigilanteIssueImplementationOnDotNet,
+		VigilanteIssueImplementationOnPHP,
 		VigilanteConflictResolution,
 		VigilanteCreateIssue,
 		VigilanteLocalServiceDependencies,
@@ -284,6 +286,9 @@ func IssueImplementationSkill(target state.WatchTarget) string {
 		if isDockerTarget(target) {
 			return VigilanteIssueImplementationOnDocker
 		}
+		if isPHPTarget(target) {
+			return VigilanteIssueImplementationOnPHP
+		}
 		return VigilanteIssueImplementation
 	}
 	if isBazelMonorepo(target.Classification) {
@@ -365,6 +370,15 @@ func isDotNetTarget(target state.WatchTarget) bool {
 func isJavaKotlinTarget(target state.WatchTarget) bool {
 	for _, stack := range target.Classification.TechStacks {
 		if stack == repo.TechStackJVM {
+			return true
+		}
+	}
+	return false
+}
+
+func isPHPTarget(target state.WatchTarget) bool {
+	for _, stack := range target.Classification.TechStacks {
+		if stack == repo.TechStackPHP {
 			return true
 		}
 	}
