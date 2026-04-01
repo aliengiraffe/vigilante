@@ -235,6 +235,9 @@ func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue 
 			fmt.Sprintf("When local services are required, use the `%s` skill instead of inventing ad hoc `vigilante docker compose` logic.", DockerComposeLaunch),
 		)
 	}
+	if guidance := securityGuidanceForClassification(target.Classification); guidance != "" {
+		lines = append(lines, guidance)
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -330,6 +333,7 @@ func repoClassificationJSON(target state.WatchTarget) string {
 	payload := struct {
 		Shape         repo.Shape         `json:"shape"`
 		MonorepoStack repo.MonorepoStack `json:"monorepo_stack,omitempty"`
+		TechStacks    []repo.TechStack   `json:"tech_stacks,omitempty"`
 		ProcessHints  *repo.ProcessHints `json:"process_hints,omitempty"`
 	}{
 		Shape: classification.Shape,
@@ -340,13 +344,19 @@ func repoClassificationJSON(target state.WatchTarget) string {
 		}
 		payload.MonorepoStack = classification.MonorepoStack
 	}
+	if len(classification.TechStacks) > 0 {
+		payload.TechStacks = classification.TechStacks
+	}
 	if len(classification.ProcessHints.WorkspaceConfigFiles) > 0 ||
 		len(classification.ProcessHints.WorkspaceManifestFiles) > 0 ||
 		len(classification.ProcessHints.MultiPackageRoots) > 0 ||
 		len(classification.ProcessHints.GradleSettingsFiles) > 0 ||
 		len(classification.ProcessHints.GradleRootBuildFiles) > 0 ||
 		len(classification.ProcessHints.BazelRepoMarkers) > 0 ||
-		len(classification.ProcessHints.BazelPackageRoots) > 0 {
+		len(classification.ProcessHints.BazelPackageRoots) > 0 ||
+		len(classification.ProcessHints.NodePackageManagers) > 0 ||
+		len(classification.ProcessHints.NodeLockFiles) > 0 ||
+		len(classification.ProcessHints.TypeScriptConfigs) > 0 {
 		payload.ProcessHints = &classification.ProcessHints
 	}
 	data, err := json.Marshal(payload)

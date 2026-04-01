@@ -32,6 +32,12 @@ const (
 	MonorepoStackGradle    MonorepoStack = "gradle"
 )
 
+type TechStack string
+
+const (
+	TechStackNodeJS TechStack = "nodejs"
+)
+
 type ProcessHints struct {
 	WorkspaceConfigFiles   []string `json:"workspace_config_files,omitempty"`
 	WorkspaceManifestFiles []string `json:"workspace_manifest_files,omitempty"`
@@ -40,11 +46,15 @@ type ProcessHints struct {
 	GradleRootBuildFiles   []string `json:"gradle_root_build_files,omitempty"`
 	BazelRepoMarkers       []string `json:"bazel_repo_markers,omitempty"`
 	BazelPackageRoots      []string `json:"bazel_package_roots,omitempty"`
+	NodePackageManagers    []string `json:"node_package_managers,omitempty"`
+	NodeLockFiles          []string `json:"node_lock_files,omitempty"`
+	TypeScriptConfigs      []string `json:"typescript_configs,omitempty"`
 }
 
 type Classification struct {
 	Shape         Shape         `json:"shape"`
 	MonorepoStack MonorepoStack `json:"monorepo_stack,omitempty"`
+	TechStacks    []TechStack   `json:"tech_stacks,omitempty"`
 	ProcessHints  ProcessHints  `json:"process_hints,omitempty"`
 }
 
@@ -211,6 +221,8 @@ func Classify(path string) Classification {
 	if isGradleMultiProject(absPath, classification.ProcessHints.GradleSettingsFiles) {
 		classification.Shape = ShapeGradleMultiProject
 	}
+	detectNodeJSTechStack(absPath, &classification)
+
 	slices.Sort(classification.ProcessHints.GradleSettingsFiles)
 	slices.Sort(classification.ProcessHints.GradleRootBuildFiles)
 	slices.Sort(classification.ProcessHints.WorkspaceConfigFiles)
@@ -218,6 +230,9 @@ func Classify(path string) Classification {
 	slices.Sort(classification.ProcessHints.MultiPackageRoots)
 	slices.Sort(classification.ProcessHints.BazelRepoMarkers)
 	slices.Sort(classification.ProcessHints.BazelPackageRoots)
+	slices.Sort(classification.ProcessHints.NodePackageManagers)
+	slices.Sort(classification.ProcessHints.NodeLockFiles)
+	slices.Sort(classification.ProcessHints.TypeScriptConfigs)
 	return classification
 }
 
@@ -352,6 +367,40 @@ func cargoTomlHasWorkspace(path string) bool {
 		return false
 	}
 	return strings.Contains(string(data), "[workspace]")
+}
+
+func detectNodeJSTechStack(absPath string, classification *Classification) {
+	if !fileExists(filepath.Join(absPath, "package.json")) {
+		return
+	}
+
+	for _, lockFile := range []string{"package-lock.json", "npm-shrinkwrap.json"} {
+		if fileExists(filepath.Join(absPath, lockFile)) {
+			classification.ProcessHints.NodeLockFiles = append(classification.ProcessHints.NodeLockFiles, lockFile)
+			if !slices.Contains(classification.ProcessHints.NodePackageManagers, "npm") {
+				classification.ProcessHints.NodePackageManagers = append(classification.ProcessHints.NodePackageManagers, "npm")
+			}
+		}
+	}
+	if fileExists(filepath.Join(absPath, "yarn.lock")) {
+		classification.ProcessHints.NodeLockFiles = append(classification.ProcessHints.NodeLockFiles, "yarn.lock")
+		classification.ProcessHints.NodePackageManagers = append(classification.ProcessHints.NodePackageManagers, "yarn")
+	}
+	if fileExists(filepath.Join(absPath, "pnpm-lock.yaml")) {
+		classification.ProcessHints.NodeLockFiles = append(classification.ProcessHints.NodeLockFiles, "pnpm-lock.yaml")
+		classification.ProcessHints.NodePackageManagers = append(classification.ProcessHints.NodePackageManagers, "pnpm")
+	}
+	if len(classification.ProcessHints.NodePackageManagers) == 0 {
+		classification.ProcessHints.NodePackageManagers = append(classification.ProcessHints.NodePackageManagers, "npm")
+	}
+
+	for _, tsConfig := range []string{"tsconfig.json", "tsconfig.build.json"} {
+		if fileExists(filepath.Join(absPath, tsConfig)) {
+			classification.ProcessHints.TypeScriptConfigs = append(classification.ProcessHints.TypeScriptConfigs, tsConfig)
+		}
+	}
+
+	classification.TechStacks = append(classification.TechStacks, TechStackNodeJS)
 }
 
 func isGradleMultiProject(path string, settingsFiles []string) bool {

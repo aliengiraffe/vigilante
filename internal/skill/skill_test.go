@@ -1042,6 +1042,89 @@ func TestBazelMonorepoSkillCoversTargetSelectionAndDatabaseFlows(t *testing.T) {
 	}
 }
 
+func TestBuildIssuePromptIncludesSecurityGuidanceForNodeJSRepo(t *testing.T) {
+	target := state.WatchTarget{
+		Path: "/tmp/repo",
+		Repo: "owner/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackNodeJS},
+			ProcessHints: repo.ProcessHints{
+				NodePackageManagers: []string{"npm"},
+				NodeLockFiles:       []string{"package-lock.json"},
+				TypeScriptConfigs:   []string{"tsconfig.json"},
+			},
+		},
+	}
+	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
+
+	prompt := BuildIssuePrompt(target, issue, session)
+
+	for _, text := range []string{
+		"JS/TS/Node security guidance",
+		"Dependency & supply-chain",
+		"npm hardening",
+		"Runtime security",
+		"TypeScript safety",
+		"CI/CD & secrets",
+		"Static analysis",
+		`"tech_stacks":["nodejs"]`,
+		`"node_package_managers":["npm"]`,
+		`"node_lock_files":["package-lock.json"]`,
+		`"typescript_configs":["tsconfig.json"]`,
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q", text)
+		}
+	}
+}
+
+func TestBuildIssuePromptExcludesSecurityGuidanceForNonNodeRepo(t *testing.T) {
+	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
+	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
+
+	prompt := BuildIssuePrompt(target, issue, session)
+
+	if strings.Contains(prompt, "JS/TS/Node security guidance") {
+		t.Fatalf("prompt should not include JS security guidance for non-Node repo")
+	}
+}
+
+func TestBuildIssuePromptIncludesSecurityGuidanceForMonorepoNodeJS(t *testing.T) {
+	target := state.WatchTarget{
+		Path: "/tmp/repo",
+		Repo: "owner/repo",
+		Classification: repo.Classification{
+			Shape:         repo.ShapeMonorepo,
+			MonorepoStack: repo.MonorepoStackTurborepo,
+			TechStacks:    []repo.TechStack{repo.TechStackNodeJS},
+			ProcessHints: repo.ProcessHints{
+				WorkspaceConfigFiles: []string{"pnpm-workspace.yaml", "turbo.json"},
+				MultiPackageRoots:    []string{"apps", "packages"},
+				NodePackageManagers:  []string{"pnpm"},
+				NodeLockFiles:        []string{"pnpm-lock.yaml"},
+			},
+		},
+	}
+	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
+
+	prompt := BuildIssuePrompt(target, issue, session)
+
+	for _, text := range []string{
+		"JS/TS/Node security guidance",
+		"pnpm hardening",
+		"Monorepo security",
+		"phantom dependencies",
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q", text)
+		}
+	}
+}
+
 func TestBuildIssueCreatePromptContainsExpectedFields(t *testing.T) {
 	target := state.WatchTarget{
 		Repo:         "owner/repo",

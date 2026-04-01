@@ -260,6 +260,157 @@ func TestClassifyMonorepoUsesUnknownStackFallback(t *testing.T) {
 	}
 }
 
+func TestClassifyNodeJSRepoFromPackageJSON(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte("{\"name\":\"demo\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "package-lock.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if len(got.TechStacks) != 1 || got.TechStacks[0] != TechStackNodeJS {
+		t.Fatalf("expected nodejs tech stack, got %#v", got.TechStacks)
+	}
+	if len(got.ProcessHints.NodePackageManagers) != 1 || got.ProcessHints.NodePackageManagers[0] != "npm" {
+		t.Fatalf("expected npm package manager, got %#v", got.ProcessHints.NodePackageManagers)
+	}
+	if len(got.ProcessHints.NodeLockFiles) != 1 || got.ProcessHints.NodeLockFiles[0] != "package-lock.json" {
+		t.Fatalf("expected package-lock.json lock file, got %#v", got.ProcessHints.NodeLockFiles)
+	}
+}
+
+func TestClassifyNodeJSRepoWithPnpm(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte("{\"name\":\"demo\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pnpm-lock.yaml"), []byte("lockfileVersion: 5\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if len(got.TechStacks) != 1 || got.TechStacks[0] != TechStackNodeJS {
+		t.Fatalf("expected nodejs tech stack, got %#v", got.TechStacks)
+	}
+	if len(got.ProcessHints.NodePackageManagers) != 1 || got.ProcessHints.NodePackageManagers[0] != "pnpm" {
+		t.Fatalf("expected pnpm package manager, got %#v", got.ProcessHints.NodePackageManagers)
+	}
+	if len(got.ProcessHints.NodeLockFiles) != 1 || got.ProcessHints.NodeLockFiles[0] != "pnpm-lock.yaml" {
+		t.Fatalf("expected pnpm-lock.yaml lock file, got %#v", got.ProcessHints.NodeLockFiles)
+	}
+}
+
+func TestClassifyNodeJSRepoWithYarn(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte("{\"name\":\"demo\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "yarn.lock"), []byte("# yarn lockfile\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if len(got.TechStacks) != 1 || got.TechStacks[0] != TechStackNodeJS {
+		t.Fatalf("expected nodejs tech stack, got %#v", got.TechStacks)
+	}
+	if len(got.ProcessHints.NodePackageManagers) != 1 || got.ProcessHints.NodePackageManagers[0] != "yarn" {
+		t.Fatalf("expected yarn package manager, got %#v", got.ProcessHints.NodePackageManagers)
+	}
+}
+
+func TestClassifyNodeJSRepoWithTypeScript(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte("{\"name\":\"demo\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte("{\"compilerOptions\":{}}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if len(got.TechStacks) != 1 || got.TechStacks[0] != TechStackNodeJS {
+		t.Fatalf("expected nodejs tech stack, got %#v", got.TechStacks)
+	}
+	if len(got.ProcessHints.TypeScriptConfigs) != 1 || got.ProcessHints.TypeScriptConfigs[0] != "tsconfig.json" {
+		t.Fatalf("expected tsconfig.json, got %#v", got.ProcessHints.TypeScriptConfigs)
+	}
+}
+
+func TestClassifyNodeJSRepoDefaultsToNpmWhenNoLockFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte("{\"name\":\"demo\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if len(got.TechStacks) != 1 || got.TechStacks[0] != TechStackNodeJS {
+		t.Fatalf("expected nodejs tech stack, got %#v", got.TechStacks)
+	}
+	if len(got.ProcessHints.NodePackageManagers) != 1 || got.ProcessHints.NodePackageManagers[0] != "npm" {
+		t.Fatalf("expected npm default package manager, got %#v", got.ProcessHints.NodePackageManagers)
+	}
+	if len(got.ProcessHints.NodeLockFiles) != 0 {
+		t.Fatalf("expected no lock files, got %#v", got.ProcessHints.NodeLockFiles)
+	}
+}
+
+func TestClassifyNonNodeJSRepoHasNoTechStack(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if len(got.TechStacks) != 0 {
+		t.Fatalf("expected no tech stacks for Go repo, got %#v", got.TechStacks)
+	}
+	if len(got.ProcessHints.NodePackageManagers) != 0 {
+		t.Fatalf("expected no node package managers, got %#v", got.ProcessHints.NodePackageManagers)
+	}
+}
+
+func TestClassifyTurborepoMonorepoAlsoDetectsNodeJS(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte("{\"workspaces\":[\"apps/*\"]}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pnpm-workspace.yaml"), []byte("packages:\n  - apps/*\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "turbo.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pnpm-lock.yaml"), []byte("lockfileVersion: 5\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if got.Shape != ShapeMonorepo {
+		t.Fatalf("expected monorepo, got %#v", got.Shape)
+	}
+	if len(got.TechStacks) != 1 || got.TechStacks[0] != TechStackNodeJS {
+		t.Fatalf("expected nodejs tech stack on turborepo, got %#v", got.TechStacks)
+	}
+	if len(got.ProcessHints.NodePackageManagers) != 1 || got.ProcessHints.NodePackageManagers[0] != "pnpm" {
+		t.Fatalf("expected pnpm, got %#v", got.ProcessHints.NodePackageManagers)
+	}
+	if len(got.ProcessHints.TypeScriptConfigs) != 1 {
+		t.Fatalf("expected tsconfig, got %#v", got.ProcessHints.TypeScriptConfigs)
+	}
+}
+
 func TestExpandPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
