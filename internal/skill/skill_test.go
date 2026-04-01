@@ -1363,6 +1363,135 @@ func TestBuildIssuePromptForGoOnlyTraditionalRepoOmitsMixedGuidance(t *testing.T
 	}
 }
 
+func TestIssueImplementationSkillSelectsGitHubActionsForActionsRepo(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackGitHubActions},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnGitHubActions {
+		t.Fatalf("expected github-actions skill, got %s", got)
+	}
+}
+
+func TestIssueImplementationSkillPrefersGoOverGitHubActions(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackGo, repo.TechStackGitHubActions},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnGo {
+		t.Fatalf("expected go skill to take priority over github-actions, got %s", got)
+	}
+}
+
+func TestIssueImplementationSkillPrefersMonorepoOverGitHubActions(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:         repo.ShapeMonorepo,
+			MonorepoStack: repo.MonorepoStackUnknown,
+			TechStacks:    []repo.TechStack{repo.TechStackGitHubActions},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnMonorepo {
+		t.Fatalf("expected monorepo skill for monorepo with actions, got %s", got)
+	}
+}
+
+func TestBuildIssuePromptForGitHubActionsRepoIncludesActionsGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackGitHubActions},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	for _, text := range []string{
+		"GitHub Actions workflow security guidance",
+		"Pinned actions",
+		"Least-privilege permissions",
+		"Secret handling",
+		"Injection prevention",
+		"OIDC authentication",
+		"actionlint",
+		"do not broaden issue scope",
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q", text)
+		}
+	}
+}
+
+func TestBuildIssuePromptForGitHubActionsRepoSelectsActionsSkill(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackGitHubActions},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if !strings.Contains(prompt, VigilanteIssueImplementationOnGitHubActions) {
+		t.Fatalf("prompt should reference GitHub Actions skill")
+	}
+}
+
+func TestBuildIssuePromptForNonActionsRepoDoesNotIncludeActionsGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape: repo.ShapeTraditional,
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if strings.Contains(prompt, "GitHub Actions workflow security guidance") {
+		t.Fatalf("prompt should not include GitHub Actions guidance for non-Actions repo")
+	}
+}
+
+func TestBuildIssuePromptForGoAndActionsRepoIncludesBothGuidances(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackGo, repo.TechStackGitHubActions},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if !strings.Contains(prompt, "Go security and tooling guidance") {
+		t.Fatalf("prompt missing Go guidance")
+	}
+	if !strings.Contains(prompt, "GitHub Actions workflow security guidance") {
+		t.Fatalf("prompt missing GitHub Actions guidance")
+	}
+	if !strings.Contains(prompt, VigilanteIssueImplementationOnGo) {
+		t.Fatalf("prompt should select Go skill for Go+Actions repo")
+	}
+}
+
 func TestIssueImplementationSkillSelectsMonorepoForGoTurborepo(t *testing.T) {
 	target := state.WatchTarget{
 		Classification: repo.Classification{

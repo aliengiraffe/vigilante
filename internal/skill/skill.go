@@ -26,6 +26,7 @@ const VigilanteIssueImplementationOnGradle = "vigilante-issue-implementation-on-
 const VigilanteIssueImplementationOnGradleMultiProject = "vigilante-issue-implementation-on-gradle-multi-project"
 const VigilanteIssueImplementationOnBazelMonorepo = "vigilante-issue-implementation-on-bazel-monorepo"
 const VigilanteIssueImplementationOnGo = "vigilante-issue-implementation-on-go"
+const VigilanteIssueImplementationOnGitHubActions = "vigilante-issue-implementation-on-github-actions"
 const VigilanteConflictResolution = "vigilante-conflict-resolution"
 const VigilanteCreateIssue = "vigilante-create-issue"
 const VigilanteLocalServiceDependencies = "vigilante-local-service-dependencies"
@@ -48,6 +49,7 @@ func VigilanteSkillNames() []string {
 		VigilanteIssueImplementationOnGradleMultiProject,
 		VigilanteIssueImplementationOnBazelMonorepo,
 		VigilanteIssueImplementationOnGo,
+		VigilanteIssueImplementationOnGitHubActions,
 		VigilanteConflictResolution,
 		VigilanteCreateIssue,
 		VigilanteLocalServiceDependencies,
@@ -254,6 +256,9 @@ func IssueImplementationSkill(target state.WatchTarget) string {
 		if isGoTarget(target) {
 			return VigilanteIssueImplementationOnGo
 		}
+		if isGitHubActionsTarget(target) {
+			return VigilanteIssueImplementationOnGitHubActions
+		}
 		return VigilanteIssueImplementation
 	}
 	if isBazelMonorepo(target.Classification) {
@@ -281,6 +286,15 @@ func IssueImplementationSkill(target state.WatchTarget) string {
 func isGoTarget(target state.WatchTarget) bool {
 	for _, stack := range target.Classification.TechStacks {
 		if stack == repo.TechStackGo {
+			return true
+		}
+	}
+	return false
+}
+
+func isGitHubActionsTarget(target state.WatchTarget) bool {
+	for _, stack := range target.Classification.TechStacks {
+		if stack == repo.TechStackGitHubActions {
 			return true
 		}
 	}

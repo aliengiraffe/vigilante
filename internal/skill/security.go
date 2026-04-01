@@ -15,6 +15,9 @@ func securityGuidanceForClassification(classification repo.Classification) strin
 	if slices.Contains(classification.TechStacks, repo.TechStackGo) {
 		sections = append(sections, goSecurityGuidance(classification))
 	}
+	if slices.Contains(classification.TechStacks, repo.TechStackGitHubActions) {
+		sections = append(sections, githubActionsSecurityGuidance())
+	}
 	return strings.Join(sections, "\n")
 }
 
@@ -174,5 +177,54 @@ func isMixedLanguageGoRepo(classification repo.Classification) bool {
 func goMixedLanguageGuidance() []string {
 	return []string{
 		"- Mixed-language scope: this repository contains Go code alongside other languages or frontend assets. Scope Go tooling (`gofmt`, `go test`, `go vet`, `govulncheck`, Go linters) to Go source files and packages only. When frontend or Node.js code is also present, respect its own toolchain for frontend-scoped changes. When an issue touches both Go and frontend code, validate each side with its respective toolchain.",
+	}
+}
+
+func githubActionsSecurityGuidance() string {
+	sections := []string{
+		"GitHub Actions workflow security guidance for this repository (apply where relevant to touched workflow files — do not broaden issue scope):",
+	}
+	sections = append(sections, githubActionsPinnedActionsGuidance()...)
+	sections = append(sections, githubActionsPermissionsGuidance()...)
+	sections = append(sections, githubActionsSecretHandlingGuidance()...)
+	sections = append(sections, githubActionsInjectionGuidance()...)
+	sections = append(sections, githubActionsOIDCGuidance()...)
+	sections = append(sections, githubActionsWorkflowLintingGuidance()...)
+	return strings.Join(sections, "\n")
+}
+
+func githubActionsPinnedActionsGuidance() []string {
+	return []string{
+		"- Pinned actions: pin all third-party and first-party GitHub Actions to full commit SHAs, not mutable tags or branches. Add a trailing comment with the version for readability (e.g., `actions/checkout@<sha> # v4`). When updating an action, verify the new SHA corresponds to a reviewed release.",
+	}
+}
+
+func githubActionsPermissionsGuidance() []string {
+	return []string{
+		"- Least-privilege permissions: always declare a top-level `permissions:` block in workflow files. Default to `contents: read` and add only the permissions each job requires. Scope permissions per job when different jobs need different access. Never use `permissions: write-all` or leave permissions unspecified.",
+	}
+}
+
+func githubActionsSecretHandlingGuidance() []string {
+	return []string{
+		"- Secret handling: never echo, log, or interpolate secrets directly in `run:` shell commands — pass them through environment variables. Use `::add-mask::` to mask dynamic values that may appear in logs. Do not store secrets, tokens, or credentials in workflow files or committed configuration.",
+	}
+}
+
+func githubActionsInjectionGuidance() []string {
+	return []string{
+		"- Injection prevention: never interpolate untrusted event data (e.g., `${{ github.event.pull_request.title }}`, `${{ github.event.issue.body }}`) directly into `run:` shell scripts. Use an intermediate environment variable to prevent script injection. Prefer `pull_request` over `pull_request_target` unless cross-fork access is explicitly required and the workflow is hardened.",
+	}
+}
+
+func githubActionsOIDCGuidance() []string {
+	return []string{
+		"- OIDC authentication: prefer OIDC-based cloud authentication (e.g., `aws-actions/configure-aws-credentials` with `role-to-assume`, `google-github-actions/auth` with workload identity) over long-lived credentials stored as repository secrets. When OIDC is available, document the trust policy scope in a workflow comment.",
+	}
+}
+
+func githubActionsWorkflowLintingGuidance() []string {
+	return []string{
+		"- Workflow validation: run `actionlint` on touched workflow files when it is available. If `actionlint` is not installed, note its absence and continue with manual review. Set `timeout-minutes` on jobs to prevent hung runners, and use `concurrency` groups to avoid redundant workflow runs.",
 	}
 }

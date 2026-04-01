@@ -539,6 +539,118 @@ func TestClassifyGoWithHTMXFrontendRemainsTraditional(t *testing.T) {
 	}
 }
 
+func TestClassifyGitHubActionsRepoFromWorkflows(t *testing.T) {
+	dir := t.TempDir()
+	workflowsDir := filepath.Join(dir, ".github", "workflows")
+	if err := os.MkdirAll(workflowsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowsDir, "ci.yml"), []byte("name: CI\non: push\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if got.Shape != ShapeTraditional {
+		t.Fatalf("expected traditional shape, got %#v", got.Shape)
+	}
+	hasActions := false
+	for _, stack := range got.TechStacks {
+		if stack == TechStackGitHubActions {
+			hasActions = true
+		}
+	}
+	if !hasActions {
+		t.Fatalf("expected github-actions tech stack, got %#v", got.TechStacks)
+	}
+}
+
+func TestClassifyGitHubActionsRepoFromYAMLExtension(t *testing.T) {
+	dir := t.TempDir()
+	workflowsDir := filepath.Join(dir, ".github", "workflows")
+	if err := os.MkdirAll(workflowsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowsDir, "deploy.yaml"), []byte("name: Deploy\non: push\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	hasActions := false
+	for _, stack := range got.TechStacks {
+		if stack == TechStackGitHubActions {
+			hasActions = true
+		}
+	}
+	if !hasActions {
+		t.Fatalf("expected github-actions tech stack for .yaml workflow, got %#v", got.TechStacks)
+	}
+}
+
+func TestClassifyNoGitHubActionsWithoutWorkflows(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".github"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	for _, stack := range got.TechStacks {
+		if stack == TechStackGitHubActions {
+			t.Fatalf("unexpected github-actions tech stack for repo without workflows")
+		}
+	}
+}
+
+func TestClassifyNoGitHubActionsWithEmptyWorkflowsDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	for _, stack := range got.TechStacks {
+		if stack == TechStackGitHubActions {
+			t.Fatalf("unexpected github-actions tech stack for empty workflows directory")
+		}
+	}
+}
+
+func TestClassifyGoAndGitHubActionsRepoDetectsBoth(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	workflowsDir := filepath.Join(dir, ".github", "workflows")
+	if err := os.MkdirAll(workflowsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowsDir, "ci.yml"), []byte("name: CI\non: push\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	hasGo := false
+	hasActions := false
+	for _, stack := range got.TechStacks {
+		if stack == TechStackGo {
+			hasGo = true
+		}
+		if stack == TechStackGitHubActions {
+			hasActions = true
+		}
+	}
+	if !hasGo {
+		t.Fatalf("expected go tech stack, got %#v", got.TechStacks)
+	}
+	if !hasActions {
+		t.Fatalf("expected github-actions tech stack, got %#v", got.TechStacks)
+	}
+}
+
 func TestExpandPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

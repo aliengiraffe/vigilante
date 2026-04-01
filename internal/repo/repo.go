@@ -35,8 +35,9 @@ const (
 type TechStack string
 
 const (
-	TechStackNodeJS TechStack = "nodejs"
-	TechStackGo     TechStack = "go"
+	TechStackNodeJS        TechStack = "nodejs"
+	TechStackGo            TechStack = "go"
+	TechStackGitHubActions TechStack = "github-actions"
 )
 
 type ProcessHints struct {
@@ -224,6 +225,7 @@ func Classify(path string) Classification {
 	}
 	detectNodeJSTechStack(absPath, &classification)
 	detectGoTechStack(absPath, &classification)
+	detectGitHubActionsTechStack(absPath, &classification)
 
 	slices.Sort(classification.ProcessHints.GradleSettingsFiles)
 	slices.Sort(classification.ProcessHints.GradleRootBuildFiles)
@@ -410,6 +412,24 @@ func detectGoTechStack(absPath string, classification *Classification) {
 		return
 	}
 	classification.TechStacks = append(classification.TechStacks, TechStackGo)
+}
+
+func detectGitHubActionsTechStack(absPath string, classification *Classification) {
+	workflowsDir := filepath.Join(absPath, ".github", "workflows")
+	entries, err := os.ReadDir(workflowsDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasSuffix(name, ".yml") || strings.HasSuffix(name, ".yaml") {
+			classification.TechStacks = append(classification.TechStacks, TechStackGitHubActions)
+			return
+		}
+	}
 }
 
 func isGradleMultiProject(path string, settingsFiles []string) bool {

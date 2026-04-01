@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vigilante GitHub Actions Issue Implementation"
+  short_description: "Implement a Vigilante-dispatched issue in a repository with GitHub Actions, applying workflow hardening and secret-safe automation"
+  default_prompt: "Use $vigilante-issue-implementation-on-github-actions to implement the assigned issue with GitHub Actions workflow hardening, pinned actions, and secret-safe automation in the provided worktree, comment on the issue, and open a PR."
