@@ -12,6 +12,7 @@ description: Implement a GitHub issue end-to-end when Vigilante dispatches work 
 
 ## Workflow
 - Follow the base `vigilante-issue-implementation-on-monorepo` workflow for issue comments, validation, push, and PR creation.
+- Use `vigilante commit` for all commit-producing operations. Do not use `git commit` or GitHub CLI commit flows directly.
 - Any commit or amend must preserve the user's existing git author, committer, and signing configuration. Commit on behalf of the user and do not overwrite `git config` with a coding-agent identity.
 - Do not add `Co-authored by:` trailers or any other agent attribution for Codex, Claude, Gemini, or similar coding-agent identities.
 - Use Nx-native workspace commands when they exist and match the touched projects.

@@ -46,6 +46,7 @@ Implement one GitHub issue from Vigilante dispatch through validated code change
 - If validation fails, first inspect the per-issue session log with `vigilante logs --repo <owner/name> --issue <n>` to determine whether the problem is in the code, Gradle task selection, test setup, or environment before retrying.
 
 6. Commit, push, and open a pull request
+- Use `vigilante commit` for all commit-producing operations. Do not use `git commit` or GitHub CLI commit flows directly.
 - Commit only issue-relevant changes in the assigned branch.
 - Any commit or amend must preserve the user's existing git author, committer, and signing configuration. Commit on behalf of the user and do not overwrite `git config` with a coding-agent identity.
 - Do not add `Co-authored by:` trailers or any other agent attribution for Codex, Claude, Gemini, or similar coding-agent identities.

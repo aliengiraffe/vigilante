@@ -13,12 +13,13 @@ Use this skill after Vigilante has already opened a pull request and a follow-up
 2. Read repository instructions that affect the touched files before editing.
 3. Comment on the issue when conflict resolution begins and again for meaningful milestones or failures.
 4. Resolve only the conflicts needed to complete the rebase cleanly, commit by commit, while preserving the original issue specification and branch intent.
-5. Preserve the user's existing git author, committer, and signing configuration for every rebase rewrite, amend, or conflict-resolution commit, and do not overwrite `git config` with a coding-agent identity.
-6. Do not add `Co-authored by:` trailers or any other agent attribution for Codex, Claude, Gemini, or similar coding-agent identities.
-7. If the rebase fails, post-rebase validation fails, or the current session state is unclear, inspect `vigilante logs --repo <owner/name> --issue <n>` before retrying so the persisted session transcript becomes the factual source for the next safe action.
-8. After inspecting the log, either continue with the smallest safe fix, rerun the requested validation, or report a blocker on the issue when the transcript shows the branch should not be retried automatically.
-9. Push the updated branch back to GitHub after the rebase and requested validation succeed.
-10. Report the final result clearly on the issue, including any remaining blocker if the conflicts cannot be resolved safely.
+5. Use `vigilante commit` for all commit-producing operations. Do not use `git commit` or GitHub CLI commit flows directly.
+6. Preserve the user's existing git author, committer, and signing configuration for every rebase rewrite, amend, or conflict-resolution commit, and do not overwrite `git config` with a coding-agent identity.
+7. Do not add `Co-authored by:` trailers or any other agent attribution for Codex, Claude, Gemini, or similar coding-agent identities.
+8. If the rebase fails, post-rebase validation fails, or the current session state is unclear, inspect `vigilante logs --repo <owner/name> --issue <n>` before retrying so the persisted session transcript becomes the factual source for the next safe action.
+9. After inspecting the log, either continue with the smallest safe fix, rerun the requested validation, or report a blocker on the issue when the transcript shows the branch should not be retried automatically.
+10. Push the updated branch back to GitHub after the rebase and requested validation succeed.
+11. Report the final result clearly on the issue, including any remaining blocker if the conflicts cannot be resolved safely.
 
 ## Guardrails
 - Stay inside the provided worktree.

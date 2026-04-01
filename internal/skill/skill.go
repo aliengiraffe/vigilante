@@ -186,7 +186,7 @@ func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue 
 		fmt.Sprintf("Issue URL: %s", issue.URL),
 		fmt.Sprintf("Worktree path: %s", session.WorktreePath),
 		fmt.Sprintf("Branch: %s", session.Branch),
-		"Use `vigilante gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, push the branch with `vigilante git push`, open a pull request with `vigilante gh pr create`, and report any execution failure back to the issue.",
+		"Use `vigilante gh issue comment` to comment on the issue when you start working, post a concise implementation plan before substantial coding, add milestone progress comments as you make progress, comment again when the PR is opened, commit with `vigilante commit`, push the branch with `vigilante git push`, open a pull request with `vigilante gh pr create`, and report any execution failure back to the issue.",
 		fmt.Sprintf("When you open the pull request, the final PR body must include `Closes #%d` even if you write a custom summary or the summary is otherwise minimal.", issue.Number),
 		fmt.Sprintf("For the coding-agent start comment, use `## 🕹️ Coding Agent Launched: %s` instead of a generic session-start title.", displayProviderName(session.Provider)),
 		"For the coding-agent start comment, include a short GitHub issue-command hint block with at least `@vigilanteai resume` and `@vigilanteai cleanup`, and make clear that they are issue-comment commands rather than shell commands.",
@@ -483,7 +483,7 @@ func BuildConflictResolutionPromptForRuntime(runtime string, target state.WatchT
 	lines = append(lines,
 		"If the rebase fails, post-rebase validation fails, or the current session state is unclear, inspect `vigilante logs --repo <owner/name> --issue <n>` before retrying so the session transcript guides the next safe action.",
 		"Do not silently discard commits or issue-specific behavior just to get a clean merge. Prefer the smallest safe conflict fix.",
-		"Use `vigilante gh issue comment` for progress and failures, rerun `go test ./...` after conflict resolution succeeds, and push the updated branch with `vigilante git push` when finished.",
+		"Use `vigilante commit` for all commit-producing operations during conflict resolution. Use `vigilante gh issue comment` for progress and failures, rerun `go test ./...` after conflict resolution succeeds, and push the updated branch with `vigilante git push` when finished.",
 		"If you cannot preserve the issue intent safely, leave a concise GitHub blocker comment and exit with a non-zero status.",
 	)
 	if strings.TrimSpace(session.BranchDiffSummary) != "" {
@@ -542,7 +542,7 @@ func BuildCIRemediationPromptForRuntime(runtime string, target state.WatchTarget
 	)
 	lines = append(lines, commitIdentityPolicyLines()...)
 	lines = append(lines,
-		"Use `vigilante gh issue comment` for progress updates and blockers, push any successful fix to the existing PR branch with `vigilante git push`, and do not open a new pull request.",
+		"Use `vigilante commit` for all commit-producing operations. Use `vigilante gh issue comment` for progress updates and blockers, push any successful fix to the existing PR branch with `vigilante git push`, and do not open a new pull request.",
 		"If GitHub exposes a failing check summary or log URL during your investigation, use it. At minimum, work from the failing check identifiers listed above.",
 		"If you cannot fix the failure safely, leave a concise GitHub comment explaining the blocker and exit with a non-zero status so Vigilante can stop and hand off to a human.",
 		"Keep the changes minimal and focused on restoring CI for the existing pull request.",
@@ -561,6 +561,7 @@ func runtimeUsesInlineSkillHeader(runtime string) bool {
 
 func commitIdentityPolicyLines() []string {
 	return []string{
+		"Use `vigilante commit` for all commit-producing operations. Do not use `git commit` or GitHub CLI commit flows directly.",
 		"Any commit, amend, rebase rewrite, or conflict-resolution commit must preserve the user's existing git author, committer, and signing configuration. Commit on behalf of the user and do not overwrite `git config` with a coding-agent identity.",
 		"Do not add `Co-authored by:` trailers or any other agent attribution for Codex, Claude, Gemini, or similar coding-agent identities.",
 	}

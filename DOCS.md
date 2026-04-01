@@ -191,6 +191,17 @@ vigilante docker compose ps
 
 The proxy preserves the underlying tool's stdout, stderr, and exit status. Telemetry intentionally avoids raw positional arguments, flag values, repo slugs, tokens, paths, prompts, and free-form text.
 
+### Commit command
+
+`vigilante commit` is the required commit entrypoint for all coding-agent workflows. It wraps `git commit` while preserving the user's configured git author, committer, and signing behavior. Agent attribution lines in commit messages are stripped automatically.
+
+```sh
+vigilante commit -m "Fix validation logic"
+vigilante commit --amend --no-edit
+```
+
+Coding agents must use `vigilante commit` instead of `git commit` or GitHub CLI commit flows. This ensures that all agent-produced commits remain user-authored and signed.
+
 ## Installation
 
 Install `vigilante` with Homebrew:

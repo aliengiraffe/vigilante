@@ -196,6 +196,7 @@ func TestRunSupportsTopLevelHelpFlags(t *testing.T) {
 				"vigilante watch",
 				"vigilante status",
 				"vigilante service restart",
+				"vigilante commit [git-commit-flags...]",
 				"vigilante completion <bash|fish|zsh>",
 				"vigilante <gh|git|docker> ...",
 				`Use "vigilante <command> --help" for command-specific usage.`,
@@ -288,6 +289,79 @@ func TestRunReturnsUnderlyingProxyExitCode(t *testing.T) {
 
 	if got := app.Run(context.Background(), []string{"git", "status"}); got != 17 {
 		t.Fatalf("Run() = %d, want %d", got, 17)
+	}
+}
+
+func TestRunCommitCommandProxiesToGitCommit(t *testing.T) {
+	app := New()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = &stderr
+	var gotName string
+	var gotArgs []string
+	app.proxyExec = func(_ context.Context, _ io.Reader, out io.Writer, _ io.Writer, name string, args ...string) (int, error) {
+		gotName = name
+		gotArgs = append([]string(nil), args...)
+		return 0, nil
+	}
+
+	exitCode := app.Run(context.Background(), []string{"commit", "-m", "Fix bug"})
+	if exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d", exitCode)
+	}
+	if gotName != "git" {
+		t.Fatalf("commit tool = %q, want %q", gotName, "git")
+	}
+	if got, want := strings.Join(gotArgs, " "), "commit -m Fix bug"; got != want {
+		t.Fatalf("commit args = %q, want %q", got, want)
+	}
+}
+
+func TestRunCommitCommandSanitizesMessage(t *testing.T) {
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	var gotArgs []string
+	app.proxyExec = func(_ context.Context, _ io.Reader, _ io.Writer, _ io.Writer, _ string, args ...string) (int, error) {
+		gotArgs = append([]string(nil), args...)
+		return 0, nil
+	}
+
+	exitCode := app.Run(context.Background(), []string{"commit", "-m", "Fix bug\n\nGenerated with Codex"})
+	if exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d", exitCode)
+	}
+	if got, want := strings.Join(gotArgs, " "), "commit -m Fix bug"; got != want {
+		t.Fatalf("commit args = %q, want %q", got, want)
+	}
+}
+
+func TestRunCommitCommandReturnsUnderlyingExitCode(t *testing.T) {
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.proxyExec = func(context.Context, io.Reader, io.Writer, io.Writer, string, ...string) (int, error) {
+		return 1, nil
+	}
+
+	if got := app.Run(context.Background(), []string{"commit", "-m", "test"}); got != 1 {
+		t.Fatalf("Run() = %d, want %d", got, 1)
+	}
+}
+
+func TestRunCommitCommandHelp(t *testing.T) {
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+
+	exitCode := app.Run(context.Background(), []string{"commit", "--help"})
+	if exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d", exitCode)
+	}
+	if !strings.Contains(stdout.String(), "vigilante commit") {
+		t.Fatalf("expected help output to mention vigilante commit, got %q", stdout.String())
 	}
 }
 
