@@ -13,7 +13,7 @@ func securityGuidanceForClassification(classification repo.Classification) strin
 		sections = append(sections, nodeJSSecurityGuidance(classification))
 	}
 	if slices.Contains(classification.TechStacks, repo.TechStackGo) {
-		sections = append(sections, goSecurityGuidance())
+		sections = append(sections, goSecurityGuidance(classification))
 	}
 	return strings.Join(sections, "\n")
 }
@@ -90,7 +90,7 @@ func monorepoSecurityGuidance() []string {
 	}
 }
 
-func goSecurityGuidance() string {
+func goSecurityGuidance(classification repo.Classification) string {
 	sections := []string{
 		"Go security and tooling guidance for this repository (apply where relevant to touched code and workflow — do not broaden issue scope):",
 	}
@@ -103,6 +103,9 @@ func goSecurityGuidance() string {
 	sections = append(sections, goCryptoSecurityGuidance()...)
 	sections = append(sections, goFuzzingGuidance()...)
 	sections = append(sections, goDependencyGuidance()...)
+	if isMixedLanguageGoRepo(classification) {
+		sections = append(sections, goMixedLanguageGuidance()...)
+	}
 	return strings.Join(sections, "\n")
 }
 
@@ -157,5 +160,19 @@ func goFuzzingGuidance() []string {
 func goDependencyGuidance() []string {
 	return []string{
 		"- Dependencies: prefer standard library packages when they cover the need. When adding new dependencies, check the Go vulnerability database via `govulncheck` or https://vuln.go.dev. Keep `go.mod` and `go.sum` consistent by running `go mod tidy` after dependency changes.",
+	}
+}
+
+func isMixedLanguageGoRepo(classification repo.Classification) bool {
+	if !slices.Contains(classification.TechStacks, repo.TechStackGo) {
+		return false
+	}
+	return slices.Contains(classification.TechStacks, repo.TechStackNodeJS) ||
+		classification.Shape == repo.ShapeMonorepo
+}
+
+func goMixedLanguageGuidance() []string {
+	return []string{
+		"- Mixed-language scope: this repository contains Go code alongside other languages or frontend assets. Scope Go tooling (`gofmt`, `go test`, `go vet`, `govulncheck`, Go linters) to Go source files and packages only. When frontend or Node.js code is also present, respect its own toolchain for frontend-scoped changes. When an issue touches both Go and frontend code, validate each side with its respective toolchain.",
 	}
 }

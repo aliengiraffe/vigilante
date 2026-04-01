@@ -32,6 +32,13 @@ description: Implement a GitHub issue end-to-end when Vigilante dispatches work 
 - Consider fuzz tests for parsers and input-handling logic (Go 1.18+ `func FuzzXxx`).
 - Do not store secrets, tokens, or credentials in source files.
 
+## Mixed-Language Repositories
+- A Go repository may include a frontend layer such as HTMX templates served from Go, a React or Next.js app in a subdirectory, or another frontend framework colocated with the Go backend.
+- Scope Go tooling (`gofmt`, `go test`, `go vet`, `govulncheck`, Go linters) to Go source files and packages only. Do not run Go tools against frontend code.
+- When the repository also has a Node.js or TypeScript frontend, respect its own toolchain (package manager, bundler, linter, test runner) for frontend-scoped changes. Check the prompt for detected tech stacks and process hints.
+- When an issue touches both Go backend and frontend code, validate each side with its own toolchain rather than validating only one side.
+- Do not assume a Go repository is Go-only. Read process hints and workspace signals in the prompt to understand the full repository structure.
+
 ## Workflow
 - Follow the base `vigilante-issue-implementation` workflow for issue comments, validation, push, and PR creation.
 - Use `vigilante commit` for all commit-producing operations. Do not use `git commit` or GitHub CLI commit flows directly.
