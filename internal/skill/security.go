@@ -21,6 +21,9 @@ func securityGuidanceForClassification(classification repo.Classification) strin
 	if slices.Contains(classification.TechStacks, repo.TechStackDocker) {
 		sections = append(sections, dockerSecurityGuidance(classification))
 	}
+	if slices.Contains(classification.TechStacks, repo.TechStackKubernetes) {
+		sections = append(sections, kubernetesSecurityGuidance())
+	}
 	return strings.Join(sections, "\n")
 }
 
@@ -271,5 +274,54 @@ func dockerRuntimeGuidance() []string {
 func dockerValidationGuidance() []string {
 	return []string{
 		"- Validation: when the repository defines image scanning, Docker build checks, buildx bake, provenance, or policy workflows, respect and preserve them. Run `docker build` or the repository's defined build command to verify Dockerfile changes compile successfully. Do not disable or weaken existing security scanning or build-check configurations.",
+	}
+}
+
+func kubernetesSecurityGuidance() string {
+	sections := []string{
+		"Kubernetes manifest and workload security guidance for this repository (apply where relevant to touched manifests — do not broaden issue scope):",
+	}
+	sections = append(sections, k8sServiceAccountGuidance()...)
+	sections = append(sections, k8sSecurityContextGuidance()...)
+	sections = append(sections, k8sRBACGuidance()...)
+	sections = append(sections, k8sImageSecurityGuidance()...)
+	sections = append(sections, k8sNetworkAndResourceGuidance()...)
+	sections = append(sections, k8sScopeGuidance()...)
+	return strings.Join(sections, "\n")
+}
+
+func k8sServiceAccountGuidance() []string {
+	return []string{
+		"- Service accounts: do not use the `default` service account for workloads. Create dedicated service accounts scoped to the workload. Set `automountServiceAccountToken: false` on pods and service accounts that do not need Kubernetes API access.",
+	}
+}
+
+func k8sSecurityContextGuidance() []string {
+	return []string{
+		"- Security context: set `runAsNonRoot: true` and specify a numeric `runAsUser` in the pod or container `securityContext`. Set `allowPrivilegeEscalation: false`. Use `readOnlyRootFilesystem: true` where the application supports it. Drop all capabilities (`capabilities.drop: [\"ALL\"]`) and add back only what is required. Prefer Restricted Pod Security Standards when the workload allows it.",
+	}
+}
+
+func k8sRBACGuidance() []string {
+	return []string{
+		"- RBAC: follow least-privilege principles. Prefer namespace-scoped `Role` and `RoleBinding` over `ClusterRole` and `ClusterRoleBinding` unless the workload genuinely needs cluster-wide access. Avoid wildcards (`*`) in RBAC rules for verbs, resources, or API groups.",
+	}
+}
+
+func k8sImageSecurityGuidance() []string {
+	return []string{
+		"- Image security: use image digests or pinned tags rather than `latest` or other mutable tags. Prefer images from trusted registries. Note when an image source is unverified. Be aware of image scanning and admission policies when the repository documents them.",
+	}
+}
+
+func k8sNetworkAndResourceGuidance() []string {
+	return []string{
+		"- Network and resources: when touching network-facing workloads, check whether a `NetworkPolicy` exists and preserve or extend it rather than removing restrictions. Set resource `requests` and `limits` on containers to prevent unbounded resource consumption. Do not remove existing resource constraints without explicit justification.",
+	}
+}
+
+func k8sScopeGuidance() []string {
+	return []string{
+		"- Scope: do not make broad cluster-wide changes when the issue only requires application-level manifest updates. Do not introduce cluster-admin RBAC, node-level access, or host-namespace usage unless the issue specifically requires it. Preserve existing security posture and improve it where relevant to the issue.",
 	}
 }

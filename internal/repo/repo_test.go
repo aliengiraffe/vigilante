@@ -764,6 +764,149 @@ func TestClassifyGoAndDockerRepoDetectsBoth(t *testing.T) {
 	}
 }
 
+func TestClassifyKubernetesRepoFromKustomization(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "kustomization.yaml"), []byte("resources:\n  - deployment.yaml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	hasK8s := false
+	for _, stack := range got.TechStacks {
+		if stack == TechStackKubernetes {
+			hasK8s = true
+		}
+	}
+	if !hasK8s {
+		t.Fatalf("expected kubernetes tech stack, got %#v", got.TechStacks)
+	}
+}
+
+func TestClassifyKubernetesRepoFromSkaffold(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "skaffold.yaml"), []byte("apiVersion: skaffold/v2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	hasK8s := false
+	for _, stack := range got.TechStacks {
+		if stack == TechStackKubernetes {
+			hasK8s = true
+		}
+	}
+	if !hasK8s {
+		t.Fatalf("expected kubernetes tech stack from skaffold.yaml, got %#v", got.TechStacks)
+	}
+}
+
+func TestClassifyKubernetesRepoFromHelmChart(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Chart.yaml"), []byte("apiVersion: v2\nname: demo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	hasK8s := false
+	for _, stack := range got.TechStacks {
+		if stack == TechStackKubernetes {
+			hasK8s = true
+		}
+	}
+	if !hasK8s {
+		t.Fatalf("expected kubernetes tech stack from Chart.yaml, got %#v", got.TechStacks)
+	}
+}
+
+func TestClassifyKubernetesRepoFromManifestDirectory(t *testing.T) {
+	dir := t.TempDir()
+	k8sDir := filepath.Join(dir, "k8s")
+	if err := os.MkdirAll(k8sDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(k8sDir, "deployment.yaml"), []byte("apiVersion: apps/v1\nkind: Deployment\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	hasK8s := false
+	for _, stack := range got.TechStacks {
+		if stack == TechStackKubernetes {
+			hasK8s = true
+		}
+	}
+	if !hasK8s {
+		t.Fatalf("expected kubernetes tech stack from k8s/ directory, got %#v", got.TechStacks)
+	}
+}
+
+func TestClassifyNonKubernetesRepoHasNoKubernetesTechStack(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	for _, stack := range got.TechStacks {
+		if stack == TechStackKubernetes {
+			t.Fatalf("unexpected kubernetes tech stack for non-Kubernetes repo")
+		}
+	}
+}
+
+func TestClassifyKubernetesAndGoRepoDetectsBoth(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "kustomization.yaml"), []byte("resources:\n  - deployment.yaml\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	hasGo := false
+	hasK8s := false
+	for _, stack := range got.TechStacks {
+		if stack == TechStackGo {
+			hasGo = true
+		}
+		if stack == TechStackKubernetes {
+			hasK8s = true
+		}
+	}
+	if !hasGo {
+		t.Fatalf("expected go tech stack, got %#v", got.TechStacks)
+	}
+	if !hasK8s {
+		t.Fatalf("expected kubernetes tech stack, got %#v", got.TechStacks)
+	}
+}
+
+func TestClassifyKubernetesNotDetectedFromNonK8sYAML(t *testing.T) {
+	dir := t.TempDir()
+	yamlDir := filepath.Join(dir, "k8s")
+	if err := os.MkdirAll(yamlDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(yamlDir, "config.yaml"), []byte("key: value\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	for _, stack := range got.TechStacks {
+		if stack == TechStackKubernetes {
+			t.Fatalf("should not detect kubernetes from non-Kubernetes YAML")
+		}
+	}
+}
+
 func TestExpandPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

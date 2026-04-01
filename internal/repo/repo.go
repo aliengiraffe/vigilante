@@ -39,6 +39,7 @@ const (
 	TechStackGo            TechStack = "go"
 	TechStackGitHubActions TechStack = "github-actions"
 	TechStackDocker        TechStack = "docker"
+	TechStackKubernetes    TechStack = "kubernetes"
 )
 
 type ProcessHints struct {
@@ -229,6 +230,7 @@ func Classify(path string) Classification {
 	detectGoTechStack(absPath, &classification)
 	detectGitHubActionsTechStack(absPath, &classification)
 	detectDockerTechStack(absPath, &classification)
+	detectKubernetesTechStack(absPath, &classification)
 
 	slices.Sort(classification.ProcessHints.GradleSettingsFiles)
 	slices.Sort(classification.ProcessHints.GradleRootBuildFiles)
@@ -454,6 +456,53 @@ func detectDockerTechStack(absPath string, classification *Classification) {
 		return
 	}
 	classification.TechStacks = append(classification.TechStacks, TechStackDocker)
+}
+
+func detectKubernetesTechStack(absPath string, classification *Classification) {
+	// Direct Kubernetes manifest signals at root level.
+	for _, name := range []string{"kustomization.yaml", "kustomization.yml", "skaffold.yaml"} {
+		if fileExists(filepath.Join(absPath, name)) {
+			classification.TechStacks = append(classification.TechStacks, TechStackKubernetes)
+			return
+		}
+	}
+	// Helm chart signal.
+	if fileExists(filepath.Join(absPath, "Chart.yaml")) {
+		classification.TechStacks = append(classification.TechStacks, TechStackKubernetes)
+		return
+	}
+	// Common manifest directories containing Kubernetes resource YAML.
+	for _, dir := range []string{"k8s", "kubernetes", "manifests", "deploy", "base", "overlays", "helm"} {
+		dirPath := filepath.Join(absPath, dir)
+		if hasKubernetesYAML(dirPath) {
+			classification.TechStacks = append(classification.TechStacks, TechStackKubernetes)
+			return
+		}
+	}
+}
+
+func hasKubernetesYAML(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml") {
+			data, err := os.ReadFile(filepath.Join(dir, name))
+			if err != nil {
+				continue
+			}
+			content := string(data)
+			if strings.Contains(content, "apiVersion:") && strings.Contains(content, "kind:") {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func isGradleMultiProject(path string, settingsFiles []string) bool {

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vigilante Kubernetes Issue Implementation"
+  short_description: "Implement a Vigilante-dispatched issue in a Kubernetes-focused repository with manifest hardening and workload security guidance"
+  default_prompt: "Use $vigilante-issue-implementation-on-kubernetes to implement the assigned Kubernetes issue in the provided worktree, follow manifest security best practices, comment on the issue, and open a PR."

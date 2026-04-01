@@ -1542,6 +1542,54 @@ func TestIssueImplementationSkillPrefersMonorepoOverDockerForDockerMonorepo(t *t
 	}
 }
 
+func TestIssueImplementationSkillSelectsKubernetesForK8sRepo(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackKubernetes},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnKubernetes {
+		t.Fatalf("expected kubernetes skill, got %s", got)
+	}
+}
+
+func TestIssueImplementationSkillFallsBackForNonK8sRepo(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape: repo.ShapeTraditional,
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementation {
+		t.Fatalf("expected default skill, got %s", got)
+	}
+}
+
+func TestIssueImplementationSkillPrefersKubernetesOverGoForK8sRepo(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackKubernetes, repo.TechStackGo},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnKubernetes {
+		t.Fatalf("expected kubernetes skill over go for K8s+Go repo, got %s", got)
+	}
+}
+
+func TestIssueImplementationSkillPrefersMonorepoOverKubernetes(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:         repo.ShapeMonorepo,
+			MonorepoStack: repo.MonorepoStackUnknown,
+			TechStacks:    []repo.TechStack{repo.TechStackKubernetes},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnMonorepo {
+		t.Fatalf("expected monorepo skill for K8s monorepo, got %s", got)
+	}
+}
+
 func TestBuildIssuePromptForDockerRepoIncludesDockerSecurityGuidance(t *testing.T) {
 	target := state.WatchTarget{
 		Repo: "owner/repo",
@@ -1570,6 +1618,36 @@ func TestBuildIssuePromptForDockerRepoIncludesDockerSecurityGuidance(t *testing.
 	}
 }
 
+func TestBuildIssuePromptForK8sRepoIncludesK8sSecurityGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackKubernetes},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	for _, text := range []string{
+		"Kubernetes manifest and workload security guidance",
+		"Service accounts",
+		"Security context",
+		"runAsNonRoot",
+		"RBAC",
+		"Image security",
+		"NetworkPolicy",
+		"do not broaden issue scope",
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q", text)
+		}
+	}
+}
+
 func TestBuildIssuePromptForDockerRepoSelectsDockerSkill(t *testing.T) {
 	target := state.WatchTarget{
 		Repo: "owner/repo",
@@ -1589,6 +1667,25 @@ func TestBuildIssuePromptForDockerRepoSelectsDockerSkill(t *testing.T) {
 	}
 }
 
+func TestBuildIssuePromptForK8sRepoSelectsK8sSkill(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackKubernetes},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if !strings.Contains(prompt, VigilanteIssueImplementationOnKubernetes) {
+		t.Fatalf("prompt should reference Kubernetes skill")
+	}
+}
+
 func TestBuildIssuePromptForNonDockerRepoDoesNotIncludeDockerGuidance(t *testing.T) {
 	target := state.WatchTarget{
 		Repo: "owner/repo",
@@ -1604,6 +1701,24 @@ func TestBuildIssuePromptForNonDockerRepoDoesNotIncludeDockerGuidance(t *testing
 
 	if strings.Contains(prompt, "Docker and container security guidance") {
 		t.Fatalf("prompt should not include Docker guidance for non-Docker repo")
+	}
+}
+
+func TestBuildIssuePromptForNonK8sRepoDoesNotIncludeK8sGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape: repo.ShapeTraditional,
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if strings.Contains(prompt, "Kubernetes manifest and workload security guidance") {
+		t.Fatalf("prompt should not include Kubernetes guidance for non-K8s repo")
 	}
 }
 
