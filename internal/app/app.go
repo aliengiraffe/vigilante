@@ -545,6 +545,8 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 	}
 
 	switch args[0] {
+	case "commit":
+		return a.runCommitCommand(ctx, args[1:])
 	case "setup":
 		fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 		configureFlagSet(fs, func(w io.Writer) {
@@ -720,6 +722,29 @@ func runProxyBinary(ctx context.Context, stdin io.Reader, stdout io.Writer, stde
 		return 0, err
 	}
 	return 0, nil
+}
+
+func (a *App) runCommitCommand(ctx context.Context, args []string) error {
+	if len(args) == 1 && isHelpToken(args[0]) {
+		fmt.Fprintln(a.stdout, "usage: vigilante commit [git-commit-flags...]")
+		fmt.Fprintln(a.stdout)
+		fmt.Fprintln(a.stdout, "Create a commit preserving the user's git author, committer,")
+		fmt.Fprintln(a.stdout, "and signing configuration. Agent attribution is stripped from")
+		fmt.Fprintln(a.stdout, "the commit message automatically.")
+		return nil
+	}
+	sanitizedArgs, sanitizedStdin, err := ghcli.SanitizeProxyInvocation("git", append([]string{"commit"}, args...), a.stdin)
+	if err != nil {
+		return err
+	}
+	exitCode, err := a.proxyExec(ctx, sanitizedStdin, a.stdout, a.stderr, "git", sanitizedArgs...)
+	if err != nil {
+		return err
+	}
+	if exitCode != 0 {
+		return commandExitError{code: exitCode}
+	}
+	return nil
 }
 
 func (a *App) runResumeCommand(ctx context.Context, args []string) error {
@@ -5560,6 +5585,7 @@ func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  vigilante service restart")
 	fmt.Fprintln(w, "  vigilante daemon run [--once] [--interval duration]")
 	fmt.Fprintln(w, "  vigilante issue create --repo <owner/name> [--provider value] <prompt...>")
+	fmt.Fprintln(w, "  vigilante commit [git-commit-flags...]")
 	fmt.Fprintln(w, "  vigilante completion <bash|fish|zsh>")
 	fmt.Fprintln(w, "  vigilante <gh|git|docker> ...")
 	fmt.Fprintln(w)
