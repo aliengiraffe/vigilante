@@ -4092,6 +4092,71 @@ func TestShouldAutoRecoverBlockedSession(t *testing.T) {
 	}
 }
 
+func TestNewAppClockReturnsLiveTime(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	t1 := app.clock()
+	time.Sleep(5 * time.Millisecond)
+	t2 := app.clock()
+	if !t2.After(t1) {
+		t.Fatalf("expected clock to advance: t1=%v t2=%v", t1, t2)
+	}
+	if t1.Location() != time.UTC {
+		t.Fatalf("expected UTC, got %v", t1.Location())
+	}
+}
+
+func TestBlockedDirtyWorktreeSessionSkipsAutoRecoveryBeforeTimeout(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 3, 12, 18, 0, 0, 0, time.UTC)
+	// Session was blocked only 3 minutes ago, well within the 10-minute auto-recovery timeout.
+	recent := now.Add(-3 * time.Minute)
+	if err := os.Chtimes(worktreePath, recent, recent); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.clock = func() time.Time { return now }
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1/comments": "[]",
+		},
+	}
+
+	inactive, err := app.blockedSessionExceededInactivityTimeout(context.Background(), state.Session{
+		Repo:         "owner/repo",
+		IssueNumber:  1,
+		Branch:       "vigilante/issue-1",
+		WorktreePath: worktreePath,
+		Status:       state.SessionStatusBlocked,
+		BlockedAt:    recent.Format(time.RFC3339),
+		BlockedStage: "pr_maintenance",
+		BlockedReason: state.BlockedReason{
+			Kind:    "dirty_worktree",
+			Summary: "worktree is not clean before PR maintenance",
+		},
+		UpdatedAt: recent.Format(time.RFC3339),
+	}, 10*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inactive {
+		t.Fatal("expected recently blocked dirty-worktree session to NOT exceed inactivity timeout before auto-recovery window")
+	}
+}
+
 func TestScanOnceCleansUpBlockedSessionAfterDefaultInactivityTimeout(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))

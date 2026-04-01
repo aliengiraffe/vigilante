@@ -174,7 +174,7 @@ func New() *App {
 		stderr:       os.Stderr,
 		state:        store,
 		logger:       logger,
-		clock:        time.Now().UTC,
+		clock:        func() time.Time { return time.Now().UTC() },
 		issueTracker: ghBackend,
 		labelManager: ghBackend,
 		prManager:    ghBackend,
