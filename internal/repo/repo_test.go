@@ -361,7 +361,7 @@ func TestClassifyNodeJSRepoDefaultsToNpmWhenNoLockFile(t *testing.T) {
 	}
 }
 
-func TestClassifyNonNodeJSRepoHasNoTechStack(t *testing.T) {
+func TestClassifyNonNodeJSRepoHasNoNodeJSTechStack(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -369,8 +369,10 @@ func TestClassifyNonNodeJSRepoHasNoTechStack(t *testing.T) {
 
 	got := Classify(dir)
 
-	if len(got.TechStacks) != 0 {
-		t.Fatalf("expected no tech stacks for Go repo, got %#v", got.TechStacks)
+	for _, stack := range got.TechStacks {
+		if stack == TechStackNodeJS {
+			t.Fatalf("expected no nodejs tech stack for Go-only repo, got %#v", got.TechStacks)
+		}
 	}
 	if len(got.ProcessHints.NodePackageManagers) != 0 {
 		t.Fatalf("expected no node package managers, got %#v", got.ProcessHints.NodePackageManagers)
@@ -408,6 +410,66 @@ func TestClassifyTurborepoMonorepoAlsoDetectsNodeJS(t *testing.T) {
 	}
 	if len(got.ProcessHints.TypeScriptConfigs) != 1 {
 		t.Fatalf("expected tsconfig, got %#v", got.ProcessHints.TypeScriptConfigs)
+	}
+}
+
+func TestClassifyGoRepoFromGoMod(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if got.Shape != ShapeTraditional {
+		t.Fatalf("expected traditional shape, got %#v", got.Shape)
+	}
+	if len(got.TechStacks) != 1 || got.TechStacks[0] != TechStackGo {
+		t.Fatalf("expected go tech stack, got %#v", got.TechStacks)
+	}
+}
+
+func TestClassifyNonGoRepoHasNoGoTechStack(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.py"), []byte("print('hello')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	for _, stack := range got.TechStacks {
+		if stack == TechStackGo {
+			t.Fatalf("unexpected go tech stack for non-Go repo")
+		}
+	}
+}
+
+func TestClassifyGoAndNodeJSRepoDetectsBoth(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte("{\"name\":\"demo\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	hasGo := false
+	hasNodeJS := false
+	for _, stack := range got.TechStacks {
+		if stack == TechStackGo {
+			hasGo = true
+		}
+		if stack == TechStackNodeJS {
+			hasNodeJS = true
+		}
+	}
+	if !hasGo {
+		t.Fatalf("expected go tech stack, got %#v", got.TechStacks)
+	}
+	if !hasNodeJS {
+		t.Fatalf("expected nodejs tech stack, got %#v", got.TechStacks)
 	}
 }
 

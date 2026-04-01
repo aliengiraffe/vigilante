@@ -173,3 +173,75 @@ func TestSecurityGuidanceDoesNotBroadenScope(t *testing.T) {
 		t.Fatalf("guidance missing scope-limiting instruction")
 	}
 }
+
+func TestSecurityGuidanceForGoRepo(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackGo},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	for _, text := range []string{
+		"Go security and tooling guidance",
+		"gofmt",
+		"go test",
+		"go vet",
+		"govulncheck",
+		"golangci-lint",
+		"MixedCaps",
+		"crypto/rand",
+		"crypto/subtle.ConstantTimeCompare",
+		"FuzzXxx",
+		"go mod tidy",
+		"do not broaden issue scope",
+	} {
+		if !strings.Contains(guidance, text) {
+			t.Fatalf("Go guidance missing %q", text)
+		}
+	}
+}
+
+func TestSecurityGuidanceEmptyForGoRepoWithoutGoMod(t *testing.T) {
+	classification := repo.Classification{
+		Shape: repo.ShapeTraditional,
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	if strings.Contains(guidance, "Go security and tooling guidance") {
+		t.Fatalf("guidance should not include Go section for non-Go repo")
+	}
+}
+
+func TestSecurityGuidanceForGoAndNodeJSRepo(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackNodeJS, repo.TechStackGo},
+		ProcessHints: repo.ProcessHints{
+			NodePackageManagers: []string{"npm"},
+		},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	if !strings.Contains(guidance, "JS/TS/Node security guidance") {
+		t.Fatalf("guidance missing Node.js section for dual-stack repo")
+	}
+	if !strings.Contains(guidance, "Go security and tooling guidance") {
+		t.Fatalf("guidance missing Go section for dual-stack repo")
+	}
+}
+
+func TestGoSecurityGuidanceDoesNotBroadenScope(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackGo},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	if !strings.Contains(guidance, "do not broaden issue scope") {
+		t.Fatalf("Go guidance missing scope-limiting instruction")
+	}
+}
