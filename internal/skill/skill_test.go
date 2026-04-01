@@ -1182,3 +1182,196 @@ func TestBuildIssueCreatePromptDefaultUsesCodexRuntime(t *testing.T) {
 		t.Fatalf("expected default to use codex runtime")
 	}
 }
+
+func TestIssueImplementationSkillSelectsGoForGoRepo(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackGo},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnGo {
+		t.Fatalf("expected go skill, got %s", got)
+	}
+}
+
+func TestIssueImplementationSkillFallsBackForNonGoTraditionalRepo(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape: repo.ShapeTraditional,
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementation {
+		t.Fatalf("expected default traditional skill, got %s", got)
+	}
+}
+
+func TestIssueImplementationSkillPrefersMonorepoOverGo(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:         repo.ShapeMonorepo,
+			MonorepoStack: repo.MonorepoStackUnknown,
+			TechStacks:    []repo.TechStack{repo.TechStackGo},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnMonorepo {
+		t.Fatalf("expected monorepo skill for Go monorepo, got %s", got)
+	}
+}
+
+func TestBuildIssuePromptForGoRepoIncludesGoSecurityGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackGo},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	for _, text := range []string{
+		"Go security and tooling guidance",
+		"gofmt",
+		"go test",
+		"go vet",
+		"govulncheck",
+		"crypto/rand",
+		"do not broaden issue scope",
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q", text)
+		}
+	}
+}
+
+func TestBuildIssuePromptForGoRepoSelectsGoSkill(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackGo},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if !strings.Contains(prompt, VigilanteIssueImplementationOnGo) {
+		t.Fatalf("prompt should reference Go skill, got: %s", prompt[:300])
+	}
+}
+
+func TestBuildIssuePromptForNonGoRepoDoesNotIncludeGoGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape: repo.ShapeTraditional,
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if strings.Contains(prompt, "Go security and tooling guidance") {
+		t.Fatalf("prompt should not include Go guidance for non-Go repo")
+	}
+}
+
+func TestBuildIssuePromptForGoMonorepoIncludesGoGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:         repo.ShapeMonorepo,
+			MonorepoStack: repo.MonorepoStackTurborepo,
+			TechStacks:    []repo.TechStack{repo.TechStackGo, repo.TechStackNodeJS},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	for _, text := range []string{
+		"Go security and tooling guidance",
+		"gofmt",
+		"go test",
+		"go vet",
+		"Mixed-language scope",
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q for Go monorepo", text)
+		}
+	}
+	if !strings.Contains(prompt, "JS/TS/Node security guidance") {
+		t.Fatalf("prompt missing Node.js guidance for Go+Node monorepo")
+	}
+}
+
+func TestBuildIssuePromptForGoAndNodeJSTraditionalRepoIncludesMixedGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackGo, repo.TechStackNodeJS},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if !strings.Contains(prompt, "Go security and tooling guidance") {
+		t.Fatalf("prompt missing Go guidance")
+	}
+	if !strings.Contains(prompt, "JS/TS/Node security guidance") {
+		t.Fatalf("prompt missing Node.js guidance")
+	}
+	if !strings.Contains(prompt, "Mixed-language scope") {
+		t.Fatalf("prompt missing mixed-language guidance for Go+Node.js traditional repo")
+	}
+	if !strings.Contains(prompt, VigilanteIssueImplementationOnGo) {
+		t.Fatalf("prompt should select Go skill for traditional Go+Node.js repo")
+	}
+}
+
+func TestBuildIssuePromptForGoOnlyTraditionalRepoOmitsMixedGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackGo},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if strings.Contains(prompt, "Mixed-language scope") {
+		t.Fatalf("prompt should not include mixed-language guidance for Go-only traditional repo")
+	}
+}
+
+func TestIssueImplementationSkillSelectsMonorepoForGoTurborepo(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:         repo.ShapeMonorepo,
+			MonorepoStack: repo.MonorepoStackTurborepo,
+			TechStacks:    []repo.TechStack{repo.TechStackGo, repo.TechStackNodeJS},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnTurborepo {
+		t.Fatalf("expected turborepo skill for Go+Node turborepo, got %s", got)
+	}
+}

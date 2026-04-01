@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vigilante Go Issue Implementation"
+  short_description: "Implement a Vigilante-dispatched issue in a Go repository with idiomatic tooling and security guidance"
+  default_prompt: "Use $vigilante-issue-implementation-on-go to implement the assigned Go issue in the provided worktree, follow idiomatic Go conventions, comment on the issue, and open a PR."

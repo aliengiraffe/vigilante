@@ -8,10 +8,14 @@ import (
 )
 
 func securityGuidanceForClassification(classification repo.Classification) string {
-	if !slices.Contains(classification.TechStacks, repo.TechStackNodeJS) {
-		return ""
+	var sections []string
+	if slices.Contains(classification.TechStacks, repo.TechStackNodeJS) {
+		sections = append(sections, nodeJSSecurityGuidance(classification))
 	}
-	return nodeJSSecurityGuidance(classification)
+	if slices.Contains(classification.TechStacks, repo.TechStackGo) {
+		sections = append(sections, goSecurityGuidance(classification))
+	}
+	return strings.Join(sections, "\n")
 }
 
 func nodeJSSecurityGuidance(classification repo.Classification) string {
@@ -83,5 +87,92 @@ func staticAnalysisGuidance() []string {
 func monorepoSecurityGuidance() []string {
 	return []string{
 		"- Monorepo security: respect workspace dependency boundaries — do not introduce phantom dependencies (imports that rely on hoisting rather than explicit package.json declarations). Validate that shared packages do not leak internal secrets or credentials through exports. Be cautious with remote build caches that may expose environment variables or sensitive build artifacts. Ensure workspace publish workflows verify package integrity before publishing to registries.",
+	}
+}
+
+func goSecurityGuidance(classification repo.Classification) string {
+	sections := []string{
+		"Go security and tooling guidance for this repository (apply where relevant to touched code and workflow — do not broaden issue scope):",
+	}
+	sections = append(sections, goFormattingGuidance()...)
+	sections = append(sections, goTestingGuidance()...)
+	sections = append(sections, goVetGuidance()...)
+	sections = append(sections, goVulncheckGuidance()...)
+	sections = append(sections, goLintGuidance()...)
+	sections = append(sections, goEffectiveGoGuidance()...)
+	sections = append(sections, goCryptoSecurityGuidance()...)
+	sections = append(sections, goFuzzingGuidance()...)
+	sections = append(sections, goDependencyGuidance()...)
+	if isMixedLanguageGoRepo(classification) {
+		sections = append(sections, goMixedLanguageGuidance()...)
+	}
+	return strings.Join(sections, "\n")
+}
+
+func goFormattingGuidance() []string {
+	return []string{
+		"- Formatting: run `gofmt` or `go fmt` on all touched Go files before committing. Do not hand-format Go code — let the standard formatter handle layout. If the repository uses `goimports`, use that instead.",
+	}
+}
+
+func goTestingGuidance() []string {
+	return []string{
+		"- Testing: run targeted `go test ./path/to/package/...` for changed packages first. Use broader `go test ./...` when changes cross package boundaries or when the targeted scope is unclear. Use `-race` when practical to catch data races. Use `-count=1` to disable test caching when investigating flaky results.",
+	}
+}
+
+func goVetGuidance() []string {
+	return []string{
+		"- Static analysis: run `go vet ./...` on touched packages to catch common mistakes such as printf format mismatches, unreachable code, and incorrect struct tags.",
+	}
+}
+
+func goVulncheckGuidance() []string {
+	return []string{
+		"- Vulnerability checking: run `govulncheck ./...` when it is installed and the change touches dependencies or security-sensitive code. `govulncheck` reports only vulnerabilities that affect actually-called code paths. If `govulncheck` is not available, do not fabricate its output — note its absence and continue with other validation.",
+	}
+}
+
+func goLintGuidance() []string {
+	return []string{
+		"- Linting: use the repository's established lint tooling. When `golangci-lint` is configured (`.golangci.yml` or `.golangci.yaml`), run `golangci-lint run` on touched packages. When `staticcheck` is the project standard, use that. Do not introduce a different linter unless the issue specifically requires it. If no project linter is configured, `go vet` is sufficient.",
+	}
+}
+
+func goEffectiveGoGuidance() []string {
+	return []string{
+		"- Idiomatic Go: follow Effective Go conventions. Use MixedCaps (not underscores) for multi-word names. Keep exported identifiers descriptive and unexported identifiers short. Return errors rather than panicking. Use short variable declarations (`:=`) where type is clear from context. Prefer simple, straightforward error handling with early returns. Write doc comments on exported identifiers starting with the identifier name. Keep packages focused and APIs minimal.",
+	}
+}
+
+func goCryptoSecurityGuidance() []string {
+	return []string{
+		"- Cryptography and secrets: use `crypto/rand` instead of `math/rand` for security-sensitive values. Prefer standard library crypto packages (`crypto/tls`, `crypto/aes`, `crypto/sha256`) over third-party alternatives unless there is a specific, documented reason. Do not store secrets, tokens, or credentials in source files. Use `crypto/subtle.ConstantTimeCompare` for comparing secret values to avoid timing attacks.",
+	}
+}
+
+func goFuzzingGuidance() []string {
+	return []string{
+		"- Fuzzing: when adding or modifying parsers, decoders, or input-handling logic, consider adding a fuzz test (`func FuzzXxx(f *testing.F)`) using Go's built-in fuzzing support (Go 1.18+). This is optional and should only be added when the changed code processes untrusted or complex input.",
+	}
+}
+
+func goDependencyGuidance() []string {
+	return []string{
+		"- Dependencies: prefer standard library packages when they cover the need. When adding new dependencies, check the Go vulnerability database via `govulncheck` or https://vuln.go.dev. Keep `go.mod` and `go.sum` consistent by running `go mod tidy` after dependency changes.",
+	}
+}
+
+func isMixedLanguageGoRepo(classification repo.Classification) bool {
+	if !slices.Contains(classification.TechStacks, repo.TechStackGo) {
+		return false
+	}
+	return slices.Contains(classification.TechStacks, repo.TechStackNodeJS) ||
+		classification.Shape == repo.ShapeMonorepo
+}
+
+func goMixedLanguageGuidance() []string {
+	return []string{
+		"- Mixed-language scope: this repository contains Go code alongside other languages or frontend assets. Scope Go tooling (`gofmt`, `go test`, `go vet`, `govulncheck`, Go linters) to Go source files and packages only. When frontend or Node.js code is also present, respect its own toolchain for frontend-scoped changes. When an issue touches both Go and frontend code, validate each side with its respective toolchain.",
 	}
 }

@@ -36,6 +36,7 @@ type TechStack string
 
 const (
 	TechStackNodeJS TechStack = "nodejs"
+	TechStackGo     TechStack = "go"
 )
 
 type ProcessHints struct {
@@ -222,6 +223,7 @@ func Classify(path string) Classification {
 		classification.Shape = ShapeGradleMultiProject
 	}
 	detectNodeJSTechStack(absPath, &classification)
+	detectGoTechStack(absPath, &classification)
 
 	slices.Sort(classification.ProcessHints.GradleSettingsFiles)
 	slices.Sort(classification.ProcessHints.GradleRootBuildFiles)
@@ -401,6 +403,13 @@ func detectNodeJSTechStack(absPath string, classification *Classification) {
 	}
 
 	classification.TechStacks = append(classification.TechStacks, TechStackNodeJS)
+}
+
+func detectGoTechStack(absPath string, classification *Classification) {
+	if !fileExists(filepath.Join(absPath, "go.mod")) {
+		return
+	}
+	classification.TechStacks = append(classification.TechStacks, TechStackGo)
 }
 
 func isGradleMultiProject(path string, settingsFiles []string) bool {
