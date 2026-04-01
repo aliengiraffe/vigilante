@@ -1504,3 +1504,164 @@ func TestIssueImplementationSkillSelectsMonorepoForGoTurborepo(t *testing.T) {
 		t.Fatalf("expected turborepo skill for Go+Node turborepo, got %s", got)
 	}
 }
+
+func TestIssueImplementationSkillSelectsDockerForDockerOnlyRepo(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackDocker},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnDocker {
+		t.Fatalf("expected docker skill, got %s", got)
+	}
+}
+
+func TestIssueImplementationSkillPrefersGoOverDockerForGoDockerRepo(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackGo, repo.TechStackDocker},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnGo {
+		t.Fatalf("expected go skill for Go+Docker repo, got %s", got)
+	}
+}
+
+func TestIssueImplementationSkillPrefersMonorepoOverDockerForDockerMonorepo(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:         repo.ShapeMonorepo,
+			MonorepoStack: repo.MonorepoStackTurborepo,
+			TechStacks:    []repo.TechStack{repo.TechStackDocker, repo.TechStackNodeJS},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnTurborepo {
+		t.Fatalf("expected turborepo skill for Docker+Node turborepo, got %s", got)
+	}
+}
+
+func TestBuildIssuePromptForDockerRepoIncludesDockerSecurityGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackDocker},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	for _, text := range []string{
+		"Docker and container security guidance",
+		"pin base images",
+		"multi-stage builds",
+		"secret mounts",
+		"non-root user",
+		"do not broaden issue scope",
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q", text)
+		}
+	}
+}
+
+func TestBuildIssuePromptForDockerRepoSelectsDockerSkill(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackDocker},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if !strings.Contains(prompt, VigilanteIssueImplementationOnDocker) {
+		t.Fatalf("prompt should reference Docker skill, got: %s", prompt[:300])
+	}
+}
+
+func TestBuildIssuePromptForNonDockerRepoDoesNotIncludeDockerGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape: repo.ShapeTraditional,
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if strings.Contains(prompt, "Docker and container security guidance") {
+		t.Fatalf("prompt should not include Docker guidance for non-Docker repo")
+	}
+}
+
+func TestBuildIssuePromptForGoDockerRepoIncludesBothGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackGo, repo.TechStackDocker},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if !strings.Contains(prompt, "Go security and tooling guidance") {
+		t.Fatalf("prompt missing Go guidance for Go+Docker repo")
+	}
+	if !strings.Contains(prompt, "Docker and container security guidance") {
+		t.Fatalf("prompt missing Docker guidance for Go+Docker repo")
+	}
+	if !strings.Contains(prompt, VigilanteIssueImplementationOnGo) {
+		t.Fatalf("prompt should select Go skill for Go+Docker repo")
+	}
+}
+
+func TestDockerSkillIsBundled(t *testing.T) {
+	name := VigilanteIssueImplementationOnDocker
+	path := "skills/" + name + "/SKILL.md"
+	_, err := fs.Stat(skillassets.Skills, path)
+	if err != nil {
+		t.Fatalf("expected %s to be bundled: %v", name, err)
+	}
+}
+
+func TestDockerSkillCoversRequiredGuidanceAreas(t *testing.T) {
+	body, err := os.ReadFile(repoSkillPath(VigilanteIssueImplementationOnDocker))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := string(body)
+	for _, snippet := range []string{
+		"pin base images",
+		"multi-stage builds",
+		"WORKDIR",
+		"ARG",
+		"ENV",
+		"secret mounts",
+		".dockerignore",
+		"non-root user",
+		"vigilante commit",
+		"image scanning",
+	} {
+		if !strings.Contains(text, snippet) {
+			t.Fatalf("Docker skill missing required guidance: %q", snippet)
+		}
+	}
+}
