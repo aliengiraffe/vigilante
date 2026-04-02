@@ -37,6 +37,7 @@ type capturedAnalyticsEvent struct {
 
 type countingRunner struct {
 	base   testutil.FakeRunner
+	mu     sync.Mutex
 	counts map[string]int
 	mu     sync.Mutex
 }
@@ -3278,6 +3279,7 @@ func TestScanOnceLogsResumeCommentPollingSummaryInsteadOfRawCommand(t *testing.T
 	if err := app.ScanOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	app.waitForSessions()
 
 	logData, err := os.ReadFile(app.state.DaemonLogPath())
 	if err != nil {
