@@ -33,6 +33,9 @@ func securityGuidanceForClassification(classification repo.Classification) strin
 	if slices.Contains(classification.TechStacks, repo.TechStackJVM) {
 		sections = append(sections, javaKotlinSecurityGuidance(classification))
 	}
+	if slices.Contains(classification.TechStacks, repo.TechStackPHP) {
+		sections = append(sections, phpSecurityGuidance(classification))
+	}
 	return strings.Join(sections, "\n")
 }
 
@@ -532,5 +535,93 @@ func isMixedLanguageJVMRepo(classification repo.Classification) bool {
 func javaKotlinMixedLanguageGuidance() []string {
 	return []string{
 		"- Mixed-language scope: this repository contains Java/Kotlin code alongside other languages or multi-module tooling. Scope Gradle or Maven validation to the touched JVM modules or source sets, and use other toolchains only for the files they own. When an issue spans JVM code and another stack, validate each side with its native tooling.",
+	}
+}
+
+func phpSecurityGuidance(classification repo.Classification) string {
+	sections := []string{
+		"PHP security and tooling guidance for this repository (apply where relevant to touched code and workflow — do not broaden issue scope):",
+	}
+	sections = append(sections, phpComposerGuidance()...)
+	sections = append(sections, phpTestingGuidance()...)
+	sections = append(sections, phpStaticAnalysisGuidance()...)
+	sections = append(sections, phpFormattingGuidance()...)
+	sections = append(sections, phpPasswordHashingGuidance()...)
+	sections = append(sections, phpInputValidationGuidance()...)
+	sections = append(sections, phpSerializationGuidance()...)
+	sections = append(sections, phpSecretsGuidance()...)
+	sections = append(sections, phpDependencyAuditGuidance()...)
+	if isMixedLanguagePHPRepo(classification) {
+		sections = append(sections, phpMixedLanguageGuidance()...)
+	}
+	return strings.Join(sections, "\n")
+}
+
+func phpComposerGuidance() []string {
+	return []string{
+		"- Composer: use Composer-managed commands and dependency workflows. Run `composer install` (or `composer install --no-dev` for production) for reproducible installs from `composer.lock`. Run `composer update` only when intentionally upgrading dependencies. Prefer packages from Packagist and verify publisher trust before adding new dependencies.",
+	}
+}
+
+func phpTestingGuidance() []string {
+	return []string{
+		"- Testing: run targeted tests for changed code first using `vendor/bin/phpunit --filter ClassName` or the framework-native test command (e.g., `php artisan test`, `vendor/bin/pest`). Use broader `vendor/bin/phpunit` or equivalent when changes cross package or module boundaries. Respect the repository's test configuration (`phpunit.xml`, `phpunit.xml.dist`).",
+	}
+}
+
+func phpStaticAnalysisGuidance() []string {
+	return []string{
+		"- Static analysis: use the repository's established static-analysis tools. When PHPStan is configured (`phpstan.neon`, `phpstan.neon.dist`), run `vendor/bin/phpstan analyse`. When Psalm is configured (`psalm.xml`, `psalm.xml.dist`), run `vendor/bin/psalm`. Do not introduce a different static-analysis tool unless the issue specifically requires it. If no project analyzer is configured, skip this step.",
+	}
+}
+
+func phpFormattingGuidance() []string {
+	return []string{
+		"- Formatting: use the repository's established code-style tool. When PHP CS Fixer is configured (`.php-cs-fixer.php`, `.php-cs-fixer.dist.php`), run `vendor/bin/php-cs-fixer fix`. When PHP_CodeSniffer is configured (`phpcs.xml`, `phpcs.xml.dist`, `.phpcs.xml`), run `vendor/bin/phpcs` to check and `vendor/bin/phpcbf` to fix. Do not hand-format PHP code when an automated tool is available. Do not introduce a different formatter unless the issue specifically requires it.",
+	}
+}
+
+func phpPasswordHashingGuidance() []string {
+	return []string{
+		"- Password hashing: use `password_hash()` with `PASSWORD_DEFAULT` or `PASSWORD_BCRYPT` and verify with `password_verify()`. Never use `md5()`, `sha1()`, or `crypt()` directly for password storage. Use `password_needs_rehash()` to handle algorithm upgrades transparently.",
+	}
+}
+
+func phpInputValidationGuidance() []string {
+	return []string{
+		"- Input validation and output encoding: validate and sanitize all user input at system boundaries. Use parameterized queries or the framework's query builder to prevent SQL injection — never interpolate user input into raw SQL. Use context-appropriate output encoding (`htmlspecialchars()` with `ENT_QUOTES` for HTML, framework template escaping for views) to prevent XSS. Use framework-provided CSRF protection for state-changing requests.",
+	}
+}
+
+func phpSerializationGuidance() []string {
+	return []string{
+		"- Serialization: avoid `unserialize()` on untrusted data — it can lead to object-injection attacks. Use `json_decode()` and `json_encode()` for data interchange. When `unserialize()` is unavoidable, restrict allowed classes with the `allowed_classes` option.",
+	}
+}
+
+func phpSecretsGuidance() []string {
+	return []string{
+		"- Secrets and configuration: do not store secrets, tokens, credentials, or database passwords in source files. Use environment variables, framework-native secret management (e.g., `.env` files excluded from version control, Laravel `config/` with `env()`), or a dedicated secrets manager. Ensure `.env` files are listed in `.gitignore`.",
+	}
+}
+
+func phpDependencyAuditGuidance() []string {
+	return []string{
+		"- Dependency audit: run `composer audit` after dependency changes to check for known security vulnerabilities. Review `composer.lock` changes for unexpected package additions or version shifts.",
+	}
+}
+
+func isMixedLanguagePHPRepo(classification repo.Classification) bool {
+	if !slices.Contains(classification.TechStacks, repo.TechStackPHP) {
+		return false
+	}
+	return slices.Contains(classification.TechStacks, repo.TechStackNodeJS) ||
+		slices.Contains(classification.TechStacks, repo.TechStackGo) ||
+		classification.Shape == repo.ShapeMonorepo
+}
+
+func phpMixedLanguageGuidance() []string {
+	return []string{
+		"- Mixed-language scope: this repository contains PHP code alongside other languages or frontend assets. Scope PHP tooling (Composer, PHPUnit, PHPStan, Psalm, PHP CS Fixer) to PHP source files only. When frontend or Node.js code is also present, respect its own toolchain for frontend-scoped changes. When an issue touches both PHP and other code, validate each side with its respective toolchain.",
 	}
 }

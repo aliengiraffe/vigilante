@@ -2104,3 +2104,161 @@ func TestDockerSkillCoversRequiredGuidanceAreas(t *testing.T) {
 		}
 	}
 }
+
+func TestIssueImplementationSkillSelectsPHPForPHPRepo(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackPHP},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnPHP {
+		t.Fatalf("expected php skill, got %s", got)
+	}
+}
+
+func TestIssueImplementationSkillFallsBackForNonPHPTraditionalRepo(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape: repo.ShapeTraditional,
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementation {
+		t.Fatalf("expected default traditional skill, got %s", got)
+	}
+}
+
+func TestIssueImplementationSkillPrefersMonorepoOverPHP(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:         repo.ShapeMonorepo,
+			MonorepoStack: repo.MonorepoStackUnknown,
+			TechStacks:    []repo.TechStack{repo.TechStackPHP},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnMonorepo {
+		t.Fatalf("expected monorepo skill for PHP monorepo, got %s", got)
+	}
+}
+
+func TestIssueImplementationSkillPrefersGoOverPHP(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackGo, repo.TechStackPHP},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnGo {
+		t.Fatalf("expected go skill when both Go and PHP present, got %s", got)
+	}
+}
+
+func TestBuildIssuePromptForPHPRepoIncludesPHPSecurityGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackPHP},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	for _, text := range []string{
+		"PHP security and tooling guidance",
+		"Composer",
+		"phpunit",
+		"password_hash",
+		"unserialize",
+		"composer audit",
+		"do not broaden issue scope",
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q", text)
+		}
+	}
+}
+
+func TestBuildIssuePromptForPHPRepoSelectsPHPSkill(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackPHP},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if !strings.Contains(prompt, VigilanteIssueImplementationOnPHP) {
+		t.Fatalf("prompt should reference PHP skill, got: %s", prompt[:300])
+	}
+}
+
+func TestBuildIssuePromptForNonPHPRepoDoesNotIncludePHPGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape: repo.ShapeTraditional,
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if strings.Contains(prompt, "PHP security and tooling guidance") {
+		t.Fatalf("prompt should not include PHP guidance for non-PHP repo")
+	}
+}
+
+func TestBuildIssuePromptForPHPAndNodeJSRepoIncludesMixedGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackPHP, repo.TechStackNodeJS},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if !strings.Contains(prompt, "PHP security and tooling guidance") {
+		t.Fatalf("prompt missing PHP guidance")
+	}
+	if !strings.Contains(prompt, "JS/TS/Node security guidance") {
+		t.Fatalf("prompt missing Node.js guidance")
+	}
+	if !strings.Contains(prompt, "Mixed-language scope: this repository contains PHP") {
+		t.Fatalf("prompt missing PHP mixed-language guidance for PHP+Node.js repo")
+	}
+}
+
+func TestBuildIssuePromptForPHPOnlyRepoOmitsMixedGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackPHP},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if strings.Contains(prompt, "Mixed-language scope") {
+		t.Fatalf("prompt should not include mixed-language guidance for PHP-only repo")
+	}
+}
