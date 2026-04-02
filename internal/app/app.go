@@ -43,6 +43,7 @@ const defaultStalledSessionThreshold = 10 * time.Minute
 const defaultStaleAutoRestartDelay = 20 * time.Minute
 const defaultMaintenanceAutoRecoveryTimeout = 10 * time.Minute
 const defaultSuccessfulSessionPollInterval = 5 * time.Minute
+const issueDetailsCacheTTL = 3 * time.Minute
 const staleAutoRestartAttemptLimit = 3
 const githubCoreLowQuotaThreshold = 5
 const unsetMaxParallel = -2147483648
@@ -117,7 +118,12 @@ type githubRateLimitState struct {
 	Snapshot ghcli.RateLimitSnapshot
 }
 
-type scanIssueDetailsCache map[string]*ghcli.IssueDetails
+type scanIssueDetailsCacheEntry struct {
+	details   *ghcli.IssueDetails
+	fetchedAt time.Time
+}
+
+type scanIssueDetailsCache map[string]scanIssueDetailsCacheEntry
 
 type stringListFlag []string
 
@@ -200,8 +206,8 @@ func New() *App {
 func (a *App) loadIssueDetailsForScan(ctx context.Context, cache scanIssueDetailsCache, repo string, issueNumber int) (*ghcli.IssueDetails, error) {
 	ctx = a.withIssueAccessLogContext(ctx, "", repo, issueNumber, "", "")
 	if cache != nil {
-		if details, ok := cache[sessionKey(repo, issueNumber)]; ok {
-			return details, nil
+		if cached, ok := cache[sessionKey(repo, issueNumber)]; ok {
+			return cached.details, nil
 		}
 	}
 	tracker := a.issueTracker
@@ -215,9 +221,54 @@ func (a *App) loadIssueDetailsForScan(ctx context.Context, cache scanIssueDetail
 		return nil, err
 	}
 	if cache != nil {
-		cache[sessionKey(repo, issueNumber)] = details
+		cache[sessionKey(repo, issueNumber)] = scanIssueDetailsCacheEntry{
+			details:   details,
+			fetchedAt: a.clock(),
+		}
 	}
 	return details, nil
+}
+
+func (a *App) seedScanIssueDetailsCache(cache scanIssueDetailsCache, sessions []state.Session) {
+	now := a.clock()
+	for i := range sessions {
+		entry, ok := sessionIssueDetailsCacheEntry(sessions[i], now)
+		if !ok {
+			continue
+		}
+		cache[sessionKey(sessions[i].Repo, sessions[i].IssueNumber)] = entry
+	}
+}
+
+func (a *App) persistScanIssueDetailsCache(sessions []state.Session, cache scanIssueDetailsCache) {
+	for i := range sessions {
+		entry, ok := cache[sessionKey(sessions[i].Repo, sessions[i].IssueNumber)]
+		if !ok || entry.details == nil {
+			continue
+		}
+		sessions[i].CachedIssueDetails = &state.CachedIssueDetails{
+			FetchedAt: entry.fetchedAt.UTC().Format(time.RFC3339),
+			Details:   backend.WorkItemDetails(*entry.details),
+		}
+	}
+}
+
+func sessionIssueDetailsCacheEntry(session state.Session, now time.Time) (scanIssueDetailsCacheEntry, bool) {
+	if session.CachedIssueDetails == nil {
+		return scanIssueDetailsCacheEntry{}, false
+	}
+	fetchedAt, err := time.Parse(time.RFC3339, strings.TrimSpace(session.CachedIssueDetails.FetchedAt))
+	if err != nil {
+		return scanIssueDetailsCacheEntry{}, false
+	}
+	if now.Sub(fetchedAt) > issueDetailsCacheTTL {
+		return scanIssueDetailsCacheEntry{}, false
+	}
+	details := ghcli.IssueDetails(session.CachedIssueDetails.Details)
+	return scanIssueDetailsCacheEntry{
+		details:   &details,
+		fetchedAt: fetchedAt,
+	}, true
 }
 
 func (a *App) issueTrackerForBackend(id string) backend.IssueTracker {
@@ -1476,6 +1527,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			return err
 		}
 		issueDetailsCache := make(scanIssueDetailsCache)
+		a.seedScanIssueDetailsCache(issueDetailsCache, sessions)
 		sessions, throttled, err := a.enforceGitHubRateLimit(ctx, sessions)
 		if err != nil {
 			return err
@@ -1516,6 +1568,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		a.persistScanIssueDetailsCache(sessions, issueDetailsCache)
 		if err := a.state.SaveSessions(sessions); err != nil {
 			return err
 		}
@@ -2165,13 +2218,13 @@ func (a *App) launchIssueSession(ctx context.Context, target state.WatchTarget, 
 	}()
 }
 
-func (a *App) launchPullRequestMaintenance(ctx context.Context, session state.Session, seededIssueDetails *ghcli.IssueDetails) {
+func (a *App) launchPullRequestMaintenance(ctx context.Context, session state.Session, seededIssueDetails scanIssueDetailsCacheEntry) {
 	a.sessionWG.Add(1)
 	go func() {
 		defer a.sessionWG.Done()
 
 		issueCache := make(scanIssueDetailsCache)
-		if seededIssueDetails != nil {
+		if seededIssueDetails.details != nil {
 			issueCache[sessionKey(session.Repo, session.IssueNumber)] = seededIssueDetails
 		}
 		result := session
@@ -2208,6 +2261,9 @@ func (a *App) launchPullRequestMaintenance(ctx context.Context, session state.Se
 		}
 
 		result.PullRequestMaintenanceInFlight = false
+		cachedResult := []state.Session{result}
+		a.persistScanIssueDetailsCache(cachedResult, issueCache)
+		result = cachedResult[0]
 		sessions = upsertSession(sessions, result)
 		if saveErr := a.state.SaveSessions(sessions); saveErr != nil {
 			a.sessionMu.Unlock()
@@ -2217,7 +2273,7 @@ func (a *App) launchPullRequestMaintenance(ctx context.Context, session state.Se
 		a.sessionMu.Unlock()
 
 		if issueDetails == nil {
-			issueDetails = issueCache[sessionKey(result.Repo, result.IssueNumber)]
+			issueDetails = issueCache[sessionKey(result.Repo, result.IssueNumber)].details
 		}
 		a.syncSessionIssueLabelsBestEffort(ctx, &result, pr, issueDetails, issueCache)
 	}()

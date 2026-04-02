@@ -6550,6 +6550,91 @@ func TestScanOnceStopsMonitoringDeletedBlockedIssue(t *testing.T) {
 	}
 }
 
+func TestScanOnceReusesCachedIssueDetailsAcrossRestart(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	start := time.Date(2026, 3, 26, 16, 30, 0, 0, time.UTC)
+	runner1 := &countingRunner{
+		base: testutil.FakeRunner{
+			LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+			Outputs: map[string]string{
+				"gh api repos/owner/repo/issues/1":          `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"open","labels":[],"assignees":[]}`,
+				"gh api repos/owner/repo/issues/1/comments": "[]",
+				"gh api user --jq .login":                   "nicobistolfi\n",
+				"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+			},
+		},
+	}
+
+	app1 := New()
+	app1.stdout = testutil.IODiscard{}
+	app1.stderr = testutil.IODiscard{}
+	app1.clock = func() time.Time { return start }
+	app1.env.Runner = runner1
+
+	if err := app1.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app1.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app1.state.SaveSessions([]state.Session{{
+		RepoPath:     "/tmp/repo",
+		Repo:         "owner/repo",
+		IssueNumber:  1,
+		IssueTitle:   "first",
+		IssueURL:     "https://github.com/owner/repo/issues/1",
+		Branch:       "vigilante/issue-1",
+		WorktreePath: "/tmp/repo/.worktrees/vigilante/issue-1",
+		Status:       state.SessionStatusBlocked,
+		BlockedAt:    start.Add(-5 * time.Minute).Format(time.RFC3339),
+		BlockedStage: "issue_execution",
+		BlockedReason: state.BlockedReason{
+			Kind:      "unknown_operator_action_required",
+			Operation: "gh issue view",
+			Summary:   "waiting for operator action",
+		},
+		ResumeRequired: true,
+		ResumeHint:     "vigilante resume --repo owner/repo --issue 1",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app1.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := runner1.counts["gh api repos/owner/repo/issues/1"]; got != 1 {
+		t.Fatalf("expected initial issue-details fetch, got %d", got)
+	}
+
+	saved, err := app1.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved) != 1 || saved[0].CachedIssueDetails == nil {
+		t.Fatalf("expected cached issue details to persist after the first scan: %#v", saved)
+	}
+
+	app2 := New()
+	app2.stdout = testutil.IODiscard{}
+	app2.stderr = testutil.IODiscard{}
+	app2.clock = func() time.Time { return start.Add(1 * time.Minute) }
+	app2.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1/comments": "[]",
+			"gh api user --jq .login":                   "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+	}
+
+	if err := app2.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestScanOnceDelaysRecentSuccessfulPullRequestPolling(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
@@ -6750,6 +6835,94 @@ func TestScanOnceReusesIssueDetailsAcrossMaintenanceAndLabelSync(t *testing.T) {
 
 	if got := runner.counts["gh api repos/owner/repo/issues/1"]; got != 1 {
 		t.Fatalf("expected a single issue-details lookup per scan, got %d", got)
+	}
+}
+
+func TestScanOnceRefreshesCachedIssueDetailsAfterTTLForClosedIssueCleanup(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	start := time.Date(2026, 3, 26, 16, 30, 0, 0, time.UTC)
+	app1 := New()
+	app1.stdout = testutil.IODiscard{}
+	app1.stderr = testutil.IODiscard{}
+	app1.clock = func() time.Time { return start }
+	runner1 := &countingRunner{
+		base: testutil.FakeRunner{
+			LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+			Outputs: map[string]string{
+				"gh api repos/owner/repo/issues/1": `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"open","labels":[],"assignees":[]}`,
+				"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": "[]",
+				"gh api user --jq .login": "nicobistolfi\n",
+				"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+			},
+		},
+	}
+	app1.env.Runner = runner1
+
+	if err := app1.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app1.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app1.state.SaveSessions([]state.Session{{
+		RepoPath:     "/tmp/repo",
+		Repo:         "owner/repo",
+		IssueNumber:  1,
+		IssueTitle:   "first",
+		IssueURL:     "https://github.com/owner/repo/issues/1",
+		Branch:       "vigilante/issue-1",
+		WorktreePath: "/tmp/repo/.worktrees/vigilante/issue-1",
+		Status:       state.SessionStatusSuccess,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app1.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app1.waitForSessions()
+	if got := runner1.counts["gh api repos/owner/repo/issues/1"]; got != 1 {
+		t.Fatalf("expected initial issue-details fetch, got %d", got)
+	}
+
+	app2 := New()
+	app2.stdout = testutil.IODiscard{}
+	app2.stderr = testutil.IODiscard{}
+	app2.clock = func() time.Time { return start.Add(issueDetailsCacheTTL + time.Minute) }
+	runner2 := &countingRunner{
+		base: testutil.FakeRunner{
+			LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+			Outputs: map[string]string{
+				"gh api repos/owner/repo/issues/1":                           `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"closed","labels":[],"assignees":[]}`,
+				"gh api repos/owner/repo/issues/1/comments":                  "[]",
+				"git worktree prune":                                         "ok",
+				"git worktree list --porcelain":                              "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n",
+				"git show-ref --verify --quiet refs/heads/vigilante/issue-1": "ok",
+				"git branch -D vigilante/issue-1":                            "Deleted branch vigilante/issue-1",
+				"gh api user --jq .login":                                    "nicobistolfi\n",
+				"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+			},
+		},
+	}
+	app2.env.Runner = runner2
+
+	if err := app2.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app2.waitForSessions()
+	if got := runner2.counts["gh api repos/owner/repo/issues/1"]; got != 1 {
+		t.Fatalf("expected a refreshed issue-details fetch after TTL expiry, got %d", got)
+	}
+
+	sessions, err := app2.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || sessions[0].Status != state.SessionStatusClosed || sessions[0].CleanupCompletedAt == "" {
+		t.Fatalf("expected closed issue cleanup after TTL refresh: %#v", sessions)
 	}
 }
 
