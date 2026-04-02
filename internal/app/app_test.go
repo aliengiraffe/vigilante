@@ -37,8 +37,8 @@ type capturedAnalyticsEvent struct {
 
 type countingRunner struct {
 	base   testutil.FakeRunner
-	counts map[string]int
 	mu     sync.Mutex
+	counts map[string]int
 }
 
 type blockingMaintenanceRunner struct {
@@ -1607,6 +1607,7 @@ func TestSetupCreatesStateLayoutAndInstallsBundledSkillsForAllProviders(t *testi
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementationOnNx, "SKILL.md"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementationOnGradleMultiProject, "SKILL.md"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementationOnRushMonorepo, "SKILL.md"),
+		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementationOnDotNet, "SKILL.md"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteConflictResolution, "SKILL.md"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.DockerComposeLaunch, "SKILL.md"),
 		filepath.Join(app.state.ClaudeHome(), "skills", skill.VigilanteIssueImplementation, "SKILL.md"),
@@ -1658,6 +1659,7 @@ func TestSetupWithGeminiInstallsBundledSkillsForAllProviders(t *testing.T) {
 		filepath.Join(app.state.ClaudeHome(), "skills", skill.VigilanteIssueImplementation, "SKILL.md"),
 		filepath.Join(app.state.ClaudeHome(), "commands", skill.VigilanteIssueImplementation, "SKILL.md"),
 		filepath.Join(app.state.GeminiHome(), "skills", skill.VigilanteIssueImplementation, "SKILL.md"),
+		filepath.Join(app.state.GeminiHome(), "skills", skill.VigilanteIssueImplementationOnDotNet, "SKILL.md"),
 		filepath.Join(app.state.GeminiHome(), "skills", skill.VigilanteIssueImplementationOnRushMonorepo, "SKILL.md"),
 		filepath.Join(app.state.GeminiHome(), "skills", skill.VigilanteConflictResolution, "SKILL.md"),
 	} {
@@ -3276,6 +3278,7 @@ func TestScanOnceLogsResumeCommentPollingSummaryInsteadOfRawCommand(t *testing.T
 	if err := app.ScanOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	app.waitForSessions()
 
 	logData, err := os.ReadFile(app.state.DaemonLogPath())
 	if err != nil {

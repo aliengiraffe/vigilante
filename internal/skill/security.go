@@ -27,6 +27,9 @@ func securityGuidanceForClassification(classification repo.Classification) strin
 	if slices.Contains(classification.TechStacks, repo.TechStackPython) {
 		sections = append(sections, pythonSecurityGuidance(classification))
 	}
+	if slices.Contains(classification.TechStacks, repo.TechStackDotNet) {
+		sections = append(sections, dotNetSecurityGuidance(classification))
+	}
 	return strings.Join(sections, "\n")
 }
 
@@ -375,5 +378,86 @@ func pythonAuditGuidance() []string {
 func pythonSecureCodingGuidance() []string {
 	return []string{
 		"- Python security: avoid unsafe `pickle` patterns or deserializing untrusted data with Python-native object loaders. Be careful with `subprocess`: prefer explicit argv lists, avoid `shell=True` unless it is required and safely constrained, and validate external input passed to commands. Use `secrets` instead of `random` for security-sensitive values. Handle untrusted input and file paths defensively to reduce traversal, injection, and unintended file-access risks. Do not store secrets, tokens, or credentials in source files.",
+	}
+}
+
+func dotNetSecurityGuidance(classification repo.Classification) string {
+	sections := []string{
+		".NET/C# security and tooling guidance for this repository (apply where relevant to touched code and workflow — do not broaden issue scope):",
+	}
+	sections = append(sections, dotNetFormattingGuidance()...)
+	sections = append(sections, dotNetTestingGuidance()...)
+	sections = append(sections, dotNetAnalyzerGuidance()...)
+	sections = append(sections, dotNetNullableGuidance()...)
+	sections = append(sections, dotNetPackageAuditGuidance()...)
+	sections = append(sections, dotNetSecretsGuidance()...)
+	sections = append(sections, dotNetWebSecurityGuidance()...)
+	sections = append(sections, dotNetDependencyGuidance()...)
+	if isMixedLanguageDotNetRepo(classification) {
+		sections = append(sections, dotNetMixedLanguageGuidance()...)
+	}
+	return strings.Join(sections, "\n")
+}
+
+func dotNetFormattingGuidance() []string {
+	return []string{
+		"- Formatting: use the repository's standard .NET formatting path. When the repo uses `dotnet format`, run it on the affected project or solution scope before committing. Do not hand-format C# files when the SDK formatter or repo tooling is the expected path.",
+	}
+}
+
+func dotNetTestingGuidance() []string {
+	return []string{
+		"- Testing: run targeted `dotnet test` against the affected project, test project, or solution first, then broaden scope only when the change crosses project boundaries or the repo workflow requires it. Use `--no-restore` or `--no-build` only when that matches the repository's normal validation flow.",
+	}
+}
+
+func dotNetAnalyzerGuidance() []string {
+	return []string{
+		"- Analyzers and linting: respect repo-defined analyzer and warning-severity settings from `.editorconfig`, `Directory.Build.props`, project files, and NuGet analyzer packages. Prefer the built-in .NET analyzers and any repo-standard tools over introducing new lint tooling. When security analyzers are configured, do not weaken or suppress them without a narrowly documented reason.",
+	}
+}
+
+func dotNetNullableGuidance() []string {
+	return []string{
+		"- Nullable safety: preserve or improve nullable reference type correctness. Do not silence warnings with `!` or broad `#nullable disable` changes unless there is a tightly scoped and justified reason. Prefer explicit null checks and type-safe APIs.",
+	}
+}
+
+func dotNetPackageAuditGuidance() []string {
+	return []string{
+		"- Package auditing: when dependencies change or package risk is relevant, use the repository's standard NuGet restore and audit flow. If NuGet auditing is enabled, review advisories and do not ignore vulnerable package updates without documenting the reason.",
+	}
+}
+
+func dotNetSecretsGuidance() []string {
+	return []string{
+		"- Secrets and configuration: do not commit secrets, tokens, connection strings, certificates, or environment-specific credentials. Prefer environment variables, user secrets for local development, or the repository's secret-management path. In ASP.NET Core code, prefer configuration binding and options patterns over ad hoc secret reads scattered through request handlers.",
+	}
+}
+
+func dotNetWebSecurityGuidance() []string {
+	return []string{
+		"- ASP.NET and web security: preserve secure defaults for authentication, authorization, input validation, antiforgery/CSRF protections where applicable, HTTPS/TLS settings, and least-privilege token usage. Avoid logging sensitive request data or exception details that may expose secrets.",
+	}
+}
+
+func dotNetDependencyGuidance() []string {
+	return []string{
+		"- Dependencies: prefer built-in .NET platform libraries when they cover the need. Keep project and solution metadata consistent when adding packages, and avoid broad package-version churn unrelated to the issue.",
+	}
+}
+
+func isMixedLanguageDotNetRepo(classification repo.Classification) bool {
+	if !slices.Contains(classification.TechStacks, repo.TechStackDotNet) {
+		return false
+	}
+	return slices.Contains(classification.TechStacks, repo.TechStackNodeJS) ||
+		slices.Contains(classification.TechStacks, repo.TechStackGo) ||
+		classification.Shape == repo.ShapeMonorepo
+}
+
+func dotNetMixedLanguageGuidance() []string {
+	return []string{
+		"- Mixed-language scope: this repository contains .NET code alongside other languages or frontend assets. Scope `.NET` validation (`dotnet test`, `dotnet format`, analyzers, restore/audit flows) to the affected .NET projects or solutions, and use each other stack's native tooling for non-.NET changes.",
 	}
 }

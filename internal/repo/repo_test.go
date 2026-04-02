@@ -696,6 +696,22 @@ func TestClassifyGitHubActionsRepoFromWorkflows(t *testing.T) {
 	}
 }
 
+func TestClassifyDotNetRepoFromCSharpProject(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "demo.csproj"), []byte("<Project Sdk=\"Microsoft.NET.Sdk\"></Project>\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if got.Shape != ShapeTraditional {
+		t.Fatalf("expected traditional shape, got %#v", got.Shape)
+	}
+	if len(got.TechStacks) != 1 || got.TechStacks[0] != TechStackDotNet {
+		t.Fatalf("expected dotnet tech stack, got %#v", got.TechStacks)
+	}
+}
+
 func TestClassifyGitHubActionsRepoFromYAMLExtension(t *testing.T) {
 	dir := t.TempDir()
 	workflowsDir := filepath.Join(dir, ".github", "workflows")
@@ -716,6 +732,22 @@ func TestClassifyGitHubActionsRepoFromYAMLExtension(t *testing.T) {
 	}
 	if !hasActions {
 		t.Fatalf("expected github-actions tech stack for .yaml workflow, got %#v", got.TechStacks)
+	}
+}
+
+func TestClassifyDotNetRepoFromNestedProjectLayout(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "src", "App"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "src", "App", "App.csproj"), []byte("<Project Sdk=\"Microsoft.NET.Sdk.Web\"></Project>\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if len(got.TechStacks) != 1 || got.TechStacks[0] != TechStackDotNet {
+		t.Fatalf("expected dotnet tech stack from nested project layout, got %#v", got.TechStacks)
 	}
 }
 
@@ -863,6 +895,32 @@ func TestClassifyNonDockerRepoHasNoDockerTechStack(t *testing.T) {
 	}
 	if len(got.ProcessHints.DockerFiles) != 0 {
 		t.Fatalf("expected no docker files, got %#v", got.ProcessHints.DockerFiles)
+	}
+}
+
+func TestClassifyGoAndDotNetRepoDetectsBoth(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "demo.sln"), []byte("Microsoft Visual Studio Solution File, Format Version 12.00\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	hasGo := false
+	hasDotNet := false
+	for _, stack := range got.TechStacks {
+		if stack == TechStackGo {
+			hasGo = true
+		}
+		if stack == TechStackDotNet {
+			hasDotNet = true
+		}
+	}
+	if !hasGo || !hasDotNet {
+		t.Fatalf("expected go and dotnet tech stacks, got %#v", got.TechStacks)
 	}
 }
 

@@ -30,6 +30,7 @@ const VigilanteIssueImplementationOnGitHubActions = "vigilante-issue-implementat
 const VigilanteIssueImplementationOnDocker = "vigilante-issue-implementation-on-docker"
 const VigilanteIssueImplementationOnKubernetes = "vigilante-issue-implementation-on-kubernetes"
 const VigilanteIssueImplementationOnPython = "vigilante-issue-implementation-on-python"
+const VigilanteIssueImplementationOnDotNet = "vigilante-issue-implementation-on-dotnet"
 const VigilanteConflictResolution = "vigilante-conflict-resolution"
 const VigilanteCreateIssue = "vigilante-create-issue"
 const VigilanteLocalServiceDependencies = "vigilante-local-service-dependencies"
@@ -56,6 +57,7 @@ func VigilanteSkillNames() []string {
 		VigilanteIssueImplementationOnDocker,
 		VigilanteIssueImplementationOnKubernetes,
 		VigilanteIssueImplementationOnPython,
+		VigilanteIssueImplementationOnDotNet,
 		VigilanteConflictResolution,
 		VigilanteCreateIssue,
 		VigilanteLocalServiceDependencies,
@@ -268,6 +270,9 @@ func IssueImplementationSkill(target state.WatchTarget) string {
 		if isPythonTarget(target) {
 			return VigilanteIssueImplementationOnPython
 		}
+		if isDotNetTarget(target) {
+			return VigilanteIssueImplementationOnDotNet
+		}
 		if isGitHubActionsTarget(target) {
 			return VigilanteIssueImplementationOnGitHubActions
 		}
@@ -324,6 +329,7 @@ func isPythonTarget(target state.WatchTarget) bool {
 	}
 	return false
 }
+
 func isGitHubActionsTarget(target state.WatchTarget) bool {
 	for _, stack := range target.Classification.TechStacks {
 		if stack == repo.TechStackGitHubActions {
@@ -336,6 +342,15 @@ func isGitHubActionsTarget(target state.WatchTarget) bool {
 func isDockerTarget(target state.WatchTarget) bool {
 	for _, stack := range target.Classification.TechStacks {
 		if stack == repo.TechStackDocker {
+			return true
+		}
+	}
+	return false
+}
+
+func isDotNetTarget(target state.WatchTarget) bool {
+	for _, stack := range target.Classification.TechStacks {
+		if stack == repo.TechStackDotNet {
 			return true
 		}
 	}

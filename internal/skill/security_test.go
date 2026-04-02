@@ -277,6 +277,53 @@ func TestSecurityGuidanceForGoAndNodeJSRepo(t *testing.T) {
 	}
 }
 
+func TestSecurityGuidanceForDotNetRepo(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackDotNet},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	for _, text := range []string{
+		".NET/C# security and tooling guidance",
+		"dotnet format",
+		"dotnet test",
+		"built-in .NET analyzers",
+		"nullable reference type",
+		"NuGet",
+		"user secrets",
+		"ASP.NET",
+		"do not broaden issue scope",
+	} {
+		if !strings.Contains(guidance, text) {
+			t.Fatalf(".NET guidance missing %q", text)
+		}
+	}
+}
+
+func TestSecurityGuidanceForDotNetAndNodeJSRepo(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackDotNet, repo.TechStackNodeJS},
+		ProcessHints: repo.ProcessHints{
+			NodePackageManagers: []string{"npm"},
+		},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	if !strings.Contains(guidance, "JS/TS/Node security guidance") {
+		t.Fatalf("guidance missing Node.js section for dual-stack dotnet repo")
+	}
+	if !strings.Contains(guidance, ".NET/C# security and tooling guidance") {
+		t.Fatalf("guidance missing .NET section for dual-stack repo")
+	}
+	if !strings.Contains(guidance, "Mixed-language scope") {
+		t.Fatalf("guidance missing mixed-language .NET section")
+	}
+}
+
 func TestGoSecurityGuidanceDoesNotBroadenScope(t *testing.T) {
 	classification := repo.Classification{
 		Shape:      repo.ShapeTraditional,
