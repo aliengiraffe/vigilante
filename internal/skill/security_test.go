@@ -365,6 +365,33 @@ func TestSecurityGuidanceForKubernetesRepo(t *testing.T) {
 	}
 }
 
+func TestSecurityGuidanceForJavaKotlinRepo(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackJVM},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	for _, text := range []string{
+		"Java/Kotlin security and tooling guidance",
+		"Gradle or Maven",
+		"Spotless",
+		"Checkstyle",
+		"SpotBugs",
+		"detekt",
+		"Kotlin coding conventions",
+		"insecure deserialization",
+		"SSRF",
+		"Spring, Micronaut, Quarkus",
+		"do not broaden issue scope",
+	} {
+		if !strings.Contains(guidance, text) {
+			t.Fatalf("Java/Kotlin guidance missing %q", text)
+		}
+	}
+}
+
 func TestSecurityGuidanceEmptyForNonKubernetesRepo(t *testing.T) {
 	classification := repo.Classification{
 		Shape: repo.ShapeTraditional,
@@ -374,6 +401,25 @@ func TestSecurityGuidanceEmptyForNonKubernetesRepo(t *testing.T) {
 
 	if strings.Contains(guidance, "Kubernetes manifest") {
 		t.Fatalf("guidance should not include Kubernetes section for non-K8s repo")
+	}
+}
+
+func TestSecurityGuidanceForGradleJavaKotlinRepoMentionsGradle(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackJVM},
+		ProcessHints: repo.ProcessHints{
+			GradleRootBuildFiles: []string{"build.gradle.kts"},
+		},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	if !strings.Contains(guidance, "Gradle tasks") {
+		t.Fatalf("expected Gradle-specific JVM guidance, got %q", guidance)
+	}
+	if strings.Contains(guidance, "actual Gradle or Maven tasks") {
+		t.Fatalf("expected Gradle-specific wording when Gradle signals are present")
 	}
 }
 
@@ -390,6 +436,28 @@ func TestSecurityGuidanceForKubernetesAndGoRepo(t *testing.T) {
 	}
 	if !strings.Contains(guidance, "Kubernetes manifest and workload security guidance") {
 		t.Fatalf("guidance missing Kubernetes section for Go+K8s repo")
+	}
+}
+
+func TestSecurityGuidanceForMixedJavaKotlinRepoIncludesMixedScope(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackJVM, repo.TechStackNodeJS},
+		ProcessHints: repo.ProcessHints{
+			NodePackageManagers: []string{"npm"},
+		},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	if !strings.Contains(guidance, "do not broaden issue scope") {
+		t.Fatalf("guidance missing scope-limiting instruction")
+	}
+	if !strings.Contains(guidance, "Java/Kotlin security and tooling guidance") {
+		t.Fatalf("guidance missing JVM section")
+	}
+	if !strings.Contains(guidance, "Mixed-language scope") {
+		t.Fatalf("guidance missing mixed-language JVM section")
 	}
 }
 

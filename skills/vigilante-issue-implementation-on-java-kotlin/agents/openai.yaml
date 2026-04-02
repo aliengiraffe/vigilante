@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vigilante Java/Kotlin Issue Implementation"
+  short_description: "Implement a Vigilante-dispatched issue in a Java/Kotlin repository with JVM tooling and secure-coding guidance"
+  default_prompt: "Use $vigilante-issue-implementation-on-java-kotlin to implement the assigned Java/Kotlin issue in the provided worktree, follow the repository's Gradle or Maven workflow, comment on the issue, and open a PR."

@@ -78,6 +78,38 @@ func TestClassifyTraditionalRepo(t *testing.T) {
 	}
 }
 
+func TestClassifyDetectsJVMFromMavenSignal(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "pom.xml"), []byte("<project/>\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if got.Shape != ShapeTraditional {
+		t.Fatalf("expected traditional classification, got %#v", got)
+	}
+	if len(got.TechStacks) != 1 || got.TechStacks[0] != TechStackJVM {
+		t.Fatalf("expected JVM tech stack, got %#v", got.TechStacks)
+	}
+}
+
+func TestClassifyDetectsJVMFromKotlinSourceLayout(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "src", "main", "kotlin", "demo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if got.Shape != ShapeTraditional {
+		t.Fatalf("expected traditional classification, got %#v", got)
+	}
+	if len(got.TechStacks) != 1 || got.TechStacks[0] != TechStackJVM {
+		t.Fatalf("expected JVM tech stack, got %#v", got.TechStacks)
+	}
+}
+
 func TestClassifyMonorepoFromWorkspaceSignals(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "pnpm-workspace.yaml"), []byte("packages:\n  - apps/*\n"), 0o644); err != nil {

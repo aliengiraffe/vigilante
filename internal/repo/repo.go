@@ -42,6 +42,7 @@ const (
 	TechStackKubernetes    TechStack = "kubernetes"
 	TechStackPython        TechStack = "python"
 	TechStackDotNet        TechStack = "dotnet"
+	TechStackJVM           TechStack = "java_kotlin"
 )
 
 type ProcessHints struct {
@@ -236,6 +237,7 @@ func Classify(path string) Classification {
 	detectKubernetesTechStack(absPath, &classification)
 	detectPythonTechStack(absPath, &classification)
 	detectDotNetTechStack(absPath, &classification)
+	detectJVMTechStack(absPath, &classification)
 
 	slices.Sort(classification.ProcessHints.GradleSettingsFiles)
 	slices.Sort(classification.ProcessHints.GradleRootBuildFiles)
@@ -482,6 +484,33 @@ func detectKubernetesTechStack(absPath string, classification *Classification) {
 		dirPath := filepath.Join(absPath, dir)
 		if hasKubernetesYAML(dirPath) {
 			classification.TechStacks = append(classification.TechStacks, TechStackKubernetes)
+			return
+		}
+	}
+}
+
+func detectJVMTechStack(absPath string, classification *Classification) {
+	for _, name := range []string{
+		"pom.xml",
+		"build.gradle",
+		"build.gradle.kts",
+		"settings.gradle",
+		"settings.gradle.kts",
+	} {
+		if fileExists(filepath.Join(absPath, name)) {
+			classification.TechStacks = append(classification.TechStacks, TechStackJVM)
+			return
+		}
+	}
+
+	for _, dir := range []string{
+		"src/main/java",
+		"src/test/java",
+		"src/main/kotlin",
+		"src/test/kotlin",
+	} {
+		if hasChildDirectories(filepath.Join(absPath, dir)) {
+			classification.TechStacks = append(classification.TechStacks, TechStackJVM)
 			return
 		}
 	}
