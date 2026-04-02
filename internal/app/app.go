@@ -670,6 +670,8 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		return a.runDaemonCommand(ctx, args[1:])
 	case "completion":
 		return a.runCompletionCommand(args[1:])
+	case "report":
+		return a.runReportCommand(ctx, args[1:])
 	case "issue":
 		return a.runIssueCommand(ctx, args[1:])
 	default:
@@ -5681,6 +5683,7 @@ func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  vigilante resume --all-blocked")
 	fmt.Fprintln(w, "  vigilante service restart")
 	fmt.Fprintln(w, "  vigilante daemon run [--once] [--interval duration]")
+	fmt.Fprintln(w, "  vigilante report --repo <owner/name>")
 	fmt.Fprintln(w, "  vigilante issue create --repo <owner/name> [--provider value] <prompt...>")
 	fmt.Fprintln(w, "  vigilante commit [git-commit-flags...]")
 	fmt.Fprintln(w, "  vigilante completion <bash|fish|zsh>")
@@ -5723,7 +5726,7 @@ _vigilante()
     local cur prev words cword
     _init_completion || return
 
-    local commands="setup watch unwatch list status cleanup redispatch recreate resume service daemon completion"
+    local commands="setup watch unwatch list status cleanup redispatch recreate resume service daemon report completion"
     local global_flags="-h --help"
 
     case "${words[1]}" in
@@ -5756,6 +5759,10 @@ _vigilante()
             ;;
         resume)
             COMPREPLY=( $(compgen -W "--repo --issue --all-blocked" -- "$cur") )
+            return
+            ;;
+        report)
+            COMPREPLY=( $(compgen -W "--repo" -- "$cur") )
             return
             ;;
         service)
@@ -5794,6 +5801,7 @@ complete -c vigilante -f -n '__fish_use_subcommand' -a 'cleanup' -d 'Clean up ru
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'redispatch' -d 'Restart one watched issue in a fresh local worktree'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'recreate' -d 'Recreate a stuck issue as a fresh duplicate'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'resume' -d 'Resume blocked sessions'
+complete -c vigilante -f -n '__fish_use_subcommand' -a 'report' -d 'Analyze closed issues and emit a CSV performance report'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'service' -d 'Run service commands'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'daemon' -d 'Run daemon commands'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'completion' -d 'Generate shell completion scripts'
@@ -5821,6 +5829,7 @@ complete -c vigilante -n '__fish_seen_subcommand_from recreate' -l issue
 complete -c vigilante -n '__fish_seen_subcommand_from resume' -l repo
 complete -c vigilante -n '__fish_seen_subcommand_from resume' -l issue
 complete -c vigilante -n '__fish_seen_subcommand_from resume' -l all-blocked
+complete -c vigilante -n '__fish_seen_subcommand_from report' -l repo
 complete -c vigilante -n '__fish_seen_subcommand_from service' -a 'restart'
 complete -c vigilante -n '__fish_seen_subcommand_from daemon; and not __fish_seen_subcommand_from run' -a 'run'
 complete -c vigilante -n '__fish_seen_subcommand_from run' -l once
@@ -5844,6 +5853,7 @@ _vigilante() {
     'redispatch:Restart one watched issue in a fresh local worktree'
     'recreate:Recreate a stuck issue as a fresh duplicate'
     'resume:Resume blocked sessions'
+    'report:Analyze closed issues and emit a CSV performance report'
     'service:Run service commands'
     'daemon:Run daemon commands'
     'completion:Generate shell completion scripts'
@@ -5877,6 +5887,9 @@ _vigilante() {
       ;;
     resume)
       compadd -- --repo --issue --all-blocked
+      ;;
+    report)
+      compadd -- --repo
       ;;
     service)
       compadd restart
