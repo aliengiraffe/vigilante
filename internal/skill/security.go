@@ -24,6 +24,9 @@ func securityGuidanceForClassification(classification repo.Classification) strin
 	if slices.Contains(classification.TechStacks, repo.TechStackKubernetes) {
 		sections = append(sections, kubernetesSecurityGuidance())
 	}
+	if slices.Contains(classification.TechStacks, repo.TechStackPython) {
+		sections = append(sections, pythonSecurityGuidance(classification))
+	}
 	return strings.Join(sections, "\n")
 }
 
@@ -323,5 +326,54 @@ func k8sNetworkAndResourceGuidance() []string {
 func k8sScopeGuidance() []string {
 	return []string{
 		"- Scope: do not make broad cluster-wide changes when the issue only requires application-level manifest updates. Do not introduce cluster-admin RBAC, node-level access, or host-namespace usage unless the issue specifically requires it. Preserve existing security posture and improve it where relevant to the issue.",
+	}
+}
+
+func pythonSecurityGuidance(_ repo.Classification) string {
+	sections := []string{
+		"Python security and tooling guidance for this repository (apply where relevant to touched code and workflow — do not broaden issue scope):",
+	}
+	sections = append(sections, pythonEnvironmentGuidance()...)
+	sections = append(sections, pythonFormattingGuidance()...)
+	sections = append(sections, pythonTypingGuidance()...)
+	sections = append(sections, pythonTestingGuidance()...)
+	sections = append(sections, pythonAuditGuidance()...)
+	sections = append(sections, pythonSecureCodingGuidance()...)
+	return strings.Join(sections, "\n")
+}
+
+func pythonEnvironmentGuidance() []string {
+	return []string{
+		"- Environment isolation: use the repository's existing bootstrap or environment workflow first. Otherwise prefer isolated environments such as `python -m venv .venv` rather than ad hoc global installs.",
+	}
+}
+
+func pythonFormattingGuidance() []string {
+	return []string{
+		"- Formatting and linting: run the repository's established formatter and linter for touched files. When the repo already uses Ruff, prefer `ruff format` and `ruff check`; when it uses Black, use `black`. Do not force repo-wide style cleanup unrelated to the issue.",
+	}
+}
+
+func pythonTypingGuidance() []string {
+	return []string{
+		"- Typing: run repo-standard typing checks when present, such as `mypy`, pyright-style tooling, or equivalent configured commands.",
+	}
+}
+
+func pythonTestingGuidance() []string {
+	return []string{
+		"- Testing: run targeted `pytest` or repo-standard test commands for the changed area first, then broaden scope when needed.",
+	}
+}
+
+func pythonAuditGuidance() []string {
+	return []string{
+		"- Dependency and package security: when dependency or packaging changes are involved, run repo-standard audit tooling. Use `pip-audit` when it is already part of the repo workflow or otherwise clearly available and relevant.",
+	}
+}
+
+func pythonSecureCodingGuidance() []string {
+	return []string{
+		"- Python security: avoid unsafe `pickle` patterns or deserializing untrusted data with Python-native object loaders. Be careful with `subprocess`: prefer explicit argv lists, avoid `shell=True` unless it is required and safely constrained, and validate external input passed to commands. Use `secrets` instead of `random` for security-sensitive values. Handle untrusted input and file paths defensively to reduce traversal, injection, and unintended file-access risks. Do not store secrets, tokens, or credentials in source files.",
 	}
 }

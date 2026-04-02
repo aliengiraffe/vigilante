@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vigilante Python Issue Implementation"
+  short_description: "Implement a Vigilante-dispatched issue in a Python repository with idiomatic tooling and security guidance"
+  default_prompt: "Use $vigilante-issue-implementation-on-python to implement the assigned Python issue in the provided worktree, follow repo-standard Python tooling, comment on the issue, and open a PR."

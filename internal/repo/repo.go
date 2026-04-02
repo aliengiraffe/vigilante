@@ -40,6 +40,7 @@ const (
 	TechStackGitHubActions TechStack = "github-actions"
 	TechStackDocker        TechStack = "docker"
 	TechStackKubernetes    TechStack = "kubernetes"
+	TechStackPython        TechStack = "python"
 )
 
 type ProcessHints struct {
@@ -54,6 +55,7 @@ type ProcessHints struct {
 	NodeLockFiles          []string `json:"node_lock_files,omitempty"`
 	TypeScriptConfigs      []string `json:"typescript_configs,omitempty"`
 	DockerFiles            []string `json:"docker_files,omitempty"`
+	PythonSignals          []string `json:"python_signals,omitempty"`
 }
 
 type Classification struct {
@@ -231,6 +233,7 @@ func Classify(path string) Classification {
 	detectGitHubActionsTechStack(absPath, &classification)
 	detectDockerTechStack(absPath, &classification)
 	detectKubernetesTechStack(absPath, &classification)
+	detectPythonTechStack(absPath, &classification)
 
 	slices.Sort(classification.ProcessHints.GradleSettingsFiles)
 	slices.Sort(classification.ProcessHints.GradleRootBuildFiles)
@@ -243,6 +246,7 @@ func Classify(path string) Classification {
 	slices.Sort(classification.ProcessHints.NodeLockFiles)
 	slices.Sort(classification.ProcessHints.TypeScriptConfigs)
 	slices.Sort(classification.ProcessHints.DockerFiles)
+	slices.Sort(classification.ProcessHints.PythonSignals)
 	return classification
 }
 
@@ -505,6 +509,21 @@ func hasKubernetesYAML(dir string) bool {
 	return false
 }
 
+func detectPythonTechStack(absPath string, classification *Classification) {
+	for _, signal := range []string{"pyproject.toml", "requirements.txt", "requirements-dev.txt", "requirements-test.txt", "setup.py", "setup.cfg", "tox.ini", "noxfile.py"} {
+		if fileExists(filepath.Join(absPath, signal)) {
+			classification.ProcessHints.PythonSignals = append(classification.ProcessHints.PythonSignals, signal)
+		}
+	}
+	if hasPythonPackageLayout(absPath) {
+		classification.ProcessHints.PythonSignals = append(classification.ProcessHints.PythonSignals, "python_package_layout")
+	}
+	if len(classification.ProcessHints.PythonSignals) == 0 {
+		return
+	}
+	classification.TechStacks = append(classification.TechStacks, TechStackPython)
+}
+
 func isGradleMultiProject(path string, settingsFiles []string) bool {
 	for _, name := range settingsFiles {
 		data, err := os.ReadFile(filepath.Join(path, name))
@@ -514,6 +533,21 @@ func isGradleMultiProject(path string, settingsFiles []string) bool {
 		text := string(data)
 		if strings.Contains(text, "include(") || strings.Contains(text, "include ") || strings.Contains(text, "includeFlat(") || strings.Contains(text, "includeFlat ") {
 			return true
+		}
+	}
+	return false
+}
+
+func hasPythonPackageLayout(path string) bool {
+	for _, root := range []string{"src", "tests"} {
+		entries, err := os.ReadDir(filepath.Join(path, root))
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				return true
+			}
 		}
 	}
 	return false
