@@ -81,6 +81,12 @@ func (r *blockingMaintenanceRunner) LookPath(file string) (string, error) {
 	return r.base.LookPath(file)
 }
 
+func waitForLoggerTeardown() {
+	// The daemon logger can still be flushing its final write when TempDir
+	// cleanup starts, which makes these polling-log tests intermittently fail.
+	time.Sleep(25 * time.Millisecond)
+}
+
 func TestMaintainOpenPullRequestPropagatesAccessLogContext(t *testing.T) {
 	t.Setenv("VIGILANTE_HOME", t.TempDir())
 	store := state.NewStore()
@@ -3291,6 +3297,7 @@ func TestScanOnceLogsResumeCommentPollingSummaryInsteadOfRawCommand(t *testing.T
 	if strings.Contains(logText, "command start") && strings.Contains(logText, "gh api repos/owner/repo/issues/1/comments") {
 		t.Fatalf("expected raw resume comment polling command logs to be suppressed: %s", logText)
 	}
+	waitForLoggerTeardown()
 }
 
 func TestScanOncePostsDiagnosticCommentWhenGitHubCommentResumeFails(t *testing.T) {
@@ -3766,6 +3773,7 @@ func TestScanOnceLogsCleanupCommentPollingSummaryInsteadOfRawCommand(t *testing.
 	if strings.Contains(logText, "command start") && strings.Contains(logText, "gh api repos/owner/repo/issues/1/comments") {
 		t.Fatalf("expected raw cleanup comment polling command logs to be suppressed: %s", logText)
 	}
+	waitForLoggerTeardown()
 }
 
 func TestScanOnceLogsCommentPollingFailuresWithPurpose(t *testing.T) {
