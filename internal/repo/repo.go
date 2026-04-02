@@ -603,7 +603,6 @@ func detectPHPTechStack(absPath string, classification *Classification) {
 	classification.TechStacks = append(classification.TechStacks, TechStackPHP)
 }
 
-
 func isGradleMultiProject(path string, settingsFiles []string) bool {
 	for _, name := range settingsFiles {
 		data, err := os.ReadFile(filepath.Join(path, name))
