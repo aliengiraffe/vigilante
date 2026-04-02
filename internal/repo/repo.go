@@ -564,6 +564,7 @@ func detectDotNetTechStack(absPath string, classification *Classification) {
 }
 
 var errStopWalk = errors.New("stop walk")
+
 func isGradleMultiProject(path string, settingsFiles []string) bool {
 	for _, name := range settingsFiles {
 		data, err := os.ReadFile(filepath.Join(path, name))
