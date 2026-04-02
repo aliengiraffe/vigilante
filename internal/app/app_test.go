@@ -39,7 +39,6 @@ type countingRunner struct {
 	base   testutil.FakeRunner
 	mu     sync.Mutex
 	counts map[string]int
-	mu     sync.Mutex
 }
 
 type blockingMaintenanceRunner struct {

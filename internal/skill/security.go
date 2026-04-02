@@ -26,6 +26,7 @@ func securityGuidanceForClassification(classification repo.Classification) strin
 	}
 	if slices.Contains(classification.TechStacks, repo.TechStackPython) {
 		sections = append(sections, pythonSecurityGuidance(classification))
+	}
 	if slices.Contains(classification.TechStacks, repo.TechStackDotNet) {
 		sections = append(sections, dotNetSecurityGuidance(classification))
 	}
