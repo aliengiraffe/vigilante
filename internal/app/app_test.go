@@ -38,6 +38,7 @@ type capturedAnalyticsEvent struct {
 type countingRunner struct {
 	base   testutil.FakeRunner
 	counts map[string]int
+	mu     sync.Mutex
 }
 
 type blockingMaintenanceRunner struct {
@@ -49,10 +50,12 @@ type blockingMaintenanceRunner struct {
 }
 
 func (r *countingRunner) Run(ctx context.Context, dir string, name string, args ...string) (string, error) {
+	r.mu.Lock()
 	if r.counts == nil {
 		r.counts = make(map[string]int)
 	}
 	r.counts[testutil.Key(name, args...)]++
+	r.mu.Unlock()
 	return r.base.Run(ctx, dir, name, args...)
 }
 
@@ -6739,6 +6742,7 @@ func TestScanOnceReusesIssueDetailsAcrossMaintenanceAndLabelSync(t *testing.T) {
 	if err := app.ScanOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	app.waitForSessions()
 
 	if got := runner.counts["gh api repos/owner/repo/issues/1"]; got != 1 {
 		t.Fatalf("expected a single issue-details lookup per scan, got %d", got)
