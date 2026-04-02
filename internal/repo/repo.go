@@ -545,9 +545,31 @@ func hasPythonPackageLayout(path string) bool {
 			continue
 		}
 		for _, entry := range entries {
-			if entry.IsDir() {
+			if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".py") {
 				return true
 			}
+			if entry.IsDir() && directoryContainsPythonFiles(filepath.Join(path, root, entry.Name())) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func directoryContainsPythonFiles(path string) bool {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			if directoryContainsPythonFiles(filepath.Join(path, entry.Name())) {
+				return true
+			}
+			continue
+		}
+		if strings.HasSuffix(entry.Name(), ".py") {
+			return true
 		}
 	}
 	return false
