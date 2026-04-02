@@ -490,6 +490,19 @@ func TestClassifyRustRepoFromRustToolchainWithoutCargoToml(t *testing.T) {
 	}
 }
 
+func TestClassifyRustRepoFromCargoLockWithoutCargoToml(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Cargo.lock"), []byte("[[package]]\nname = \"demo\"\nversion = \"0.1.0\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if len(got.TechStacks) != 1 || got.TechStacks[0] != TechStackRust {
+		t.Fatalf("expected rust tech stack from Cargo.lock, got %#v", got.TechStacks)
+	}
+}
+
 func TestClassifyNonGoRepoHasNoGoTechStack(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "main.py"), []byte("print('hello')\n"), 0o644); err != nil {

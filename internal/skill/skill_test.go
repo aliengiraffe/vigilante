@@ -1420,6 +1420,7 @@ func TestBuildIssuePromptForRustRepoIncludesRustGuidance(t *testing.T) {
 		"cargo test",
 		"cargo clippy",
 		"cargo-audit",
+		"cargo deny",
 		"unsafe",
 		"MSRV",
 	} {
