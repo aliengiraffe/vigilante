@@ -1240,6 +1240,18 @@ func TestIssueImplementationSkillSelectsDotNetForDotNetRepo(t *testing.T) {
 	}
 }
 
+func TestIssueImplementationSkillSelectsJavaKotlinForTraditionalJVMRepo(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackJVM},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnJavaKotlin {
+		t.Fatalf("expected Java/Kotlin skill, got %s", got)
+	}
+}
+
 func TestIssueImplementationSkillFallsBackForNonGoTraditionalRepo(t *testing.T) {
 	target := state.WatchTarget{
 		Classification: repo.Classification{
@@ -1277,6 +1289,18 @@ func TestIssueImplementationSkillPrefersMonorepoOverGo(t *testing.T) {
 	}
 }
 
+func TestIssueImplementationSkillPrefersGradleTopologyOverTraditionalJVMSkill(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:      repo.ShapeGradleMultiProject,
+			TechStacks: []repo.TechStack{repo.TechStackJVM},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnGradleMultiProject {
+		t.Fatalf("expected gradle multi-project skill for JVM repo, got %s", got)
+	}
+}
+
 func TestBuildIssuePromptForGoRepoIncludesGoSecurityGuidance(t *testing.T) {
 	target := state.WatchTarget{
 		Repo: "owner/repo",
@@ -1303,6 +1327,82 @@ func TestBuildIssuePromptForGoRepoIncludesGoSecurityGuidance(t *testing.T) {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q", text)
 		}
+	}
+}
+
+func TestBuildIssuePromptForJavaKotlinRepoIncludesJVMGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackJVM},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	for _, text := range []string{
+		"Java/Kotlin security and tooling guidance",
+		"Gradle or Maven",
+		"Checkstyle",
+		"SpotBugs",
+		"detekt",
+		"insecure deserialization",
+		"Selected issue implementation skill: vigilante-issue-implementation-on-java-kotlin",
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q", text)
+		}
+	}
+}
+
+func TestBuildIssuePromptForGradleMultiProjectJVMRepoKeepsGradleSkillAndAddsJVMGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeGradleMultiProject,
+			TechStacks: []repo.TechStack{repo.TechStackJVM},
+			ProcessHints: repo.ProcessHints{
+				GradleSettingsFiles:  []string{"settings.gradle.kts"},
+				GradleRootBuildFiles: []string{"build.gradle.kts"},
+			},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if !strings.Contains(prompt, VigilanteIssueImplementationOnGradleMultiProject) {
+		t.Fatalf("prompt should reference gradle multi-project skill, got: %s", prompt[:300])
+	}
+	if !strings.Contains(prompt, "Java/Kotlin security and tooling guidance") {
+		t.Fatalf("prompt missing JVM guidance")
+	}
+	if !strings.Contains(prompt, "Gradle tasks") {
+		t.Fatalf("prompt missing Gradle-specific JVM guidance")
+	}
+}
+
+func TestBuildIssuePromptForNonJVMRepoDoesNotIncludeJavaKotlinGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape: repo.ShapeTraditional,
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if strings.Contains(prompt, "Java/Kotlin security and tooling guidance") {
+		t.Fatalf("prompt should not include Java/Kotlin guidance for non-JVM repo")
 	}
 }
 

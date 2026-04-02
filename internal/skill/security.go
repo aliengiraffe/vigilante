@@ -30,6 +30,9 @@ func securityGuidanceForClassification(classification repo.Classification) strin
 	if slices.Contains(classification.TechStacks, repo.TechStackDotNet) {
 		sections = append(sections, dotNetSecurityGuidance(classification))
 	}
+	if slices.Contains(classification.TechStacks, repo.TechStackJVM) {
+		sections = append(sections, javaKotlinSecurityGuidance(classification))
+	}
 	return strings.Join(sections, "\n")
 }
 
@@ -399,6 +402,22 @@ func dotNetSecurityGuidance(classification repo.Classification) string {
 	return strings.Join(sections, "\n")
 }
 
+func javaKotlinSecurityGuidance(classification repo.Classification) string {
+	sections := []string{
+		"Java/Kotlin security and tooling guidance for this repository (apply where relevant to touched code and workflow — do not broaden issue scope):",
+	}
+	sections = append(sections, javaKotlinBuildGuidance(classification)...)
+	sections = append(sections, javaKotlinFormattingGuidance()...)
+	sections = append(sections, javaKotlinStaticAnalysisGuidance()...)
+	sections = append(sections, javaKotlinStyleGuidance()...)
+	sections = append(sections, javaKotlinSecureCodingGuidance()...)
+	sections = append(sections, javaKotlinDependencyGuidance()...)
+	if isMixedLanguageJVMRepo(classification) {
+		sections = append(sections, javaKotlinMixedLanguageGuidance()...)
+	}
+	return strings.Join(sections, "\n")
+}
+
 func dotNetFormattingGuidance() []string {
 	return []string{
 		"- Formatting: use the repository's standard .NET formatting path. When the repo uses `dotnet format`, run it on the affected project or solution scope before committing. Do not hand-format C# files when the SDK formatter or repo tooling is the expected path.",
@@ -459,5 +478,59 @@ func isMixedLanguageDotNetRepo(classification repo.Classification) bool {
 func dotNetMixedLanguageGuidance() []string {
 	return []string{
 		"- Mixed-language scope: this repository contains .NET code alongside other languages or frontend assets. Scope `.NET` validation (`dotnet test`, `dotnet format`, analyzers, restore/audit flows) to the affected .NET projects or solutions, and use each other stack's native tooling for non-.NET changes.",
+	}
+}
+
+func javaKotlinBuildGuidance(classification repo.Classification) []string {
+	if len(classification.ProcessHints.GradleSettingsFiles) > 0 || len(classification.ProcessHints.GradleRootBuildFiles) > 0 {
+		return []string{
+			"- Build/test workflow: use the repository's Gradle tasks for the smallest affected module or source set first, then expand only when shared code requires it. Prefer wrapper-backed commands and repo-defined tasks over ad hoc JVM commands.",
+		}
+	}
+	return []string{
+		"- Build/test workflow: use the repository's actual Gradle or Maven tasks for the smallest affected scope first, then broaden only when shared modules or integration boundaries require it. Prefer documented wrapper-backed commands over ad hoc JVM commands.",
+	}
+}
+
+func javaKotlinFormattingGuidance() []string {
+	return []string{
+		"- Formatting and style tools: use repo-standard tooling only when configured, such as Spotless, Checkstyle, ktlint, detekt formatting, or equivalent. Do not introduce a new formatter or broad style cleanup unrelated to the issue.",
+	}
+}
+
+func javaKotlinStaticAnalysisGuidance() []string {
+	return []string{
+		"- Static analysis: run repository-standard analysis when present, such as SpotBugs, Checkstyle, detekt, ktlint, PMD, Error Prone, or equivalent. If none is configured, rely on the repository's normal build/test path rather than inventing a new lint stack.",
+	}
+}
+
+func javaKotlinStyleGuidance() []string {
+	return []string{
+		"- Java/Kotlin style: follow standard Java conventions for touched Java code and Kotlin coding conventions for touched Kotlin code. Use null-safety and immutability idiomatically in Kotlin, and preserve the repository's existing exception-handling, package-layout, and documentation patterns.",
+	}
+}
+
+func javaKotlinSecureCodingGuidance() []string {
+	return []string{
+		"- Secure coding: avoid insecure deserialization, validate untrusted input at boundaries, and watch for SSRF, path traversal, template injection, SQL injection, unsafe reflection, and unsafe classloading patterns. Prefer framework-native secure defaults in Spring, Micronaut, Quarkus, or similar stacks. Use standard JDK/JVM crypto and security APIs correctly, and never store secrets or credentials in source files or fixtures.",
+	}
+}
+
+func javaKotlinDependencyGuidance() []string {
+	return []string{
+		"- Dependencies: preserve repository dependency-locking, checksum, wrapper, and version-catalog conventions. Minimize new dependencies, and do not bypass Maven or Gradle controls that the repository already uses for reproducibility or supply-chain safety.",
+	}
+}
+
+func isMixedLanguageJVMRepo(classification repo.Classification) bool {
+	if !slices.Contains(classification.TechStacks, repo.TechStackJVM) {
+		return false
+	}
+	return len(classification.TechStacks) > 1 || classification.Shape == repo.ShapeMonorepo
+}
+
+func javaKotlinMixedLanguageGuidance() []string {
+	return []string{
+		"- Mixed-language scope: this repository contains Java/Kotlin code alongside other languages or multi-module tooling. Scope Gradle or Maven validation to the touched JVM modules or source sets, and use other toolchains only for the files they own. When an issue spans JVM code and another stack, validate each side with its native tooling.",
 	}
 }

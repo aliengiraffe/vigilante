@@ -31,6 +31,7 @@ const VigilanteIssueImplementationOnDocker = "vigilante-issue-implementation-on-
 const VigilanteIssueImplementationOnKubernetes = "vigilante-issue-implementation-on-kubernetes"
 const VigilanteIssueImplementationOnPython = "vigilante-issue-implementation-on-python"
 const VigilanteIssueImplementationOnDotNet = "vigilante-issue-implementation-on-dotnet"
+const VigilanteIssueImplementationOnJavaKotlin = "vigilante-issue-implementation-on-java-kotlin"
 const VigilanteConflictResolution = "vigilante-conflict-resolution"
 const VigilanteCreateIssue = "vigilante-create-issue"
 const VigilanteLocalServiceDependencies = "vigilante-local-service-dependencies"
@@ -53,6 +54,7 @@ func VigilanteSkillNames() []string {
 		VigilanteIssueImplementationOnGradleMultiProject,
 		VigilanteIssueImplementationOnBazelMonorepo,
 		VigilanteIssueImplementationOnGo,
+		VigilanteIssueImplementationOnJavaKotlin,
 		VigilanteIssueImplementationOnGitHubActions,
 		VigilanteIssueImplementationOnDocker,
 		VigilanteIssueImplementationOnKubernetes,
@@ -273,6 +275,9 @@ func IssueImplementationSkill(target state.WatchTarget) string {
 		if isDotNetTarget(target) {
 			return VigilanteIssueImplementationOnDotNet
 		}
+		if isJavaKotlinTarget(target) {
+			return VigilanteIssueImplementationOnJavaKotlin
+		}
 		if isGitHubActionsTarget(target) {
 			return VigilanteIssueImplementationOnGitHubActions
 		}
@@ -351,6 +356,15 @@ func isDockerTarget(target state.WatchTarget) bool {
 func isDotNetTarget(target state.WatchTarget) bool {
 	for _, stack := range target.Classification.TechStacks {
 		if stack == repo.TechStackDotNet {
+			return true
+		}
+	}
+	return false
+}
+
+func isJavaKotlinTarget(target state.WatchTarget) bool {
+	for _, stack := range target.Classification.TechStacks {
+		if stack == repo.TechStackJVM {
 			return true
 		}
 	}
