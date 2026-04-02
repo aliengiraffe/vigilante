@@ -27,6 +27,7 @@ const VigilanteIssueImplementationOnGradleMultiProject = "vigilante-issue-implem
 const VigilanteIssueImplementationOnBazelMonorepo = "vigilante-issue-implementation-on-bazel-monorepo"
 const VigilanteIssueImplementationOnGo = "vigilante-issue-implementation-on-go"
 const VigilanteIssueImplementationOnGitHubActions = "vigilante-issue-implementation-on-github-actions"
+const VigilanteIssueImplementationOnDocker = "vigilante-issue-implementation-on-docker"
 const VigilanteConflictResolution = "vigilante-conflict-resolution"
 const VigilanteCreateIssue = "vigilante-create-issue"
 const VigilanteLocalServiceDependencies = "vigilante-local-service-dependencies"
@@ -50,6 +51,7 @@ func VigilanteSkillNames() []string {
 		VigilanteIssueImplementationOnBazelMonorepo,
 		VigilanteIssueImplementationOnGo,
 		VigilanteIssueImplementationOnGitHubActions,
+		VigilanteIssueImplementationOnDocker,
 		VigilanteConflictResolution,
 		VigilanteCreateIssue,
 		VigilanteLocalServiceDependencies,
@@ -259,6 +261,9 @@ func IssueImplementationSkill(target state.WatchTarget) string {
 		if isGitHubActionsTarget(target) {
 			return VigilanteIssueImplementationOnGitHubActions
 		}
+		if isDockerTarget(target) {
+			return VigilanteIssueImplementationOnDocker
+		}
 		return VigilanteIssueImplementation
 	}
 	if isBazelMonorepo(target.Classification) {
@@ -295,6 +300,15 @@ func isGoTarget(target state.WatchTarget) bool {
 func isGitHubActionsTarget(target state.WatchTarget) bool {
 	for _, stack := range target.Classification.TechStacks {
 		if stack == repo.TechStackGitHubActions {
+			return true
+		}
+	}
+	return false
+}
+
+func isDockerTarget(target state.WatchTarget) bool {
+	for _, stack := range target.Classification.TechStacks {
+		if stack == repo.TechStackDocker {
 			return true
 		}
 	}
@@ -384,7 +398,8 @@ func repoClassificationJSON(target state.WatchTarget) string {
 		len(classification.ProcessHints.BazelPackageRoots) > 0 ||
 		len(classification.ProcessHints.NodePackageManagers) > 0 ||
 		len(classification.ProcessHints.NodeLockFiles) > 0 ||
-		len(classification.ProcessHints.TypeScriptConfigs) > 0 {
+		len(classification.ProcessHints.TypeScriptConfigs) > 0 ||
+		len(classification.ProcessHints.DockerFiles) > 0 {
 		payload.ProcessHints = &classification.ProcessHints
 	}
 	data, err := json.Marshal(payload)

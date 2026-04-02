@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vigilante Docker Issue Implementation"
+  short_description: "Implement a Vigilante-dispatched issue in a Docker-focused repository with Dockerfile best practices, image hardening, and secret-safe build guidance"
+  default_prompt: "Use $vigilante-issue-implementation-on-docker to implement the assigned Docker issue in the provided worktree, follow Dockerfile best practices and image hardening guidance, comment on the issue, and open a PR."

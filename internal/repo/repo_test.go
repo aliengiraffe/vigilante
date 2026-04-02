@@ -651,6 +651,119 @@ func TestClassifyGoAndGitHubActionsRepoDetectsBoth(t *testing.T) {
 	}
 }
 
+func TestClassifyDockerRepoFromDockerfile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM alpine:3.19\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if got.Shape != ShapeTraditional {
+		t.Fatalf("expected traditional shape, got %#v", got.Shape)
+	}
+	hasDocker := false
+	for _, stack := range got.TechStacks {
+		if stack == TechStackDocker {
+			hasDocker = true
+		}
+	}
+	if !hasDocker {
+		t.Fatalf("expected docker tech stack, got %#v", got.TechStacks)
+	}
+	if len(got.ProcessHints.DockerFiles) != 1 || got.ProcessHints.DockerFiles[0] != "Dockerfile" {
+		t.Fatalf("expected Dockerfile in docker files, got %#v", got.ProcessHints.DockerFiles)
+	}
+}
+
+func TestClassifyDockerRepoFromComposeFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte("version: '3'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	hasDocker := false
+	for _, stack := range got.TechStacks {
+		if stack == TechStackDocker {
+			hasDocker = true
+		}
+	}
+	if !hasDocker {
+		t.Fatalf("expected docker tech stack from compose file, got %#v", got.TechStacks)
+	}
+	if len(got.ProcessHints.DockerFiles) != 1 || got.ProcessHints.DockerFiles[0] != "docker-compose.yml" {
+		t.Fatalf("expected docker-compose.yml in docker files, got %#v", got.ProcessHints.DockerFiles)
+	}
+}
+
+func TestClassifyDockerRepoMultipleSignals(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM node:20\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yaml"), []byte("version: '3'\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".dockerignore"), []byte("node_modules\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if len(got.ProcessHints.DockerFiles) != 3 {
+		t.Fatalf("expected 3 docker files, got %#v", got.ProcessHints.DockerFiles)
+	}
+}
+
+func TestClassifyNonDockerRepoHasNoDockerTechStack(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.py"), []byte("print('hello')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	for _, stack := range got.TechStacks {
+		if stack == TechStackDocker {
+			t.Fatalf("unexpected docker tech stack for non-Docker repo")
+		}
+	}
+	if len(got.ProcessHints.DockerFiles) != 0 {
+		t.Fatalf("expected no docker files, got %#v", got.ProcessHints.DockerFiles)
+	}
+}
+
+func TestClassifyGoAndDockerRepoDetectsBoth(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM golang:1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	hasGo := false
+	hasDocker := false
+	for _, stack := range got.TechStacks {
+		if stack == TechStackGo {
+			hasGo = true
+		}
+		if stack == TechStackDocker {
+			hasDocker = true
+		}
+	}
+	if !hasGo {
+		t.Fatalf("expected go tech stack, got %#v", got.TechStacks)
+	}
+	if !hasDocker {
+		t.Fatalf("expected docker tech stack, got %#v", got.TechStacks)
+	}
+}
+
 func TestExpandPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

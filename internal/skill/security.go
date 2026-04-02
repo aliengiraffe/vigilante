@@ -18,6 +18,9 @@ func securityGuidanceForClassification(classification repo.Classification) strin
 	if slices.Contains(classification.TechStacks, repo.TechStackGitHubActions) {
 		sections = append(sections, githubActionsSecurityGuidance())
 	}
+	if slices.Contains(classification.TechStacks, repo.TechStackDocker) {
+		sections = append(sections, dockerSecurityGuidance(classification))
+	}
 	return strings.Join(sections, "\n")
 }
 
@@ -226,5 +229,47 @@ func githubActionsOIDCGuidance() []string {
 func githubActionsWorkflowLintingGuidance() []string {
 	return []string{
 		"- Workflow validation: run `actionlint` on touched workflow files when it is available. If `actionlint` is not installed, note its absence and continue with manual review. Set `timeout-minutes` on jobs to prevent hung runners, and use `concurrency` groups to avoid redundant workflow runs.",
+	}
+}
+
+func dockerSecurityGuidance(classification repo.Classification) string {
+	sections := []string{
+		"Docker and container security guidance for this repository (apply where relevant to touched Dockerfiles, build config, and workflow — do not broaden issue scope):",
+	}
+	sections = append(sections, dockerBaseImageGuidance()...)
+	sections = append(sections, dockerBuildGuidance()...)
+	sections = append(sections, dockerSecretGuidance()...)
+	sections = append(sections, dockerRuntimeGuidance()...)
+	sections = append(sections, dockerValidationGuidance()...)
+	return strings.Join(sections, "\n")
+}
+
+func dockerBaseImageGuidance() []string {
+	return []string{
+		"- Base images: pin base images to specific versions or digests rather than mutable tags like `latest`. Prefer minimal base images (Alpine, distroless, scratch) to reduce attack surface. When the repository already uses digest-pinned or distroless images, preserve that convention.",
+	}
+}
+
+func dockerBuildGuidance() []string {
+	return []string{
+		"- Build structure: use multi-stage builds to separate build dependencies from the final runtime image. Set an explicit `WORKDIR` rather than relying on the default. Combine related `RUN` commands to minimize layers. Order instructions from least to most frequently changing to maximize build cache efficiency. Copy dependency manifests and install dependencies before copying application source.",
+	}
+}
+
+func dockerSecretGuidance() []string {
+	return []string{
+		"- Secrets: never pass secrets through `ARG` or `ENV` instructions — they persist in image history and layer metadata. Use BuildKit secret mounts (`--mount=type=secret`) for build-time secrets. Do not copy secret files (`.env`, credentials, tokens, private keys) into the image. Ensure `.dockerignore` excludes sensitive files and directories.",
+	}
+}
+
+func dockerRuntimeGuidance() []string {
+	return []string{
+		"- Runtime posture: run containers as a non-root user when practical — add a `USER` instruction after installing packages. Minimize installed packages and remove package manager caches in the same `RUN` layer. Do not install debug tools, editors, or shells in production images unless the repository explicitly requires them.",
+	}
+}
+
+func dockerValidationGuidance() []string {
+	return []string{
+		"- Validation: when the repository defines image scanning, Docker build checks, buildx bake, provenance, or policy workflows, respect and preserve them. Run `docker build` or the repository's defined build command to verify Dockerfile changes compile successfully. Do not disable or weaken existing security scanning or build-check configurations.",
 	}
 }

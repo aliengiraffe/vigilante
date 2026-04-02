@@ -38,6 +38,7 @@ const (
 	TechStackNodeJS        TechStack = "nodejs"
 	TechStackGo            TechStack = "go"
 	TechStackGitHubActions TechStack = "github-actions"
+	TechStackDocker        TechStack = "docker"
 )
 
 type ProcessHints struct {
@@ -51,6 +52,7 @@ type ProcessHints struct {
 	NodePackageManagers    []string `json:"node_package_managers,omitempty"`
 	NodeLockFiles          []string `json:"node_lock_files,omitempty"`
 	TypeScriptConfigs      []string `json:"typescript_configs,omitempty"`
+	DockerFiles            []string `json:"docker_files,omitempty"`
 }
 
 type Classification struct {
@@ -226,6 +228,7 @@ func Classify(path string) Classification {
 	detectNodeJSTechStack(absPath, &classification)
 	detectGoTechStack(absPath, &classification)
 	detectGitHubActionsTechStack(absPath, &classification)
+	detectDockerTechStack(absPath, &classification)
 
 	slices.Sort(classification.ProcessHints.GradleSettingsFiles)
 	slices.Sort(classification.ProcessHints.GradleRootBuildFiles)
@@ -237,6 +240,7 @@ func Classify(path string) Classification {
 	slices.Sort(classification.ProcessHints.NodePackageManagers)
 	slices.Sort(classification.ProcessHints.NodeLockFiles)
 	slices.Sort(classification.ProcessHints.TypeScriptConfigs)
+	slices.Sort(classification.ProcessHints.DockerFiles)
 	return classification
 }
 
@@ -430,6 +434,26 @@ func detectGitHubActionsTechStack(absPath string, classification *Classification
 			return
 		}
 	}
+}
+
+func detectDockerTechStack(absPath string, classification *Classification) {
+	for _, name := range []string{"Dockerfile", "Dockerfile.dev", "Dockerfile.prod"} {
+		if fileExists(filepath.Join(absPath, name)) {
+			classification.ProcessHints.DockerFiles = append(classification.ProcessHints.DockerFiles, name)
+		}
+	}
+	for _, name := range []string{"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"} {
+		if fileExists(filepath.Join(absPath, name)) {
+			classification.ProcessHints.DockerFiles = append(classification.ProcessHints.DockerFiles, name)
+		}
+	}
+	if fileExists(filepath.Join(absPath, ".dockerignore")) {
+		classification.ProcessHints.DockerFiles = append(classification.ProcessHints.DockerFiles, ".dockerignore")
+	}
+	if len(classification.ProcessHints.DockerFiles) == 0 {
+		return
+	}
+	classification.TechStacks = append(classification.TechStacks, TechStackDocker)
 }
 
 func isGradleMultiProject(path string, settingsFiles []string) bool {
