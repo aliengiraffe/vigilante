@@ -2988,6 +2988,7 @@ func TestScanOnceProcessesGitHubCommentResumeRequest(t *testing.T) {
 	if err := app.ScanOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	app.waitForSessions()
 
 	sessions, err := app.state.LoadSessions()
 	if err != nil {
