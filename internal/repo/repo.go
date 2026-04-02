@@ -44,6 +44,7 @@ const (
 	TechStackDotNet        TechStack = "dotnet"
 	TechStackJVM           TechStack = "java_kotlin"
 	TechStackPHP           TechStack = "php"
+	TechStackTerraform     TechStack = "terraform"
 )
 
 type ProcessHints struct {
@@ -240,6 +241,7 @@ func Classify(path string) Classification {
 	detectDotNetTechStack(absPath, &classification)
 	detectJVMTechStack(absPath, &classification)
 	detectPHPTechStack(absPath, &classification)
+	detectTerraformTechStack(absPath, &classification)
 
 	slices.Sort(classification.ProcessHints.GradleSettingsFiles)
 	slices.Sort(classification.ProcessHints.GradleRootBuildFiles)
@@ -513,6 +515,19 @@ func detectJVMTechStack(absPath string, classification *Classification) {
 	} {
 		if hasChildDirectories(filepath.Join(absPath, dir)) {
 			classification.TechStacks = append(classification.TechStacks, TechStackJVM)
+			return
+		}
+	}
+}
+
+func detectTerraformTechStack(absPath string, classification *Classification) {
+	entries, err := os.ReadDir(absPath)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".tf") {
+			classification.TechStacks = append(classification.TechStacks, TechStackTerraform)
 			return
 		}
 	}

@@ -36,6 +36,9 @@ func securityGuidanceForClassification(classification repo.Classification) strin
 	if slices.Contains(classification.TechStacks, repo.TechStackPHP) {
 		sections = append(sections, phpSecurityGuidance(classification))
 	}
+	if slices.Contains(classification.TechStacks, repo.TechStackTerraform) {
+		sections = append(sections, terraformSecurityGuidance(classification))
+	}
 	return strings.Join(sections, "\n")
 }
 
@@ -405,6 +408,23 @@ func dotNetSecurityGuidance(classification repo.Classification) string {
 	return strings.Join(sections, "\n")
 }
 
+func terraformSecurityGuidance(classification repo.Classification) string {
+	sections := []string{
+		"Terraform security and tooling guidance for this repository (apply where relevant to touched code and workflow — do not broaden issue scope):",
+	}
+	sections = append(sections, terraformFormattingGuidance()...)
+	sections = append(sections, terraformValidationGuidance()...)
+	sections = append(sections, terraformLintGuidance()...)
+	sections = append(sections, terraformStateSecurityGuidance()...)
+	sections = append(sections, terraformCredentialGuidance()...)
+	sections = append(sections, terraformProviderModuleGuidance()...)
+	sections = append(sections, terraformPlanSafetyGuidance()...)
+	if isMixedLanguageTerraformRepo(classification) {
+		sections = append(sections, terraformMixedLanguageGuidance()...)
+	}
+	return strings.Join(sections, "\n")
+}
+
 func javaKotlinSecurityGuidance(classification repo.Classification) string {
 	sections := []string{
 		"Java/Kotlin security and tooling guidance for this repository (apply where relevant to touched code and workflow — do not broaden issue scope):",
@@ -471,6 +491,57 @@ func dotNetDependencyGuidance() []string {
 
 func isMixedLanguageDotNetRepo(classification repo.Classification) bool {
 	if !slices.Contains(classification.TechStacks, repo.TechStackDotNet) {
+		return false
+	}
+	return slices.Contains(classification.TechStacks, repo.TechStackNodeJS) ||
+		slices.Contains(classification.TechStacks, repo.TechStackGo) ||
+		classification.Shape == repo.ShapeMonorepo
+}
+
+func terraformFormattingGuidance() []string {
+	return []string{
+		"- Formatting: run `terraform fmt -recursive` on all touched Terraform directories before committing. Do not hand-format Terraform code — let the standard formatter handle layout.",
+	}
+}
+
+func terraformValidationGuidance() []string {
+	return []string{
+		"- Validation: run `terraform validate` in each root module directory that contains changed files. If validation requires initialized providers, run `terraform init -backend=false` first to install providers without configuring remote state.",
+	}
+}
+
+func terraformLintGuidance() []string {
+	return []string{
+		"- Linting: use the repository's established lint tooling. When `tflint` is configured (`.tflint.hcl`), run `tflint` on touched modules. When `tfsec` or `trivy` is configured, run the appropriate scanner. Do not introduce a different linter unless the issue specifically requires it. If no project linter is configured, `terraform validate` is sufficient.",
+	}
+}
+
+func terraformStateSecurityGuidance() []string {
+	return []string{
+		"- State security: treat state files (`terraform.tfstate`, `*.tfstate.backup`) as sensitive — they must never be committed. Verify `.gitignore` covers state files. Do not configure remote state backends with inline credentials. Mark sensitive variables and outputs with `sensitive = true`.",
+	}
+}
+
+func terraformCredentialGuidance() []string {
+	return []string{
+		"- Credentials and secrets: do not store secrets, tokens, credentials, or sensitive values in `.tf` files or `terraform.tfvars` committed to the repository. Do not assume cloud credentials are available in the agent environment. Use environment variables or external credential helpers for provider authentication.",
+	}
+}
+
+func terraformProviderModuleGuidance() []string {
+	return []string{
+		"- Provider and module hygiene: pin provider versions with `required_providers` blocks and use pessimistic version constraints (e.g., `~> 5.0`). Pin module versions when sourcing from a registry. Avoid `ref=main` for git-sourced modules in production configurations. Run `terraform init -upgrade` only when intentionally updating providers.",
+	}
+}
+
+func terraformPlanSafetyGuidance() []string {
+	return []string{
+		"- Plan and apply safety: do not run `terraform plan` or `terraform apply` unless the repository defines a safe local workflow for it. Assume cloud credentials are not available. Avoid wildcard IAM policies and overly permissive security group rules. Use `prevent_destroy` lifecycle rules on critical resources when appropriate.",
+	}
+}
+
+func isMixedLanguageTerraformRepo(classification repo.Classification) bool {
+	if !slices.Contains(classification.TechStacks, repo.TechStackTerraform) {
 		return false
 	}
 	return slices.Contains(classification.TechStacks, repo.TechStackNodeJS) ||
@@ -623,5 +694,11 @@ func isMixedLanguagePHPRepo(classification repo.Classification) bool {
 func phpMixedLanguageGuidance() []string {
 	return []string{
 		"- Mixed-language scope: this repository contains PHP code alongside other languages or frontend assets. Scope PHP tooling (Composer, PHPUnit, PHPStan, Psalm, PHP CS Fixer) to PHP source files only. When frontend or Node.js code is also present, respect its own toolchain for frontend-scoped changes. When an issue touches both PHP and other code, validate each side with its respective toolchain.",
+	}
+}
+
+func terraformMixedLanguageGuidance() []string {
+	return []string{
+		"- Mixed-language scope: this repository contains Terraform code alongside application code or other IaC tools. Scope Terraform tooling (`terraform fmt`, `terraform validate`, `tflint`, `tfsec`) to `.tf` files and Terraform directories only. When application code is also present, respect its own toolchain for application-scoped changes. When an issue touches both Terraform and application code, validate each side with its respective toolchain.",
 	}
 }

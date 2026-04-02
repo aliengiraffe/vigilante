@@ -1188,6 +1188,72 @@ func TestClassifyPHPAndNodeJSRepoDetectsBoth(t *testing.T) {
 	}
 }
 
+func TestClassifyTerraformRepoFromTFFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.tf"), []byte("resource \"aws_instance\" \"web\" {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if got.Shape != ShapeTraditional {
+		t.Fatalf("expected traditional shape, got %#v", got.Shape)
+	}
+	hasTerraform := false
+	for _, stack := range got.TechStacks {
+		if stack == TechStackTerraform {
+			hasTerraform = true
+		}
+	}
+	if !hasTerraform {
+		t.Fatalf("expected terraform tech stack, got %#v", got.TechStacks)
+	}
+}
+
+func TestClassifyNonTerraformRepoHasNoTerraformTechStack(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.py"), []byte("print('hello')\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	for _, stack := range got.TechStacks {
+		if stack == TechStackTerraform {
+			t.Fatalf("unexpected terraform tech stack for non-Terraform repo")
+		}
+	}
+}
+
+func TestClassifyTerraformAndGoRepoDetectsBoth(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "providers.tf"), []byte("terraform { required_providers {} }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	hasGo := false
+	hasTerraform := false
+	for _, stack := range got.TechStacks {
+		if stack == TechStackGo {
+			hasGo = true
+		}
+		if stack == TechStackTerraform {
+			hasTerraform = true
+		}
+	}
+	if !hasGo {
+		t.Fatalf("expected go tech stack, got %#v", got.TechStacks)
+	}
+	if !hasTerraform {
+		t.Fatalf("expected terraform tech stack, got %#v", got.TechStacks)
+	}
+}
+
 func TestExpandPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

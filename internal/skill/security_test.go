@@ -473,3 +473,95 @@ func TestKubernetesSecurityGuidanceDoesNotBroadenScope(t *testing.T) {
 		t.Fatalf("Kubernetes guidance missing scope-limiting instruction")
 	}
 }
+
+func TestSecurityGuidanceForTerraformRepo(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackTerraform},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	for _, text := range []string{
+		"Terraform security and tooling guidance",
+		"terraform fmt",
+		"terraform validate",
+		"tflint",
+		"terraform.tfstate",
+		"sensitive = true",
+		"required_providers",
+		"terraform plan",
+		"do not broaden issue scope",
+	} {
+		if !strings.Contains(guidance, text) {
+			t.Fatalf("Terraform guidance missing %q", text)
+		}
+	}
+}
+
+func TestSecurityGuidanceEmptyForNonTerraformRepo(t *testing.T) {
+	classification := repo.Classification{
+		Shape: repo.ShapeTraditional,
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	if strings.Contains(guidance, "Terraform security and tooling guidance") {
+		t.Fatalf("guidance should not include Terraform section for non-Terraform repo")
+	}
+}
+
+func TestSecurityGuidanceForGoAndTerraformRepo(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackGo, repo.TechStackTerraform},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	if !strings.Contains(guidance, "Go security and tooling guidance") {
+		t.Fatalf("guidance missing Go section for dual-stack repo")
+	}
+	if !strings.Contains(guidance, "Terraform security and tooling guidance") {
+		t.Fatalf("guidance missing Terraform section for dual-stack repo")
+	}
+}
+
+func TestTerraformSecurityGuidanceDoesNotBroadenScope(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackTerraform},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	if !strings.Contains(guidance, "do not broaden issue scope") {
+		t.Fatalf("Terraform guidance missing scope-limiting instruction")
+	}
+}
+
+func TestTerraformMixedLanguageGuidanceIncludedForGoAndTerraform(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackGo, repo.TechStackTerraform},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	if !strings.Contains(guidance, "Mixed-language scope: this repository contains Terraform code") {
+		t.Fatalf("guidance missing Terraform mixed-language section for Go+Terraform repo")
+	}
+}
+
+func TestTerraformMixedLanguageGuidanceOmittedForTerraformOnly(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackTerraform},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	if strings.Contains(guidance, "Mixed-language scope: this repository contains Terraform code") {
+		t.Fatalf("guidance should not include mixed-language section for Terraform-only repo")
+	}
+}

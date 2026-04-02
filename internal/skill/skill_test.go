@@ -2262,3 +2262,162 @@ func TestBuildIssuePromptForPHPOnlyRepoOmitsMixedGuidance(t *testing.T) {
 		t.Fatalf("prompt should not include mixed-language guidance for PHP-only repo")
 	}
 }
+
+func TestIssueImplementationSkillSelectsTerraformForTerraformRepo(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackTerraform},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnTerraform {
+		t.Fatalf("expected terraform skill, got %s", got)
+	}
+}
+
+func TestIssueImplementationSkillPrefersGoOverTerraformForDualStack(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackGo, repo.TechStackTerraform},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnGo {
+		t.Fatalf("expected go skill for Go+Terraform repo, got %s", got)
+	}
+}
+
+func TestIssueImplementationSkillPrefersMonorepoOverTerraform(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:         repo.ShapeMonorepo,
+			MonorepoStack: repo.MonorepoStackUnknown,
+			TechStacks:    []repo.TechStack{repo.TechStackTerraform},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnMonorepo {
+		t.Fatalf("expected monorepo skill for Terraform monorepo, got %s", got)
+	}
+}
+
+func TestBuildIssuePromptForTerraformRepoIncludesTerraformGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackTerraform},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	for _, text := range []string{
+		"Terraform security and tooling guidance",
+		"terraform fmt",
+		"terraform validate",
+		"terraform.tfstate",
+		"sensitive = true",
+		"required_providers",
+		"do not broaden issue scope",
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing Terraform guidance: %q", text)
+		}
+	}
+}
+
+func TestBuildIssuePromptForTerraformRepoSelectsTerraformSkill(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackTerraform},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if !strings.Contains(prompt, VigilanteIssueImplementationOnTerraform) {
+		t.Fatalf("prompt should reference Terraform skill, got: %s", prompt[:300])
+	}
+}
+
+func TestBuildIssuePromptForNonTerraformRepoDoesNotIncludeTerraformGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape: repo.ShapeTraditional,
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if strings.Contains(prompt, "Terraform security and tooling guidance") {
+		t.Fatalf("prompt should not include Terraform guidance for non-Terraform repo")
+	}
+}
+
+func TestBuildIssuePromptForGoAndTerraformRepoIncludesBothGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackGo, repo.TechStackTerraform},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if !strings.Contains(prompt, "Go security and tooling guidance") {
+		t.Fatalf("prompt missing Go guidance for dual-stack repo")
+	}
+	if !strings.Contains(prompt, "Terraform security and tooling guidance") {
+		t.Fatalf("prompt missing Terraform guidance for dual-stack repo")
+	}
+}
+
+func TestTerraformSkillIsBundled(t *testing.T) {
+	name := VigilanteIssueImplementationOnTerraform
+	path := "skills/" + name + "/SKILL.md"
+	_, err := fs.Stat(skillassets.Skills, path)
+	if err != nil {
+		t.Fatalf("expected %s to be bundled: %v", name, err)
+	}
+}
+
+func TestTerraformSkillCoversRequiredGuidanceAreas(t *testing.T) {
+	body, err := os.ReadFile(repoSkillPath(VigilanteIssueImplementationOnTerraform))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := string(body)
+	for _, snippet := range []string{
+		"terraform fmt",
+		"terraform validate",
+		"terraform init",
+		"tflint",
+		"tfsec",
+		"sensitive = true",
+		"terraform.tfstate",
+		"required_providers",
+		"vigilante commit",
+		"terraform plan",
+	} {
+		if !strings.Contains(text, snippet) {
+			t.Fatalf("Terraform skill missing required guidance: %q", snippet)
+		}
+	}
+}
