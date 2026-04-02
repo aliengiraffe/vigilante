@@ -28,6 +28,7 @@ const VigilanteIssueImplementationOnBazelMonorepo = "vigilante-issue-implementat
 const VigilanteIssueImplementationOnGo = "vigilante-issue-implementation-on-go"
 const VigilanteIssueImplementationOnGitHubActions = "vigilante-issue-implementation-on-github-actions"
 const VigilanteIssueImplementationOnDocker = "vigilante-issue-implementation-on-docker"
+const VigilanteIssueImplementationOnKubernetes = "vigilante-issue-implementation-on-kubernetes"
 const VigilanteConflictResolution = "vigilante-conflict-resolution"
 const VigilanteCreateIssue = "vigilante-create-issue"
 const VigilanteLocalServiceDependencies = "vigilante-local-service-dependencies"
@@ -52,6 +53,7 @@ func VigilanteSkillNames() []string {
 		VigilanteIssueImplementationOnGo,
 		VigilanteIssueImplementationOnGitHubActions,
 		VigilanteIssueImplementationOnDocker,
+		VigilanteIssueImplementationOnKubernetes,
 		VigilanteConflictResolution,
 		VigilanteCreateIssue,
 		VigilanteLocalServiceDependencies,
@@ -255,6 +257,9 @@ func IssueImplementationSkill(target state.WatchTarget) string {
 		return VigilanteIssueImplementationOnRushMonorepo
 	}
 	if normalizedRepoShape(target) != string(repo.ShapeMonorepo) {
+		if isKubernetesTarget(target) {
+			return VigilanteIssueImplementationOnKubernetes
+		}
 		if isGoTarget(target) {
 			return VigilanteIssueImplementationOnGo
 		}
@@ -286,6 +291,15 @@ func IssueImplementationSkill(target state.WatchTarget) string {
 		}
 		return VigilanteIssueImplementationOnMonorepo
 	}
+}
+
+func isKubernetesTarget(target state.WatchTarget) bool {
+	for _, stack := range target.Classification.TechStacks {
+		if stack == repo.TechStackKubernetes {
+			return true
+		}
+	}
+	return false
 }
 
 func isGoTarget(target state.WatchTarget) bool {

@@ -245,3 +245,72 @@ func TestGoSecurityGuidanceDoesNotBroadenScope(t *testing.T) {
 		t.Fatalf("Go guidance missing scope-limiting instruction")
 	}
 }
+
+func TestSecurityGuidanceForKubernetesRepo(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackKubernetes},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	for _, text := range []string{
+		"Kubernetes manifest and workload security guidance",
+		"Service accounts",
+		"automountServiceAccountToken",
+		"Security context",
+		"runAsNonRoot",
+		"allowPrivilegeEscalation",
+		"RBAC",
+		"least-privilege",
+		"Image security",
+		"image digests",
+		"NetworkPolicy",
+		"do not broaden issue scope",
+	} {
+		if !strings.Contains(guidance, text) {
+			t.Fatalf("Kubernetes guidance missing %q", text)
+		}
+	}
+}
+
+func TestSecurityGuidanceEmptyForNonKubernetesRepo(t *testing.T) {
+	classification := repo.Classification{
+		Shape: repo.ShapeTraditional,
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	if strings.Contains(guidance, "Kubernetes manifest") {
+		t.Fatalf("guidance should not include Kubernetes section for non-K8s repo")
+	}
+}
+
+func TestSecurityGuidanceForKubernetesAndGoRepo(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackGo, repo.TechStackKubernetes},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	if !strings.Contains(guidance, "Go security and tooling guidance") {
+		t.Fatalf("guidance missing Go section for Go+K8s repo")
+	}
+	if !strings.Contains(guidance, "Kubernetes manifest and workload security guidance") {
+		t.Fatalf("guidance missing Kubernetes section for Go+K8s repo")
+	}
+}
+
+func TestKubernetesSecurityGuidanceDoesNotBroadenScope(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackKubernetes},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	if !strings.Contains(guidance, "do not broaden issue scope") {
+		t.Fatalf("Kubernetes guidance missing scope-limiting instruction")
+	}
+}
