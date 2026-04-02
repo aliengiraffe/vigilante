@@ -131,12 +131,13 @@ func TestSessionBackendFieldsSerializeCorrectly(t *testing.T) {
 
 func TestWatchTargetBackendFieldsSerializeCorrectly(t *testing.T) {
 	target := WatchTarget{
-		Path:         "/repos/test",
-		Repo:         "owner/test",
-		IssueBackend: "jira",
-		GitBackend:   "github",
-		PRBackend:    "github",
-		ProjectRef:   "PROJ-123",
+		Path:                  "/repos/test",
+		Repo:                  "owner/test",
+		IssueBackend:          "jira",
+		GitBackend:            "github",
+		PRBackend:             "github",
+		ProjectRef:            "PROJ-123",
+		ResolvedAssigneeLogin: "octocat",
 	}
 	data, err := json.Marshal(target)
 	if err != nil {
@@ -146,7 +147,7 @@ func TestWatchTargetBackendFieldsSerializeCorrectly(t *testing.T) {
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.IssueBackend != "jira" || decoded.ProjectRef != "PROJ-123" {
+	if decoded.IssueBackend != "jira" || decoded.ProjectRef != "PROJ-123" || decoded.ResolvedAssigneeLogin != "octocat" {
 		t.Fatalf("backend fields did not round-trip: %+v", decoded)
 	}
 }
@@ -161,7 +162,7 @@ func TestWatchTargetBackendFieldsOmittedWhenEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw := string(data)
-	for _, field := range []string{"issue_backend", "git_backend", "pr_backend", "project_ref"} {
+	for _, field := range []string{"issue_backend", "git_backend", "pr_backend", "project_ref", "resolved_assignee_login"} {
 		if contains(raw, field) {
 			t.Fatalf("expected %q to be omitted from JSON, got: %s", field, raw)
 		}

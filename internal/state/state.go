@@ -17,26 +17,27 @@ import (
 )
 
 type WatchTarget struct {
-	Path           string              `json:"path"`
-	Repo           string              `json:"repo"`
-	BranchMode     BranchMode          `json:"branch_mode,omitempty"`
-	Branch         string              `json:"branch"`
-	ForkMode       bool                `json:"fork_mode,omitempty"`
-	ForkOwner      string              `json:"fork_owner,omitempty"`
-	PushRemote     string              `json:"push_remote,omitempty"`
-	PushRepo       string              `json:"push_repo,omitempty"`
-	Classification repo.Classification `json:"classification,omitempty"`
-	Provider       string              `json:"provider,omitempty"`
-	Labels         []string            `json:"labels,omitempty"`
-	Assignee       string              `json:"assignee,omitempty"`
-	MaxParallel    int                 `json:"max_parallel_sessions"`
-	LastScanAt     string              `json:"last_scan_at,omitempty"`
-	AddedAt        string              `json:"added_at,omitempty"`
-	IssueBackend   string              `json:"issue_backend,omitempty"`
-	IssueStage     string              `json:"issue_tracker_stage,omitempty"`
-	GitBackend     string              `json:"git_backend,omitempty"`
-	PRBackend      string              `json:"pr_backend,omitempty"`
-	ProjectRef     string              `json:"project_ref,omitempty"`
+	Path                  string              `json:"path"`
+	Repo                  string              `json:"repo"`
+	BranchMode            BranchMode          `json:"branch_mode,omitempty"`
+	Branch                string              `json:"branch"`
+	ForkMode              bool                `json:"fork_mode,omitempty"`
+	ForkOwner             string              `json:"fork_owner,omitempty"`
+	PushRemote            string              `json:"push_remote,omitempty"`
+	PushRepo              string              `json:"push_repo,omitempty"`
+	Classification        repo.Classification `json:"classification,omitempty"`
+	Provider              string              `json:"provider,omitempty"`
+	Labels                []string            `json:"labels,omitempty"`
+	Assignee              string              `json:"assignee,omitempty"`
+	ResolvedAssigneeLogin string              `json:"resolved_assignee_login,omitempty"`
+	MaxParallel           int                 `json:"max_parallel_sessions"`
+	LastScanAt            string              `json:"last_scan_at,omitempty"`
+	AddedAt               string              `json:"added_at,omitempty"`
+	IssueBackend          string              `json:"issue_backend,omitempty"`
+	IssueStage            string              `json:"issue_tracker_stage,omitempty"`
+	GitBackend            string              `json:"git_backend,omitempty"`
+	PRBackend             string              `json:"pr_backend,omitempty"`
+	ProjectRef            string              `json:"project_ref,omitempty"`
 }
 
 type BranchMode string

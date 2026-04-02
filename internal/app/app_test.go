@@ -7345,6 +7345,101 @@ func TestScanOnceReportsRepoScanFailureWhenResolvingDefaultAssigneeFails(t *test
 	}
 }
 
+func TestScanOnceCachesResolvedMeAssigneeAcrossScans(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	var stdout bytes.Buffer
+	app := New()
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatalf("unexpected error on first scan: %v", err)
+	}
+
+	targets, err := app.state.LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].ResolvedAssigneeLogin != "nicobistolfi" {
+		t.Fatalf("expected resolved assignee login to be cached, got: %#v", targets)
+	}
+
+	stdout.Reset()
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatalf("unexpected error on second scan: %v", err)
+	}
+	if got := stdout.String(); strings.Contains(got, "scan failed") {
+		t.Fatalf("unexpected scan failure output: %s", got)
+	}
+}
+
+func TestScanOnceReusesCachedResolvedMeAssigneeAfterRestart(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatalf("unexpected error on initial scan: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	restarted := New()
+	restarted.stdout = &stdout
+	restarted.stderr = testutil.IODiscard{}
+	restarted.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+		},
+	}
+
+	if err := restarted.ScanOnce(context.Background()); err != nil {
+		t.Fatalf("unexpected error after restart: %v", err)
+	}
+	if got := stdout.String(); strings.Contains(got, "scan failed") {
+		t.Fatalf("unexpected scan failure output after restart: %s", got)
+	}
+}
+
 func TestScanOnceMarksStaleSessionPendingAutoRestart(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
