@@ -2010,77 +2010,18 @@ func sessionAffectedByGitHubRateLimitPause(session state.Session) bool {
 func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session, issueCache scanIssueDetailsCache) ([]state.Session, error) {
 	for i := range sessions {
 		session := &sessions[i]
-		sessionCtx := withSessionAccessLogContext(ctx, "maintenance", *session)
 		if session.Status != state.SessionStatusSuccess || session.CleanupCompletedAt != "" || session.MonitoringStoppedAt != "" {
+			continue
+		}
+		if session.PullRequestMaintenanceInFlight {
 			continue
 		}
 		if shouldDelaySuccessfulSessionPoll(*session, a.clock()) {
 			continue
 		}
-
-		pr, err := a.prManager.FindPullRequestForBranch(sessionCtx, session.Repo, pullRequestHeadSelector(*session))
-		if err != nil {
-			session.LastMaintenanceError = err.Error()
-			session.UpdatedAt = a.clock().Format(time.RFC3339)
-			a.logger.Error("pr lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
-			continue
-		}
-		if pr == nil {
-			continue
-		}
-
-		updatePullRequestTrackingFromLookup(session, *pr)
-		if pr.MergedAt == nil {
-			if pr.State != "OPEN" {
-				if err := a.cleanupSessionArtifacts(sessionCtx, session, "pull_request_closed"); err != nil {
-					a.logger.Error("cleanup failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "branch", session.Branch, "worktree", session.WorktreePath, "state", pr.State, "err", err)
-					continue
-				}
-				a.logger.Info("cleanup complete", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "branch", session.Branch, "worktree", session.WorktreePath, "state", pr.State)
-				a.syncSessionIssueLabelsBestEffort(ctx, session, pr, nil, issueCache)
-				continue
-			}
-			detailedPR, issueDetails, err := a.maintainOpenPullRequest(sessionCtx, session, *pr, issueCache)
-			if err != nil {
-				session.UpdatedAt = a.clock().Format(time.RFC3339)
-				a.logger.Error("pr maintenance failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "branch", session.Branch, "err", err)
-				if shouldCommentMaintenanceFailure(*session, err) {
-					blocked := classifyBlockedReason("pr_maintenance", "git fetch origin main", err)
-					previousStatus := session.Status
-					markSessionBlocked(session, "pr_maintenance", blocked, a.clock())
-					a.emitSessionTransition(previousStatus, *session, "pr_maintenance")
-					body := ghcli.FormatProgressComment(ghcli.ProgressComment{
-						Stage:      "Blocked",
-						Emoji:      "🧱",
-						Percent:    85,
-						ETAMinutes: 15,
-						Items: []string{
-							maintenanceBlockedMessage(blocked, pr.Number, session.Branch),
-							blocking.CauseLine(blocked),
-							fmt.Sprintf("Next step: fix the blocker, then run `%s` or request resume from GitHub.", session.ResumeHint),
-						},
-						Tagline: "Difficulties strengthen the mind, as labor does the body.",
-					})
-					if commentErr := a.commentOnIssue(sessionCtx, session.Repo, session.IssueNumber, body, "blocked", "pr_maintenance"); commentErr != nil {
-						a.logger.Error("pr maintenance failure comment failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "err", commentErr)
-					}
-					session.LastMaintenanceError = err.Error()
-				}
-				a.syncSessionIssueLabelsBestEffort(ctx, session, pr, nil, issueCache)
-				continue
-			}
-			a.syncSessionIssueLabelsBestEffort(ctx, session, detailedPR, issueDetails, issueCache)
-			continue
-		}
-
-		session.PullRequestMergedAt = pr.MergedAt.UTC().Format(time.RFC3339)
-		if err := a.cleanupSessionArtifacts(sessionCtx, session, "pull_request_merged"); err != nil {
-			a.logger.Error("cleanup failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", session.PullRequestNumber, "branch", session.Branch, "worktree", session.WorktreePath, "merged_at", session.PullRequestMergedAt, "err", err)
-			continue
-		}
-
-		a.logger.Info("cleanup complete", "repo", session.Repo, "issue", session.IssueNumber, "pr", session.PullRequestNumber, "branch", session.Branch, "worktree", session.WorktreePath, "source", "pull_request_merged", "merged_at", session.PullRequestMergedAt)
-		a.syncSessionIssueLabelsBestEffort(ctx, session, pr, nil, issueCache)
+		session.PullRequestMaintenanceInFlight = true
+		session.UpdatedAt = a.clock().Format(time.RFC3339)
+		a.launchPullRequestMaintenance(ctx, *session, issueCache[sessionKey(session.Repo, session.IssueNumber)])
 	}
 
 	return sessions, nil
@@ -2091,6 +2032,9 @@ func (a *App) cleanupClosedIssueSessions(ctx context.Context, sessions []state.S
 		session := &sessions[i]
 		sessionCtx := withSessionAccessLogContext(ctx, "maintenance", *session)
 		if session.Status != state.SessionStatusSuccess || session.CleanupCompletedAt != "" || session.MonitoringStoppedAt != "" {
+			continue
+		}
+		if session.PullRequestMaintenanceInFlight {
 			continue
 		}
 		if shouldDelaySuccessfulSessionPoll(*session, a.clock()) {
@@ -2189,6 +2133,131 @@ func (a *App) launchIssueSession(ctx context.Context, target state.WatchTarget, 
 		a.syncSessionIssueLabelsBestEffort(ctx, &result, nil, nil, nil)
 		a.logger.Info("scan repo session finished", "repo", target.Repo, "issue", issue.Number, "status", result.Status)
 	}()
+}
+
+func (a *App) launchPullRequestMaintenance(ctx context.Context, session state.Session, seededIssueDetails *ghcli.IssueDetails) {
+	a.sessionWG.Add(1)
+	go func() {
+		defer a.sessionWG.Done()
+
+		issueCache := make(scanIssueDetailsCache)
+		if seededIssueDetails != nil {
+			issueCache[sessionKey(session.Repo, session.IssueNumber)] = seededIssueDetails
+		}
+		result := session
+		pr, issueDetails, _ := a.runPullRequestMaintenance(ctx, &result, issueCache)
+
+		a.sessionMu.Lock()
+		sessions, loadErr := a.state.LoadSessions()
+		if loadErr != nil {
+			a.sessionMu.Unlock()
+			a.logger.Error("pr maintenance result load failed", "repo", session.Repo, "issue", session.IssueNumber, "err", loadErr)
+			return
+		}
+
+		latest, ok := findSession(sessions, session.Repo, session.IssueNumber)
+		if !ok {
+			a.sessionMu.Unlock()
+			return
+		}
+		if !latest.PullRequestMaintenanceInFlight {
+			a.sessionMu.Unlock()
+			return
+		}
+		if latest.Status != state.SessionStatusSuccess || latest.CleanupCompletedAt != "" || latest.MonitoringStoppedAt != "" {
+			latest.PullRequestMaintenanceInFlight = false
+			latest.UpdatedAt = a.clock().Format(time.RFC3339)
+			sessions = upsertSession(sessions, latest)
+			if saveErr := a.state.SaveSessions(sessions); saveErr != nil {
+				a.sessionMu.Unlock()
+				a.logger.Error("pr maintenance result save failed", "repo", session.Repo, "issue", session.IssueNumber, "err", saveErr)
+				return
+			}
+			a.sessionMu.Unlock()
+			return
+		}
+
+		result.PullRequestMaintenanceInFlight = false
+		sessions = upsertSession(sessions, result)
+		if saveErr := a.state.SaveSessions(sessions); saveErr != nil {
+			a.sessionMu.Unlock()
+			a.logger.Error("pr maintenance result save failed", "repo", session.Repo, "issue", session.IssueNumber, "err", saveErr)
+			return
+		}
+		a.sessionMu.Unlock()
+
+		if issueDetails == nil {
+			issueDetails = issueCache[sessionKey(result.Repo, result.IssueNumber)]
+		}
+		a.syncSessionIssueLabelsBestEffort(ctx, &result, pr, issueDetails, issueCache)
+	}()
+}
+
+func (a *App) runPullRequestMaintenance(ctx context.Context, session *state.Session, issueCache scanIssueDetailsCache) (*ghcli.PullRequest, *ghcli.IssueDetails, error) {
+	sessionCtx := withSessionAccessLogContext(ctx, "maintenance", *session)
+	prManager := a.prManagerForSession(*session)
+
+	pr, err := prManager.FindPullRequestForBranch(sessionCtx, session.Repo, pullRequestHeadSelector(*session))
+	if err != nil {
+		session.LastMaintenanceError = err.Error()
+		session.UpdatedAt = a.clock().Format(time.RFC3339)
+		a.logger.Error("pr lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
+		return nil, nil, err
+	}
+	if pr == nil {
+		return nil, nil, nil
+	}
+
+	updatePullRequestTrackingFromLookup(session, *pr)
+	if pr.MergedAt == nil {
+		if pr.State != "OPEN" {
+			if err := a.cleanupSessionArtifacts(sessionCtx, session, "pull_request_closed"); err != nil {
+				a.logger.Error("cleanup failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "branch", session.Branch, "worktree", session.WorktreePath, "state", pr.State, "err", err)
+				return pr, nil, err
+			}
+			a.logger.Info("cleanup complete", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "branch", session.Branch, "worktree", session.WorktreePath, "state", pr.State)
+			return pr, nil, nil
+		}
+
+		detailedPR, issueDetails, err := a.maintainOpenPullRequest(sessionCtx, session, *pr, issueCache)
+		if err != nil {
+			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			a.logger.Error("pr maintenance failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "branch", session.Branch, "err", err)
+			if shouldCommentMaintenanceFailure(*session, err) {
+				blocked := classifyBlockedReason("pr_maintenance", "git fetch origin main", err)
+				previousStatus := session.Status
+				markSessionBlocked(session, "pr_maintenance", blocked, a.clock())
+				a.emitSessionTransition(previousStatus, *session, "pr_maintenance")
+				body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+					Stage:      "Blocked",
+					Emoji:      "🧱",
+					Percent:    85,
+					ETAMinutes: 15,
+					Items: []string{
+						maintenanceBlockedMessage(blocked, pr.Number, session.Branch),
+						blocking.CauseLine(blocked),
+						fmt.Sprintf("Next step: fix the blocker, then run `%s` or request resume from GitHub.", session.ResumeHint),
+					},
+					Tagline: "Difficulties strengthen the mind, as labor does the body.",
+				})
+				if commentErr := a.commentOnIssue(sessionCtx, session.Repo, session.IssueNumber, body, "blocked", "pr_maintenance"); commentErr != nil {
+					a.logger.Error("pr maintenance failure comment failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "err", commentErr)
+				}
+				session.LastMaintenanceError = err.Error()
+			}
+			return pr, nil, err
+		}
+		return detailedPR, issueDetails, nil
+	}
+
+	session.PullRequestMergedAt = pr.MergedAt.UTC().Format(time.RFC3339)
+	if err := a.cleanupSessionArtifacts(sessionCtx, session, "pull_request_merged"); err != nil {
+		a.logger.Error("cleanup failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", session.PullRequestNumber, "branch", session.Branch, "worktree", session.WorktreePath, "merged_at", session.PullRequestMergedAt, "err", err)
+		return pr, nil, err
+	}
+
+	a.logger.Info("cleanup complete", "repo", session.Repo, "issue", session.IssueNumber, "pr", session.PullRequestNumber, "branch", session.Branch, "worktree", session.WorktreePath, "source", "pull_request_merged", "merged_at", session.PullRequestMergedAt)
+	return pr, nil, nil
 }
 
 func (a *App) waitForSessions() {

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,6 +40,14 @@ type countingRunner struct {
 	counts map[string]int
 }
 
+type blockingMaintenanceRunner struct {
+	base     testutil.FakeRunner
+	blockDir string
+	started  chan struct{}
+	release  chan struct{}
+	once     sync.Once
+}
+
 func (r *countingRunner) Run(ctx context.Context, dir string, name string, args ...string) (string, error) {
 	if r.counts == nil {
 		r.counts = make(map[string]int)
@@ -48,6 +57,24 @@ func (r *countingRunner) Run(ctx context.Context, dir string, name string, args 
 }
 
 func (r *countingRunner) LookPath(file string) (string, error) {
+	return r.base.LookPath(file)
+}
+
+func (r *blockingMaintenanceRunner) Run(ctx context.Context, dir string, name string, args ...string) (string, error) {
+	if dir == r.blockDir && testutil.Key(name, args...) == "git fetch origin main" {
+		r.once.Do(func() {
+			close(r.started)
+		})
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-r.release:
+		}
+	}
+	return r.base.Run(ctx, dir, name, args...)
+}
+
+func (r *blockingMaintenanceRunner) LookPath(file string) (string, error) {
 	return r.base.LookPath(file)
 }
 
@@ -5172,6 +5199,144 @@ func TestScanOnceMaintainedIssueDoesNotConsumeOnlyDispatchSlot(t *testing.T) {
 	}
 	if sessions[1].IssueNumber != 2 || sessions[1].Status != state.SessionStatusSuccess {
 		t.Fatalf("expected issue #2 to complete a new session: %#v", sessions[1])
+	}
+}
+
+func TestScanOnceLongRunningPRMaintenanceDoesNotBlockFreshScans(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath1 := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	worktreePath2 := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-2")
+	branch2 := "vigilante/issue-2-second"
+	if err := os.MkdirAll(worktreePath1, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	var stdout bytes.Buffer
+	app := New()
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	runner := &blockingMaintenanceRunner{
+		blockDir: worktreePath1,
+		started:  make(chan struct{}),
+		release:  make(chan struct{}),
+		base: testutil.FakeRunner{
+			LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+			Outputs: mergeStringMaps(freshBaseBranchOutputs(repoPath, "main"), map[string]string{
+				"gh api user --jq .login": "nicobistolfi\n",
+				"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
+				"git fetch origin main":  "ok",
+				"git status --porcelain": "",
+				"git rebase origin/main": "Current branch vigilante/issue-1 is up to date.\n",
+				"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": `{"number":31,"title":"Test PR","body":"Test PR body","url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"IN_PROGRESS","conclusion":""}],"baseRefName":"main"}`,
+				"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels":                                                      `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[{"name":"to-do"}]},{"number":2,"title":"second","createdAt":"2026-03-10T12:00:00Z","url":"https://github.com/owner/repo/issues/2","labels":[{"name":"to-do"}]}]`,
+				"git worktree prune": "ok",
+				"git worktree add -b " + branch2 + " " + worktreePath2 + " origin/main":                                                       "ok",
+				sessionStartCommentCommand("owner/repo", 2, worktreePath2, state.Session{Branch: branch2}):                                    "ok",
+				preflightPromptCommand(worktreePath2, "owner/repo", repoPath, 2, "second", "https://github.com/owner/repo/issues/2", branch2): "baseline ok",
+				issuePromptCommand(worktreePath2, "owner/repo", repoPath, 2, "second", "https://github.com/owner/repo/issues/2", branch2):     "done",
+				"gh api repos/owner/repo/issues/1":          `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"open","labels":[]}`,
+				"gh api repos/owner/repo/issues/1/comments": "[]",
+			}),
+			Errors: map[string]error{
+				"git show-ref --verify --quiet refs/heads/" + branch2:        errors.New("exit status 1"),
+				"git show-ref --verify --quiet refs/heads/vigilante/issue-2": errors.New("exit status 1"),
+			},
+		},
+	}
+	app.env.Runner = runner
+
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me", Labels: []string{"to-do"}, MaxParallel: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:     repoPath,
+		Repo:         "owner/repo",
+		IssueNumber:  1,
+		IssueTitle:   "first",
+		IssueURL:     "https://github.com/owner/repo/issues/1",
+		Branch:       "vigilante/issue-1",
+		WorktreePath: worktreePath1,
+		Status:       state.SessionStatusSuccess,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- app.ScanOnce(context.Background())
+	}()
+
+	select {
+	case <-runner.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for maintenance to start")
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ScanOnce blocked on long-running PR maintenance")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		sessions, err := app.state.LoadSessions()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(sessions) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("expected fresh issue dispatch while maintenance was in flight, sessions=%#v", sessions)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	targets, err := app.state.LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].LastScanAt == "" {
+		t.Fatalf("expected watch target last_scan_at to advance during maintenance, got %#v", targets)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].IssueNumber != 1 || !sessions[0].PullRequestMaintenanceInFlight {
+		t.Fatalf("expected issue #1 maintenance to remain in flight, got %#v", sessions[0])
+	}
+	if sessions[1].IssueNumber != 2 {
+		t.Fatalf("expected second issue to be dispatched, got %#v", sessions)
+	}
+	if got := stdout.String(); !strings.Contains(got, "repo: owner/repo started issue #2 in "+worktreePath2) || !strings.Contains(got, "scanned 1 watch target(s), started 1 issue session(s)") {
+		t.Fatalf("unexpected output: %s", got)
+	}
+
+	close(runner.release)
+	app.waitForSessions()
+
+	sessions, err = app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].PullRequestMaintenanceInFlight {
+		t.Fatalf("expected maintenance flag to clear after completion: %#v", sessions[0])
+	}
+	if sessions[0].LastMaintenanceError != "pr maintenance waiting for required checks on PR #31" {
+		t.Fatalf("expected maintenance wait state after completion, got %#v", sessions[0])
 	}
 }
 
