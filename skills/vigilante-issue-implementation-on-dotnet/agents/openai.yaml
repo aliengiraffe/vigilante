@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vigilante .NET Issue Implementation"
+  short_description: "Implement a Vigilante-dispatched issue in a .NET or C# repository with analyzer, test, and security guidance"
+  default_prompt: "Use $vigilante-issue-implementation-on-dotnet to implement the assigned .NET issue in the provided worktree, follow the repository's analyzer and dotnet tooling workflow, comment on the issue, and open a PR."

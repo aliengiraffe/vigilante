@@ -1042,6 +1042,27 @@ func TestBazelMonorepoSkillCoversTargetSelectionAndDatabaseFlows(t *testing.T) {
 	}
 }
 
+func TestDotNetIssueImplementationSkillCoversToolingAndSecurity(t *testing.T) {
+	body, err := os.ReadFile(repoSkillPath(VigilanteIssueImplementationOnDotNet))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := string(body)
+	for _, snippet := range []string{
+		"dotnet format",
+		"dotnet test",
+		"nullable",
+		"NuGet",
+		"ASP.NET Core",
+		"vigilante commit",
+	} {
+		if !strings.Contains(text, snippet) {
+			t.Fatalf("skill missing %q", snippet)
+		}
+	}
+}
+
 func TestBuildIssuePromptIncludesSecurityGuidanceForNodeJSRepo(t *testing.T) {
 	target := state.WatchTarget{
 		Path: "/tmp/repo",
@@ -1207,6 +1228,18 @@ func TestIssueImplementationSkillSelectsPythonForPythonRepo(t *testing.T) {
 	}
 }
 
+func TestIssueImplementationSkillSelectsDotNetForDotNetRepo(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackDotNet},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnDotNet {
+		t.Fatalf("expected dotnet skill, got %s", got)
+	}
+}
+
 func TestIssueImplementationSkillFallsBackForNonGoTraditionalRepo(t *testing.T) {
 	target := state.WatchTarget{
 		Classification: repo.Classification{
@@ -1215,6 +1248,19 @@ func TestIssueImplementationSkillFallsBackForNonGoTraditionalRepo(t *testing.T) 
 	}
 	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementation {
 		t.Fatalf("expected default traditional skill, got %s", got)
+	}
+}
+
+func TestIssueImplementationSkillPrefersMonorepoOverDotNet(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:         repo.ShapeMonorepo,
+			MonorepoStack: repo.MonorepoStackUnknown,
+			TechStacks:    []repo.TechStack{repo.TechStackDotNet},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnMonorepo {
+		t.Fatalf("expected monorepo skill for dotnet monorepo, got %s", got)
 	}
 }
 
@@ -1312,6 +1358,35 @@ func TestBuildIssuePromptForPythonRepoIncludesPythonGuidance(t *testing.T) {
 	}
 }
 
+func TestBuildIssuePromptForDotNetRepoIncludesDotNetSecurityGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackDotNet},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	for _, text := range []string{
+		".NET/C# security and tooling guidance",
+		"dotnet format",
+		"dotnet test",
+		"nullable",
+		"NuGet",
+		"user secrets",
+		"do not broaden issue scope",
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q", text)
+		}
+	}
+}
+
 func TestBuildIssuePromptForNonPythonRepoDoesNotIncludePythonGuidance(t *testing.T) {
 	target := state.WatchTarget{
 		Repo: "owner/repo",
@@ -1328,6 +1403,43 @@ func TestBuildIssuePromptForNonPythonRepoDoesNotIncludePythonGuidance(t *testing
 
 	if strings.Contains(prompt, "Python security and tooling guidance") {
 		t.Fatalf("prompt should not include Python guidance for non-Python repo")
+	}
+}
+
+func TestBuildIssuePromptForDotNetRepoSelectsDotNetSkill(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackDotNet},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if !strings.Contains(prompt, VigilanteIssueImplementationOnDotNet) {
+		t.Fatalf("prompt should reference dotnet skill, got: %s", prompt[:300])
+	}
+}
+
+func TestBuildIssuePromptForNonDotNetRepoDoesNotIncludeDotNetGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape: repo.ShapeTraditional,
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if strings.Contains(prompt, ".NET/C# security and tooling guidance") {
+		t.Fatalf("prompt should not include dotnet guidance for non-dotnet repo")
 	}
 }
 
@@ -1462,6 +1574,18 @@ func TestIssueImplementationSkillPrefersPythonOverGitHubActions(t *testing.T) {
 		t.Fatalf("expected python skill to take priority over github-actions, got %s", got)
 	}
 }
+
+func TestIssueImplementationSkillPrefersDotNetOverGitHubActions(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackDotNet, repo.TechStackGitHubActions},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnDotNet {
+		t.Fatalf("expected dotnet skill to take priority over github-actions, got %s", got)
+	}
+}
 func TestIssueImplementationSkillPrefersMonorepoOverGitHubActions(t *testing.T) {
 	target := state.WatchTarget{
 		Classification: repo.Classification{
@@ -1564,6 +1688,31 @@ func TestBuildIssuePromptForGoAndActionsRepoIncludesBothGuidances(t *testing.T) 
 	}
 	if !strings.Contains(prompt, VigilanteIssueImplementationOnGo) {
 		t.Fatalf("prompt should select Go skill for Go+Actions repo")
+	}
+}
+
+func TestBuildIssuePromptForDotNetAndActionsRepoIncludesBothGuidances(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackDotNet, repo.TechStackGitHubActions},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if !strings.Contains(prompt, ".NET/C# security and tooling guidance") {
+		t.Fatalf("prompt missing .NET guidance")
+	}
+	if !strings.Contains(prompt, "GitHub Actions workflow security guidance") {
+		t.Fatalf("prompt missing GitHub Actions guidance")
+	}
+	if !strings.Contains(prompt, VigilanteIssueImplementationOnDotNet) {
+		t.Fatalf("prompt should select dotnet skill for dotnet+actions repo")
 	}
 }
 

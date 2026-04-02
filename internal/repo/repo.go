@@ -41,6 +41,7 @@ const (
 	TechStackDocker        TechStack = "docker"
 	TechStackKubernetes    TechStack = "kubernetes"
 	TechStackPython        TechStack = "python"
+	TechStackDotNet        TechStack = "dotnet"
 )
 
 type ProcessHints struct {
@@ -234,6 +235,7 @@ func Classify(path string) Classification {
 	detectDockerTechStack(absPath, &classification)
 	detectKubernetesTechStack(absPath, &classification)
 	detectPythonTechStack(absPath, &classification)
+	detectDotNetTechStack(absPath, &classification)
 
 	slices.Sort(classification.ProcessHints.GradleSettingsFiles)
 	slices.Sort(classification.ProcessHints.GradleRootBuildFiles)
@@ -524,6 +526,44 @@ func detectPythonTechStack(absPath string, classification *Classification) {
 	classification.TechStacks = append(classification.TechStacks, TechStackPython)
 }
 
+func detectDotNetTechStack(absPath string, classification *Classification) {
+	found := false
+	err := filepath.WalkDir(absPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case ".git", "node_modules", "bin", "obj":
+				if path != absPath {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+
+		name := d.Name()
+		switch {
+		case strings.HasSuffix(name, ".sln"),
+			strings.HasSuffix(name, ".csproj"),
+			strings.HasSuffix(name, ".fsproj"),
+			name == "Directory.Build.props",
+			name == "Directory.Build.targets":
+			found = true
+			return errStopWalk
+		default:
+			return nil
+		}
+	})
+	if err != nil && !errors.Is(err, errStopWalk) {
+		return
+	}
+	if found {
+		classification.TechStacks = append(classification.TechStacks, TechStackDotNet)
+	}
+}
+
+var errStopWalk = errors.New("stop walk")
 func isGradleMultiProject(path string, settingsFiles []string) bool {
 	for _, name := range settingsFiles {
 		data, err := os.ReadFile(filepath.Join(path, name))
