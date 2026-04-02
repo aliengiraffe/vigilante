@@ -211,6 +211,29 @@ func setupTelemetryCapture(t *testing.T) (*analyticsBatchCapture, func() error) 
 	}
 }
 
+func tempHomeDir(t *testing.T) string {
+	t.Helper()
+
+	home, err := os.MkdirTemp("", "vigilante-app-test-")
+	if err != nil {
+		t.Fatalf("create temp home: %v", err)
+	}
+	t.Cleanup(func() {
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			err := os.RemoveAll(home)
+			if err == nil || os.IsNotExist(err) {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("cleanup temp home %s: %v", home, err)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
+	return home
+}
+
 func TestRunSupportsTopLevelHelpFlags(t *testing.T) {
 	for _, arg := range []string{"--help", "-h"} {
 		t.Run(arg, func(t *testing.T) {
@@ -3213,7 +3236,7 @@ func TestResumeSessionIgnoresLocalCommentFailure(t *testing.T) {
 }
 
 func TestScanOnceLogsResumeCommentPollingSummaryInsteadOfRawCommand(t *testing.T) {
-	home := t.TempDir()
+	home := tempHomeDir(t)
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 	t.Setenv("HOME", home)
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
