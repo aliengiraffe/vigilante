@@ -1186,6 +1186,9 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []str
 				targets[i].Provider = providerID
 			}
 			if issueBackend != "" {
+				if targets[i].IssueBackend != issueBackend {
+					targets[i].ResolvedAssigneeLogin = ""
+				}
 				targets[i].IssueBackend = issueBackend
 			}
 			if issueStage != "" {
@@ -1196,6 +1199,9 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []str
 			}
 			targets[i].Labels = labels
 			if assignee != "" {
+				if targets[i].Assignee != assignee {
+					targets[i].ResolvedAssigneeLogin = ""
+				}
 				targets[i].Assignee = assignee
 			} else if targets[i].Assignee == "" {
 				targets[i].Assignee = defaultAssigneeFilter
@@ -1542,13 +1548,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			a.logger.Info("scan repo start", "repo", target.Repo, "path", target.Path, "max_parallel", target.MaxParallel)
 			issueTracker := a.issueTrackerForTarget(*target)
 			projectRef := a.issueProjectForTarget(*target)
-			resolvedAssignee, ok := resolvedAssignees[target.Assignee]
-			if !ok {
-				resolvedAssignee, err = issueTracker.ResolveAssignee(targetCtx, target.Assignee)
-				if err == nil {
-					resolvedAssignees[target.Assignee] = resolvedAssignee
-				}
-			}
+			resolvedAssignee, err := a.resolveWatchTargetAssignee(targetCtx, target, issueTracker, resolvedAssignees)
 			if err != nil {
 				target.LastScanAt = a.clock().Format(time.RFC3339)
 				a.logger.Error("scan repo issues failed", "repo", target.Repo, "err", err)
@@ -1723,6 +1723,34 @@ func (a *App) ScanOnce(ctx context.Context) error {
 		return nil
 	}
 	return nil
+}
+
+func (a *App) resolveWatchTargetAssignee(ctx context.Context, target *state.WatchTarget, issueTracker backend.IssueTracker, resolvedAssignees map[string]string) (string, error) {
+	if target.Assignee != "me" || issueTracker.ID() != backend.BackendGitHub {
+		return issueTracker.ResolveAssignee(ctx, target.Assignee)
+	}
+
+	if login := strings.TrimSpace(target.ResolvedAssigneeLogin); login != "" {
+		a.logger.Info("watch assignee cache reused", "repo", target.Repo, "assignee", target.Assignee, "login", login)
+		resolvedAssignees[target.Assignee] = login
+		return login, nil
+	}
+
+	if login := strings.TrimSpace(resolvedAssignees[target.Assignee]); login != "" {
+		target.ResolvedAssigneeLogin = login
+		a.logger.Info("watch assignee cache hydrated", "repo", target.Repo, "assignee", target.Assignee, "login", login)
+		return login, nil
+	}
+
+	login, err := issueTracker.ResolveAssignee(ctx, target.Assignee)
+	if err != nil {
+		return "", err
+	}
+	login = strings.TrimSpace(login)
+	target.ResolvedAssigneeLogin = login
+	resolvedAssignees[target.Assignee] = login
+	a.logger.Info("watch assignee cache refreshed", "repo", target.Repo, "assignee", target.Assignee, "login", login)
+	return login, nil
 }
 
 func (a *App) recoverStalledSessions(ctx context.Context, sessions []state.Session, issueCache scanIssueDetailsCache) ([]state.Session, error) {
@@ -3124,7 +3152,7 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 	}
 
 	issueTracker := a.issueTrackerForTarget(target)
-	resolvedAssignee, err := issueTracker.ResolveAssignee(ctx, target.Assignee)
+	resolvedAssignee, err := a.resolveWatchTargetAssignee(ctx, &target, issueTracker, map[string]string{})
 	if err != nil {
 		return err
 	}
