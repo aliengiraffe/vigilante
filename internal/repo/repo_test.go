@@ -444,6 +444,137 @@ func TestClassifyNonGoRepoHasNoGoTechStack(t *testing.T) {
 	}
 }
 
+func TestClassifyPythonRepoFromPyproject(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte("[project]\nname = \"demo\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if len(got.TechStacks) != 1 || got.TechStacks[0] != TechStackPython {
+		t.Fatalf("expected python tech stack, got %#v", got.TechStacks)
+	}
+	if len(got.ProcessHints.PythonSignals) != 1 || got.ProcessHints.PythonSignals[0] != "pyproject.toml" {
+		t.Fatalf("expected pyproject signal, got %#v", got.ProcessHints.PythonSignals)
+	}
+}
+
+func TestClassifyPythonRepoFromRequirementsAndPackageLayout(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "requirements.txt"), []byte("pytest\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "src", "demo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "src", "demo", "__init__.py"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if len(got.TechStacks) != 1 || got.TechStacks[0] != TechStackPython {
+		t.Fatalf("expected python tech stack, got %#v", got.TechStacks)
+	}
+	if len(got.ProcessHints.PythonSignals) != 2 {
+		t.Fatalf("expected python signals, got %#v", got.ProcessHints.PythonSignals)
+	}
+}
+
+func TestClassifyPythonRepoFromPackageLayoutOnly(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "tests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tests", "test_demo.py"), []byte("def test_demo():\n    assert True\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if len(got.TechStacks) != 1 || got.TechStacks[0] != TechStackPython {
+		t.Fatalf("expected python tech stack from package layout, got %#v", got.TechStacks)
+	}
+	if len(got.ProcessHints.PythonSignals) != 1 || got.ProcessHints.PythonSignals[0] != "python_package_layout" {
+		t.Fatalf("expected python package layout signal, got %#v", got.ProcessHints.PythonSignals)
+	}
+}
+
+func TestClassifyNonPythonRepoHasNoPythonTechStack(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# demo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	for _, stack := range got.TechStacks {
+		if stack == TechStackPython {
+			t.Fatalf("unexpected python tech stack for non-Python repo")
+		}
+	}
+	if len(got.ProcessHints.PythonSignals) != 0 {
+		t.Fatalf("expected no python signals, got %#v", got.ProcessHints.PythonSignals)
+	}
+}
+
+func TestClassifyNonPythonRepoWithGenericSourceLayoutHasNoPythonTechStack(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "src", "demo"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "src", "demo", "index.ts"), []byte("export const demo = true;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "tests"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "tests", "README.md"), []byte("# tests\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	for _, stack := range got.TechStacks {
+		if stack == TechStackPython {
+			t.Fatalf("unexpected python tech stack for generic source layout: %#v", got.TechStacks)
+		}
+	}
+	if len(got.ProcessHints.PythonSignals) != 0 {
+		t.Fatalf("expected no python signals for generic source layout, got %#v", got.ProcessHints.PythonSignals)
+	}
+}
+
+func TestClassifyGoAndPythonRepoDetectsBoth(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n\ngo 1.22\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte("[project]\nname = \"demo\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	hasGo := false
+	hasPython := false
+	for _, stack := range got.TechStacks {
+		if stack == TechStackGo {
+			hasGo = true
+		}
+		if stack == TechStackPython {
+			hasPython = true
+		}
+	}
+	if !hasGo {
+		t.Fatalf("expected go tech stack, got %#v", got.TechStacks)
+	}
+	if !hasPython {
+		t.Fatalf("expected python tech stack, got %#v", got.TechStacks)
+	}
+}
+
 func TestClassifyGoAndNodeJSRepoDetectsBoth(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n\ngo 1.22\n"), 0o644); err != nil {

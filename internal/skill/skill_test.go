@@ -1195,6 +1195,18 @@ func TestIssueImplementationSkillSelectsGoForGoRepo(t *testing.T) {
 	}
 }
 
+func TestIssueImplementationSkillSelectsPythonForPythonRepo(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackPython},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnPython {
+		t.Fatalf("expected python skill, got %s", got)
+	}
+}
+
 func TestIssueImplementationSkillFallsBackForNonGoTraditionalRepo(t *testing.T) {
 	target := state.WatchTarget{
 		Classification: repo.Classification{
@@ -1264,6 +1276,58 @@ func TestBuildIssuePromptForGoRepoSelectsGoSkill(t *testing.T) {
 
 	if !strings.Contains(prompt, VigilanteIssueImplementationOnGo) {
 		t.Fatalf("prompt should reference Go skill, got: %s", prompt[:300])
+	}
+}
+
+func TestBuildIssuePromptForPythonRepoIncludesPythonGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackPython},
+			ProcessHints: repo.ProcessHints{
+				PythonSignals: []string{"pyproject.toml"},
+			},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	for _, text := range []string{
+		VigilanteIssueImplementationOnPython,
+		`"tech_stacks":["python"]`,
+		"Python security and tooling guidance",
+		"python -m venv .venv",
+		"ruff format",
+		"pytest",
+		"pip-audit",
+		"secrets",
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q", text)
+		}
+	}
+}
+
+func TestBuildIssuePromptForNonPythonRepoDoesNotIncludePythonGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackGo},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if strings.Contains(prompt, "Python security and tooling guidance") {
+		t.Fatalf("prompt should not include Python guidance for non-Python repo")
 	}
 }
 
@@ -1387,6 +1451,17 @@ func TestIssueImplementationSkillPrefersGoOverGitHubActions(t *testing.T) {
 	}
 }
 
+func TestIssueImplementationSkillPrefersPythonOverGitHubActions(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackPython, repo.TechStackGitHubActions},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnPython {
+		t.Fatalf("expected python skill to take priority over github-actions, got %s", got)
+	}
+}
 func TestIssueImplementationSkillPrefersMonorepoOverGitHubActions(t *testing.T) {
 	target := state.WatchTarget{
 		Classification: repo.Classification{

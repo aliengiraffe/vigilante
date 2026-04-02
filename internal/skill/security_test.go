@@ -214,6 +214,50 @@ func TestSecurityGuidanceEmptyForGoRepoWithoutGoMod(t *testing.T) {
 	}
 }
 
+func TestSecurityGuidanceForPythonRepo(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackPython},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	for _, text := range []string{
+		"Python security and tooling guidance",
+		"python -m venv .venv",
+		"ruff format",
+		"black",
+		"mypy",
+		"pytest",
+		"pip-audit",
+		"pickle",
+		"subprocess",
+		"shell=True",
+		"secrets",
+		"do not broaden issue scope",
+	} {
+		if !strings.Contains(guidance, text) {
+			t.Fatalf("Python guidance missing %q", text)
+		}
+	}
+}
+
+func TestSecurityGuidanceForGoAndPythonRepo(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackGo, repo.TechStackPython},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	if !strings.Contains(guidance, "Go security and tooling guidance") {
+		t.Fatalf("guidance missing Go section for dual-stack repo")
+	}
+	if !strings.Contains(guidance, "Python security and tooling guidance") {
+		t.Fatalf("guidance missing Python section for dual-stack repo")
+	}
+}
+
 func TestSecurityGuidanceForGoAndNodeJSRepo(t *testing.T) {
 	classification := repo.Classification{
 		Shape:      repo.ShapeTraditional,
