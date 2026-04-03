@@ -440,6 +440,95 @@ func TestDetectLockfileAndManager(t *testing.T) {
 	})
 }
 
+func TestExtractPackageJSONPathsFromDiff(t *testing.T) {
+	tests := []struct {
+		name       string
+		diffOutput string
+		diffErr    error
+		want       int
+		wantErr    bool
+	}{
+		{
+			name:       "root package.json",
+			diffOutput: "package.json\nsrc/index.ts\n",
+			want:       1,
+		},
+		{
+			name:       "nested package.json files",
+			diffOutput: "packages/core/package.json\npackages/utils/package.json\nREADME.md\n",
+			want:       2,
+		},
+		{
+			name:       "no package.json",
+			diffOutput: "src/index.ts\nREADME.md\n",
+			want:       0,
+		},
+		{
+			name:       "empty diff",
+			diffOutput: "",
+			want:       0,
+		},
+		{
+			name:       "case insensitive",
+			diffOutput: "Package.JSON\n",
+			want:       1,
+		},
+		{
+			name:       "not a package.json suffix",
+			diffOutput: "notpackage.json\n",
+			want:       0,
+		},
+		{
+			name:    "git diff error",
+			diffErr: &exitError{code: 128},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := fakeRunner{
+				outputs: map[string]string{
+					"git diff --name-only origin/main...HEAD": tt.diffOutput,
+				},
+			}
+			if tt.diffErr != nil {
+				runner.errors = map[string]error{
+					"git diff --name-only origin/main...HEAD": tt.diffErr,
+				}
+			}
+			paths, err := ExtractPackageJSONPathsFromDiff(context.Background(), runner, "/fake/path", "main")
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(paths) != tt.want {
+				t.Errorf("got %d paths, want %d", len(paths), tt.want)
+			}
+		})
+	}
+}
+
+func TestExtractPackageJSONPathsFromDiffDefaultBranch(t *testing.T) {
+	runner := fakeRunner{
+		outputs: map[string]string{
+			"git diff --name-only origin/main...HEAD": "package.json\n",
+		},
+	}
+	paths, err := ExtractPackageJSONPathsFromDiff(context.Background(), runner, "/fake/path", "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(paths) != 1 {
+		t.Errorf("got %d paths, want 1 (should default to main)", len(paths))
+	}
+}
+
 // errExitCode1 simulates npm audit returning exit code 1 for vulnerabilities.
 var errExitCode1 = &exitError{code: 1}
 

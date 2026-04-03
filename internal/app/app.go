@@ -2220,6 +2220,13 @@ func (a *App) launchIssueSession(ctx context.Context, target state.WatchTarget, 
 		}
 		a.syncSessionIssueLabelsBestEffort(ctx, &result, nil, nil, nil)
 		a.logger.Info("scan repo session finished", "repo", target.Repo, "issue", issue.Number, "status", result.Status)
+
+		// Run deterministic package hardening on the worktree after a
+		// successful session push, using the local diff rather than
+		// querying GitHub for all open PRs.
+		if result.Status == state.SessionStatusSuccess {
+			a.runPostPushPackageHardening(ctx, result)
+		}
 	}()
 }
 
@@ -6106,10 +6113,9 @@ func findWatchTargetProvider(targets []state.WatchTarget, path string) string {
 	return provider.DefaultID
 }
 
-// scanPackageHardeningForTargets runs deterministic JS/TS package hardening
-// scans on all watched targets that have the nodejs tech stack. It examines
-// open pull requests for package.json modifications and posts structured
-// findings comments when issues are detected.
+// scanPackageHardeningForTargets monitors checkbox state on existing hardening
+// comments. The initial scan is triggered post-push from the worktree by
+// runPostPushPackageHardening rather than by listing all open PRs.
 func (a *App) scanPackageHardeningForTargets(ctx context.Context, targets []state.WatchTarget) {
 	config, err := a.state.LoadServiceConfig()
 	if err != nil {
@@ -6117,7 +6123,6 @@ func (a *App) scanPackageHardeningForTargets(ctx context.Context, targets []stat
 		return
 	}
 	if !config.IsPackageHardeningEnabled() {
-		a.logger.Info("package hardening disabled via config")
 		return
 	}
 
@@ -6132,7 +6137,7 @@ func (a *App) scanPackageHardeningForTargets(ctx context.Context, targets []stat
 		if !isNodeJSTarget(target) {
 			continue
 		}
-		if a.scanPackageHardeningForTarget(ctx, target, hardeningState) {
+		if a.monitorHardeningCheckboxes(ctx, target, hardeningState) {
 			changed = true
 		}
 	}
@@ -6148,70 +6153,113 @@ func isNodeJSTarget(target state.WatchTarget) bool {
 	return slices.Contains(target.Classification.TechStacks, repo.TechStackNodeJS)
 }
 
-func (a *App) scanPackageHardeningForTarget(ctx context.Context, target state.WatchTarget, hs state.HardeningState) bool {
-	prMgr := a.prManagerForTarget(target)
-	prs, err := prMgr.ListOpenPullRequests(ctx, target.Repo)
-	if err != nil {
-		a.logger.Error("package hardening pr list failed", "repo", target.Repo, "err", err)
-		return false
-	}
-
+// monitorHardeningCheckboxes checks existing hardening comments for checkbox
+// state changes. It does not list or scan open PRs — the initial scan is
+// handled by runPostPushPackageHardening after a session pushes to the branch.
+func (a *App) monitorHardeningCheckboxes(ctx context.Context, target state.WatchTarget, hs state.HardeningState) bool {
 	changed := false
-	for _, pr := range prs {
-		key := state.HardeningPRKey(target.Repo, pr.Number)
-
-		// Check for checkbox state changes on already-commented PRs.
-		if existing, ok := hs[key]; ok && existing.CommentID > 0 {
-			if a.checkHardeningCheckbox(ctx, target, pr, &existing) {
-				hs[key] = existing
-				changed = true
-			}
+	for key, prState := range hs {
+		if prState.Repo != target.Repo || prState.CommentID == 0 || prState.RemediationSentAt != "" {
 			continue
 		}
-
-		files, err := prMgr.ListPullRequestFiles(ctx, target.Repo, pr.Number)
-		if err != nil {
-			a.logger.Error("package hardening pr files failed", "repo", target.Repo, "pr", pr.Number, "err", err)
-			continue
+		pr := backend.PullRequest{Number: prState.PRNumber}
+		if a.checkHardeningCheckbox(ctx, target, pr, &prState) {
+			hs[key] = prState
+			changed = true
 		}
+	}
+	return changed
+}
 
-		packageJSONPaths := extractPackageJSONPaths(files)
-		if len(packageJSONPaths) == 0 {
-			continue
-		}
-
-		a.logger.Info("package hardening scan", "repo", target.Repo, "pr", pr.Number, "package_json_files", len(packageJSONPaths))
-		result := hardening.Run(ctx, a.env.Runner, target.Path, packageJSONPaths)
-
-		if !result.HasFindings() {
-			a.logger.Info("package hardening clean", "repo", target.Repo, "pr", pr.Number)
-			continue
-		}
-
-		body := hardening.FormatHardeningComment(result, pr.Number)
-		if err := prMgr.CommentOnPullRequest(ctx, target.Repo, pr.Number, body); err != nil {
-			a.logger.Error("package hardening comment failed", "repo", target.Repo, "pr", pr.Number, "err", err)
-			continue
-		}
-
-		if err := prMgr.AddPullRequestLabel(ctx, target.Repo, pr.Number, labelFlaggedSecurityReview); err != nil {
-			a.logger.Error("package hardening label failed", "repo", target.Repo, "pr", pr.Number, "err", err)
-		}
-
-		commentID := findHardeningCommentID(ctx, prMgr, target.Repo, pr.Number)
-		hs[key] = state.HardeningPRState{
-			Repo:          target.Repo,
-			PRNumber:      pr.Number,
-			CommentID:     commentID,
-			CommentedAt:   a.clock().Format(time.RFC3339),
-			LabelApplied:  true,
-			FindingsCount: len(result.Findings),
-		}
-		changed = true
-		a.logger.Info("package hardening findings posted", "repo", target.Repo, "pr", pr.Number, "findings", len(result.Findings))
+// runPostPushPackageHardening runs deterministic JS/TS package hardening on a
+// session's worktree after the branch has been pushed upstream. It uses git
+// diff against the base branch to detect package.json changes, avoiding the
+// need to query GitHub for all open PRs.
+func (a *App) runPostPushPackageHardening(ctx context.Context, session state.Session) {
+	config, err := a.state.LoadServiceConfig()
+	if err != nil {
+		a.logger.Error("post-push hardening config load failed", "err", err)
+		return
+	}
+	if !config.IsPackageHardeningEnabled() {
+		return
 	}
 
-	return changed
+	target, ok := a.watchTargetByRepo(session.Repo)
+	if !ok {
+		return
+	}
+	if !isNodeJSTarget(target) {
+		return
+	}
+
+	worktreePath := session.WorktreePath
+	if worktreePath == "" {
+		return
+	}
+
+	baseBranch := session.BaseBranch
+	packageJSONPaths, err := hardening.ExtractPackageJSONPathsFromDiff(ctx, a.env.Runner, worktreePath, baseBranch)
+	if err != nil {
+		a.logger.Error("post-push hardening diff failed", "repo", session.Repo, "branch", session.Branch, "err", err)
+		return
+	}
+	if len(packageJSONPaths) == 0 {
+		a.logger.Info("post-push hardening no package.json changes", "repo", session.Repo, "branch", session.Branch)
+		return
+	}
+
+	a.logger.Info("post-push hardening scan", "repo", session.Repo, "branch", session.Branch, "package_json_files", len(packageJSONPaths))
+	result := hardening.Run(ctx, a.env.Runner, worktreePath, packageJSONPaths)
+
+	if !result.HasFindings() {
+		a.logger.Info("post-push hardening clean", "repo", session.Repo, "branch", session.Branch)
+		return
+	}
+
+	// Find the PR for this branch to post the comment.
+	prMgr := a.prManagerForTarget(target)
+	pr, err := prMgr.FindPullRequestForBranch(ctx, session.Repo, pullRequestHeadSelector(session))
+	if err != nil || pr == nil {
+		a.logger.Error("post-push hardening pr lookup failed", "repo", session.Repo, "branch", session.Branch, "err", err)
+		return
+	}
+
+	hardeningState, err := a.state.LoadHardeningState()
+	if err != nil {
+		a.logger.Error("post-push hardening state load failed", "err", err)
+		return
+	}
+
+	key := state.HardeningPRKey(session.Repo, pr.Number)
+	if existing, ok := hardeningState[key]; ok && existing.CommentID > 0 {
+		a.logger.Info("post-push hardening already commented", "repo", session.Repo, "pr", pr.Number)
+		return
+	}
+
+	body := hardening.FormatHardeningComment(result, pr.Number)
+	if err := prMgr.CommentOnPullRequest(ctx, session.Repo, pr.Number, body); err != nil {
+		a.logger.Error("post-push hardening comment failed", "repo", session.Repo, "pr", pr.Number, "err", err)
+		return
+	}
+
+	if err := prMgr.AddPullRequestLabel(ctx, session.Repo, pr.Number, labelFlaggedSecurityReview); err != nil {
+		a.logger.Error("post-push hardening label failed", "repo", session.Repo, "pr", pr.Number, "err", err)
+	}
+
+	commentID := findHardeningCommentID(ctx, prMgr, session.Repo, pr.Number)
+	hardeningState[key] = state.HardeningPRState{
+		Repo:          session.Repo,
+		PRNumber:      pr.Number,
+		CommentID:     commentID,
+		CommentedAt:   a.clock().Format(time.RFC3339),
+		LabelApplied:  true,
+		FindingsCount: len(result.Findings),
+	}
+	if err := a.state.SaveHardeningState(hardeningState); err != nil {
+		a.logger.Error("post-push hardening state save failed", "err", err)
+	}
+	a.logger.Info("post-push hardening findings posted", "repo", session.Repo, "pr", pr.Number, "findings", len(result.Findings))
 }
 
 func extractPackageJSONPaths(files []backend.PullRequestFile) []string {

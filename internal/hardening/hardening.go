@@ -378,6 +378,31 @@ func checkCIAuditPath(worktreePath string, pm string, result *Result) {
 	}
 }
 
+// ExtractPackageJSONPathsFromDiff uses git diff to find package.json files
+// that were changed in the worktree branch relative to the base branch.
+// This avoids querying the GitHub API for PR file lists.
+func ExtractPackageJSONPathsFromDiff(ctx context.Context, runner environment.Runner, worktreePath string, baseBranch string) ([]string, error) {
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+	output, err := runner.Run(ctx, worktreePath, "git", "diff", "--name-only", "origin/"+baseBranch+"...HEAD")
+	if err != nil {
+		return nil, fmt.Errorf("git diff failed: %w", err)
+	}
+	var paths []string
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		base := filepath.Base(line)
+		if strings.EqualFold(base, "package.json") {
+			paths = append(paths, line)
+		}
+	}
+	return paths, nil
+}
+
 func summarizeError(err error) string {
 	if err == nil {
 		return ""

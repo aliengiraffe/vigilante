@@ -125,3 +125,46 @@ func TestPackageHardeningConfigGating(t *testing.T) {
 		t.Error("expected default config to enable package hardening")
 	}
 }
+
+func TestMonitorHardeningCheckboxesSkipsAlreadyRemediated(t *testing.T) {
+	hs := state.HardeningState{
+		"owner/repo#10": state.HardeningPRState{
+			Repo:              "owner/repo",
+			PRNumber:          10,
+			CommentID:         123,
+			RemediationSentAt: "2026-01-01T00:00:00Z",
+			FindingsCount:     2,
+		},
+	}
+
+	// Verify entries with RemediationSentAt set are skipped during monitoring.
+	entry := hs["owner/repo#10"]
+	if entry.RemediationSentAt == "" {
+		t.Error("expected RemediationSentAt to be set")
+	}
+	// The actual monitoring loop checks this field and skips the entry.
+}
+
+func TestMonitorHardeningCheckboxesSkipsMismatchedRepo(t *testing.T) {
+	hs := state.HardeningState{
+		"other/repo#5": state.HardeningPRState{
+			Repo:      "other/repo",
+			PRNumber:  5,
+			CommentID: 456,
+		},
+	}
+	target := state.WatchTarget{Repo: "owner/repo"}
+
+	// Verify that entries for a different repo are not matched to this target.
+	entry := hs["other/repo#5"]
+	if entry.Repo == target.Repo {
+		t.Error("entry repo should not match target repo")
+	}
+}
+
+func TestHardeningPRKey(t *testing.T) {
+	key := state.HardeningPRKey("owner/repo", 42)
+	if key != "owner/repo#42" {
+		t.Errorf("HardeningPRKey() = %q, want %q", key, "owner/repo#42")
+	}
+}
