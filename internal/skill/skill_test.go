@@ -1301,6 +1301,18 @@ func TestIssueImplementationSkillPrefersGradleTopologyOverTraditionalJVMSkill(t 
 	}
 }
 
+func TestIssueImplementationSkillSelectsRustForRustRepo(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackRust},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnRust {
+		t.Fatalf("expected rust skill, got %s", got)
+	}
+}
+
 func TestBuildIssuePromptForGoRepoIncludesGoSecurityGuidance(t *testing.T) {
 	target := state.WatchTarget{
 		Repo: "owner/repo",
@@ -1385,6 +1397,54 @@ func TestBuildIssuePromptForGradleMultiProjectJVMRepoKeepsGradleSkillAndAddsJVMG
 	}
 	if !strings.Contains(prompt, "Gradle tasks") {
 		t.Fatalf("prompt missing Gradle-specific JVM guidance")
+	}
+}
+
+func TestBuildIssuePromptForRustRepoIncludesRustGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackRust},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	for _, text := range []string{
+		"Rust security and tooling guidance",
+		"cargo fmt",
+		"cargo test",
+		"cargo clippy",
+		"cargo-audit",
+		"unsafe",
+		"MSRV",
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q", text)
+		}
+	}
+}
+
+func TestBuildIssuePromptForRustRepoSelectsRustSkill(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackRust},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if !strings.Contains(prompt, VigilanteIssueImplementationOnRust) {
+		t.Fatalf("prompt should reference Rust skill, got: %s", prompt[:300])
 	}
 }
 

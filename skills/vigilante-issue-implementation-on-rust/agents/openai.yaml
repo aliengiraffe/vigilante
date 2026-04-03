@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vigilante Rust Issue Implementation"
+  short_description: "Implement a Vigilante-dispatched issue in a Rust repository with Cargo, Clippy, fmt, and security guidance"
+  default_prompt: "Use $vigilante-issue-implementation-on-rust to implement the assigned Rust issue in the provided worktree, follow idiomatic Cargo workflows, comment on the issue, and open a PR."

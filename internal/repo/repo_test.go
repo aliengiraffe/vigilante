@@ -461,6 +461,35 @@ func TestClassifyGoRepoFromGoMod(t *testing.T) {
 	}
 }
 
+func TestClassifyRustRepoFromCargoToml(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if got.Shape != ShapeTraditional {
+		t.Fatalf("expected traditional shape, got %#v", got.Shape)
+	}
+	if len(got.TechStacks) != 1 || got.TechStacks[0] != TechStackRust {
+		t.Fatalf("expected rust tech stack, got %#v", got.TechStacks)
+	}
+}
+
+func TestClassifyRustRepoFromRustToolchainWithoutCargoToml(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "rust-toolchain.toml"), []byte("[toolchain]\nchannel = \"stable\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if len(got.TechStacks) != 1 || got.TechStacks[0] != TechStackRust {
+		t.Fatalf("expected rust tech stack from rust-toolchain.toml, got %#v", got.TechStacks)
+	}
+}
+
 func TestClassifyNonGoRepoHasNoGoTechStack(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "main.py"), []byte("print('hello')\n"), 0o644); err != nil {
@@ -630,6 +659,35 @@ func TestClassifyGoAndNodeJSRepoDetectsBoth(t *testing.T) {
 	}
 	if !hasGo {
 		t.Fatalf("expected go tech stack, got %#v", got.TechStacks)
+	}
+	if !hasNodeJS {
+		t.Fatalf("expected nodejs tech stack, got %#v", got.TechStacks)
+	}
+}
+
+func TestClassifyRustAndNodeJSRepoDetectsBoth(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte("{\"name\":\"demo\"}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	hasRust := false
+	hasNodeJS := false
+	for _, stack := range got.TechStacks {
+		if stack == TechStackRust {
+			hasRust = true
+		}
+		if stack == TechStackNodeJS {
+			hasNodeJS = true
+		}
+	}
+	if !hasRust {
+		t.Fatalf("expected rust tech stack, got %#v", got.TechStacks)
 	}
 	if !hasNodeJS {
 		t.Fatalf("expected nodejs tech stack, got %#v", got.TechStacks)

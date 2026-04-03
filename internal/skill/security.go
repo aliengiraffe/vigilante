@@ -39,6 +39,9 @@ func securityGuidanceForClassification(classification repo.Classification) strin
 	if slices.Contains(classification.TechStacks, repo.TechStackTerraform) {
 		sections = append(sections, terraformSecurityGuidance(classification))
 	}
+	if slices.Contains(classification.TechStacks, repo.TechStackRust) {
+		sections = append(sections, rustSecurityGuidance(classification))
+	}
 	return strings.Join(sections, "\n")
 }
 
@@ -628,6 +631,23 @@ func phpSecurityGuidance(classification repo.Classification) string {
 	return strings.Join(sections, "\n")
 }
 
+func rustSecurityGuidance(classification repo.Classification) string {
+	sections := []string{
+		"Rust security and tooling guidance for this repository (apply where relevant to touched code and workflow — do not broaden issue scope):",
+	}
+	sections = append(sections, rustFormattingGuidance()...)
+	sections = append(sections, rustTestingGuidance()...)
+	sections = append(sections, rustClippyGuidance()...)
+	sections = append(sections, rustSecurityCheckGuidance()...)
+	sections = append(sections, rustSafetyGuidance()...)
+	sections = append(sections, rustDependencyGuidance()...)
+	sections = append(sections, rustWorkspaceGuidance()...)
+	if isMixedLanguageRustRepo(classification) {
+		sections = append(sections, rustMixedLanguageGuidance()...)
+	}
+	return strings.Join(sections, "\n")
+}
+
 func phpComposerGuidance() []string {
 	return []string{
 		"- Composer: use Composer-managed commands and dependency workflows. Run `composer install` (or `composer install --no-dev` for production) for reproducible installs from `composer.lock`. Run `composer update` only when intentionally upgrading dependencies. Prefer packages from Packagist and verify publisher trust before adding new dependencies.",
@@ -700,5 +720,62 @@ func phpMixedLanguageGuidance() []string {
 func terraformMixedLanguageGuidance() []string {
 	return []string{
 		"- Mixed-language scope: this repository contains Terraform code alongside application code or other IaC tools. Scope Terraform tooling (`terraform fmt`, `terraform validate`, `tflint`, `tfsec`) to `.tf` files and Terraform directories only. When application code is also present, respect its own toolchain for application-scoped changes. When an issue touches both Terraform and application code, validate each side with its respective toolchain.",
+	}
+}
+
+func rustFormattingGuidance() []string {
+	return []string{
+		"- Formatting: run `cargo fmt` on touched Rust code before committing. Respect the repository's `rustfmt.toml` configuration when present and do not hand-format Rust code.",
+	}
+}
+
+func rustTestingGuidance() []string {
+	return []string{
+		"- Testing: run targeted `cargo test` commands for the affected crate, package, or workspace member first, then broaden scope only when changes cross crate boundaries or the target is unclear. Respect repository feature flags and workspace defaults instead of inventing ad hoc test matrices.",
+	}
+}
+
+func rustClippyGuidance() []string {
+	return []string{
+		"- Linting: run `cargo clippy` when it is available and relevant to the touched code. Prefer the repository's existing Clippy configuration and address meaningful warnings instead of suppressing them broadly.",
+	}
+}
+
+func rustSecurityCheckGuidance() []string {
+	return []string{
+		"- Security and supply chain: when dependency or security-sensitive code changes are involved, run `cargo-audit` or `cargo deny` when those tools are already installed or configured by the repository. If they are unavailable, note that and continue with the repository's existing validation rather than fabricating output.",
+	}
+}
+
+func rustSafetyGuidance() []string {
+	return []string{
+		"- Safety and correctness: keep `unsafe` code minimal, justified, and tightly scoped. Prefer returning `Result` over panicking in normal error paths, use feature flags deliberately, and preserve existing lint levels or `#![forbid(unsafe_code)]`/`#![deny(...)]` policies where defined.",
+	}
+}
+
+func rustDependencyGuidance() []string {
+	return []string{
+		"- Dependencies: prefer the standard library when it covers the need. Keep dependency additions minimal, review default features before enabling them, and respect repository MSRV or `rust-toolchain.toml` constraints when choosing crate APIs or language features.",
+	}
+}
+
+func rustWorkspaceGuidance() []string {
+	return []string{
+		"- Workspace and tooling: follow the repository's Cargo workspace layout, package selection, and lint settings rather than running broad workspace commands by default. Treat `Cargo.toml`, `Cargo.lock`, and `rust-toolchain.toml` as the source of truth for package structure and toolchain expectations.",
+	}
+}
+
+func isMixedLanguageRustRepo(classification repo.Classification) bool {
+	if !slices.Contains(classification.TechStacks, repo.TechStackRust) {
+		return false
+	}
+	return slices.Contains(classification.TechStacks, repo.TechStackGo) ||
+		slices.Contains(classification.TechStacks, repo.TechStackNodeJS) ||
+		classification.Shape == repo.ShapeMonorepo
+}
+
+func rustMixedLanguageGuidance() []string {
+	return []string{
+		"- Mixed-language scope: this repository contains Rust code alongside other languages or workspace tooling. Scope Cargo commands to the affected Rust crate(s) and use the other language/toolchain-specific validation only where the issue actually touches those areas.",
 	}
 }
