@@ -88,6 +88,14 @@ At a high level, Vigilante runs this loop for each watched repository:
 
 GitHub is the only fully implemented backend today. The architecture already separates issue tracking, pull requests, labels, and rate limits so backends such as Linear and Jira can be added without rewriting the orchestration loop.
 
+## Package Hardening
+
+Vigilante includes a deterministic, code-driven package hardening scan for pull requests that modify `package.json` files. When a PR branch is pushed, Vigilante checks for lockfile presence, runs `npm audit`, flags non-exact dependency ranges, and verifies that CI workflows use deterministic install commands. If issues are found, Vigilante posts a structured comment on the PR with findings and applies the `vigilante:flagged-security-review` label. The comment includes an **implement fixes** checkbox that triggers an automated remediation session when checked.
+
+> **Note:** Package hardening currently applies only to repositories with a supported JavaScript/TypeScript/Node.js tech stack. Support for additional ecosystems is expected to expand over time.
+
+The feature is enabled by default and can be toggled with the `package_hardening_enabled` field in `config.json`. For operational details including trigger conditions, checks performed, and remediation flow, see [DOCS.md](DOCS.md).
+
 ## Key Commands
 
 - `vigilante setup`: verify dependencies, install bundled skills, and install the managed service
@@ -147,6 +155,7 @@ The full reference moved to [DOCS.md](DOCS.md), including:
 - full command reference and expected behaviors
 - local state layout and logs
 - issue selection, labeling, and pull-request maintenance
+- package hardening trigger conditions, checks, remediation flow, and config toggle
 - headless agent execution contract
 - GitHub integration, worktree strategy, and service behavior
 - CI, releases, and implementation status notes

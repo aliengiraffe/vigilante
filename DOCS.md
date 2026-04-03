@@ -625,6 +625,63 @@ For pull requests tied to an active Vigilante session:
 - keep the legacy plain `automerge` PR label working as a compatibility alias during migration to the namespaced label
 - never force through branch protection, required reviews, or failing checks
 
+## Package Hardening
+
+Vigilante runs a deterministic, code-driven package hardening scan for watched repositories classified with the `nodejs` tech stack. The scan is not LLM-driven — all checks use static analysis of manifest files, lockfiles, and CI configuration.
+
+### When the Scan Runs
+
+The hardening scan triggers after a coding-agent session pushes a branch upstream. Vigilante uses `git diff` against the PR base branch to detect whether any `package.json` files were added or modified. If no `package.json` changes are found, the scan is skipped. The scan does not list all open PRs — it only runs in the context of a session that just pushed.
+
+### Checks Performed
+
+The scan performs the following deterministic checks:
+
+- **Lockfile presence** (`lockfile-present`): Checks whether a `package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock` exists at the repository root. A missing lockfile means dependency resolution is non-deterministic and is flagged as high severity.
+- **npm audit** (`npm-audit-vulnerabilities`): When the detected package manager is npm and a lockfile is present, Vigilante runs `npm audit --json` in the worktree and reports known vulnerabilities. If the lockfile is missing, the audit is skipped with a medium-severity finding explaining why.
+- **Non-exact dependency ranges** (`non-exact-ranges`): Flags dependencies in `package.json` that use range specifiers (`^`, `~`, `>`, `<`, `*`, `||`) instead of exact pinned versions. This is reported as low severity since lockfiles typically pin transitive versions.
+- **CI deterministic install** (`ci-deterministic-install`): Scans GitHub Actions workflow files for deterministic install commands (`npm ci`, `pnpm install --frozen-lockfile`, `yarn install --immutable`). A missing deterministic install step is flagged as medium severity.
+- **CI audit step** (`ci-audit-step`): Checks whether CI workflows include a dependency audit step. A missing audit step is flagged as low severity.
+
+### PR Comment and Label Behavior
+
+When findings are present, Vigilante:
+
+1. Posts a structured PR comment with a findings table showing severity, check name, and details. The comment includes a collapsible remediation section with specific fix instructions for each finding.
+2. Applies the `vigilante:flagged-security-review` label to the pull request.
+3. Stores the comment ID and PR state in local hardening state to avoid duplicate comments on subsequent scans.
+
+The comment is identified by the `<!-- vigilante:package-hardening -->` HTML marker so Vigilante can locate it when scanning for checkbox changes.
+
+### Checkbox-Driven Remediation
+
+The hardening comment includes an **implement fixes** checkbox:
+
+```
+- [ ] **implement fixes** — Vigilante will launch an automated remediation session for the findings above.
+```
+
+When a human checks this box, Vigilante detects the change during its next poll loop, reacts with an `eyes` emoji, and dispatches an agentic remediation session scoped to the PR branch. After the remediation session completes, Vigilante posts a follow-up result comment indicating whether remediation succeeded or was incomplete.
+
+Vigilante monitors checkbox state only for PRs that already have a recorded hardening comment. It does not re-scan PRs that have already had a remediation attempt dispatched.
+
+### Configuration
+
+The feature is controlled by the `package_hardening_enabled` field in `~/.vigilante/config.json`:
+
+```json
+{
+  "package_hardening_enabled": true
+}
+```
+
+- When the field is absent or `null`, hardening defaults to **enabled**.
+- Set to `false` to disable the feature entirely.
+
+### Scope Limitation
+
+Package hardening currently applies only to repositories classified with the `nodejs` tech stack. Repositories without this classification are silently skipped. Support for additional package ecosystems is expected to expand in future releases.
+
 ## Issue Labeling System
 
 Vigilante should use a small issue-label taxonomy that complements issue comments instead of replacing them. The repository-owned proposal lives in [`.github/labels.json`](.github/labels.json).
