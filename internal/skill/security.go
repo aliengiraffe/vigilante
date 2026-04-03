@@ -24,6 +24,9 @@ func securityGuidanceForClassification(classification repo.Classification) strin
 	if slices.Contains(classification.TechStacks, repo.TechStackKubernetes) {
 		sections = append(sections, kubernetesSecurityGuidance())
 	}
+	if slices.Contains(classification.TechStacks, repo.TechStackRuby) {
+		sections = append(sections, rubySecurityGuidance(classification))
+	}
 	if slices.Contains(classification.TechStacks, repo.TechStackPython) {
 		sections = append(sections, pythonSecurityGuidance(classification))
 	}
@@ -342,6 +345,31 @@ func k8sScopeGuidance() []string {
 	return []string{
 		"- Scope: do not make broad cluster-wide changes when the issue only requires application-level manifest updates. Do not introduce cluster-admin RBAC, node-level access, or host-namespace usage unless the issue specifically requires it. Preserve existing security posture and improve it where relevant to the issue.",
 	}
+}
+
+func rubySecurityGuidance(classification repo.Classification) string {
+	sections := []string{
+		"Ruby security and tooling guidance for this repository (apply where relevant to touched code and workflow — do not broaden issue scope):",
+		"- Bundler discipline: prefer Bundler-managed commands (`bundle exec`, binstubs, or documented wrappers) over ad hoc gem execution. Keep `Gemfile.lock` changes intentional and review source or version shifts carefully.",
+		"- Testing: start with repo-standard Ruby tests for the touched area, such as `bundle exec rspec`, `bundle exec rake test`, `bundle exec ruby -Itest`, Rails test tasks, or another documented command. Prefer targeted suites first and widen only when necessary.",
+		"- Linting: use the repository's established lint tooling. When RuboCop is configured, run the repo-standard RuboCop command through Bundler rather than invoking a globally installed executable.",
+		"- Security audits: run `bundle audit` or `bundler-audit` when it is available and the change touches dependencies or security-sensitive code. For Rails apps, run Brakeman when it is already configured or documented. If these tools are absent, note that and continue with other validation.",
+		"- Unsafe deserialization: avoid `Marshal.load` on untrusted data and prefer safe parser modes over unrestricted YAML loading or other object-deserialization paths.",
+		"- Shell execution and secrets: avoid interpolating untrusted input into shell commands; prefer APIs with explicit argv handling where practical. Do not store secrets, credentials, or tokens in source files, fixtures, seeds, or committed env files.",
+		"- Framework defaults: for Rails or Rack applications, preserve secure defaults around strong parameters, CSRF protections, escaping, and framework security configuration unless the issue explicitly requires a change.",
+		"- Dependencies: prefer maintained gems already established by the repository. When adding or upgrading gems, keep Bundler metadata consistent and minimize dependency churn.",
+	}
+	if isMixedLanguageRubyRepo(classification) {
+		sections = append(sections, "- Mixed-language scope: this repository contains Ruby code alongside other languages or frontend assets. Scope Ruby validation to Ruby files and Bundler-managed commands for Ruby-scoped changes. When frontend or other language code is also present, validate each side with its respective toolchain.")
+	}
+	return strings.Join(sections, "\n")
+}
+
+func isMixedLanguageRubyRepo(classification repo.Classification) bool {
+	if !slices.Contains(classification.TechStacks, repo.TechStackRuby) {
+		return false
+	}
+	return len(classification.TechStacks) > 1 || classification.Shape == repo.ShapeMonorepo
 }
 
 func pythonSecurityGuidance(_ repo.Classification) string {

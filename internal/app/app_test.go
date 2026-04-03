@@ -1638,6 +1638,7 @@ func TestSetupCreatesStateLayoutAndInstallsBundledSkillsForAllProviders(t *testi
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementationOnGradleMultiProject, "SKILL.md"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementationOnRushMonorepo, "SKILL.md"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementationOnDotNet, "SKILL.md"),
+		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementationOnRuby, "SKILL.md"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteConflictResolution, "SKILL.md"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.DockerComposeLaunch, "SKILL.md"),
 		filepath.Join(app.state.ClaudeHome(), "skills", skill.VigilanteIssueImplementation, "SKILL.md"),
@@ -1691,6 +1692,7 @@ func TestSetupWithGeminiInstallsBundledSkillsForAllProviders(t *testing.T) {
 		filepath.Join(app.state.GeminiHome(), "skills", skill.VigilanteIssueImplementation, "SKILL.md"),
 		filepath.Join(app.state.GeminiHome(), "skills", skill.VigilanteIssueImplementationOnDotNet, "SKILL.md"),
 		filepath.Join(app.state.GeminiHome(), "skills", skill.VigilanteIssueImplementationOnRushMonorepo, "SKILL.md"),
+		filepath.Join(app.state.GeminiHome(), "skills", skill.VigilanteIssueImplementationOnRuby, "SKILL.md"),
 		filepath.Join(app.state.GeminiHome(), "skills", skill.VigilanteConflictResolution, "SKILL.md"),
 	} {
 		if _, err := os.Stat(path); err != nil {

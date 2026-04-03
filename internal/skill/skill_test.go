@@ -585,6 +585,7 @@ func TestEnsureInstalledCommitProducingSkillsIncludeCommitIdentityPolicy(t *test
 		VigilanteIssueImplementationOnGradle,
 		VigilanteIssueImplementationOnGradleMultiProject,
 		VigilanteIssueImplementationOnBazelMonorepo,
+		VigilanteIssueImplementationOnRuby,
 		VigilanteConflictResolution,
 	} {
 		data, err := os.ReadFile(filepath.Join(dir, "skills", name, "SKILL.md"))
@@ -632,6 +633,7 @@ func TestEnsureInstalledCommitProducingSkillsRequireVigilanteCommit(t *testing.T
 		VigilanteIssueImplementationOnGradle,
 		VigilanteIssueImplementationOnGradleMultiProject,
 		VigilanteIssueImplementationOnBazelMonorepo,
+		VigilanteIssueImplementationOnRuby,
 		VigilanteConflictResolution,
 	} {
 		data, err := os.ReadFile(filepath.Join(dir, "skills", name, "SKILL.md"))
@@ -1063,6 +1065,30 @@ func TestDotNetIssueImplementationSkillCoversToolingAndSecurity(t *testing.T) {
 	}
 }
 
+func TestRubyIssueImplementationSkillCoversBundlerLintTestsAndSecurity(t *testing.T) {
+	body, err := os.ReadFile(repoSkillPath(VigilanteIssueImplementationOnRuby))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	text := string(body)
+	for _, snippet := range []string{
+		"Bundler-managed commands",
+		"`bundle exec <command>`",
+		"`bundle exec rspec`",
+		"RuboCop",
+		"`bundle audit` or `bundler-audit`",
+		"Brakeman",
+		"unsafe deserialization",
+		"shell injection",
+		"Repository-specific instructions",
+	} {
+		if !strings.Contains(text, snippet) {
+			t.Fatalf("skill missing %q", snippet)
+		}
+	}
+}
+
 func TestBuildIssuePromptIncludesSecurityGuidanceForNodeJSRepo(t *testing.T) {
 	target := state.WatchTarget{
 		Path: "/tmp/repo",
@@ -1252,6 +1278,18 @@ func TestIssueImplementationSkillSelectsJavaKotlinForTraditionalJVMRepo(t *testi
 	}
 }
 
+func TestIssueImplementationSkillSelectsRubyForRubyRepo(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackRuby},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnRuby {
+		t.Fatalf("expected ruby skill, got %s", got)
+	}
+}
+
 func TestIssueImplementationSkillFallsBackForNonGoTraditionalRepo(t *testing.T) {
 	target := state.WatchTarget{
 		Classification: repo.Classification{
@@ -1310,6 +1348,19 @@ func TestIssueImplementationSkillSelectsRustForRustRepo(t *testing.T) {
 	}
 	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnRust {
 		t.Fatalf("expected rust skill, got %s", got)
+	}
+}
+
+func TestIssueImplementationSkillPrefersMonorepoOverRuby(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:         repo.ShapeMonorepo,
+			MonorepoStack: repo.MonorepoStackUnknown,
+			TechStacks:    []repo.TechStack{repo.TechStackRuby},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnMonorepo {
+		t.Fatalf("expected monorepo skill for Ruby monorepo, got %s", got)
 	}
 }
 
@@ -1548,6 +1599,37 @@ func TestBuildIssuePromptForDotNetRepoIncludesDotNetSecurityGuidance(t *testing.
 	}
 }
 
+func TestBuildIssuePromptForRubyRepoIncludesRubySecurityGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackRuby},
+			ProcessHints: repo.ProcessHints{
+				RubyManifestFiles: []string{"Gemfile"},
+			},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	for _, text := range []string{
+		"Ruby security and tooling guidance",
+		"Bundler-managed commands",
+		"bundle exec rspec",
+		"RuboCop",
+		"bundler-audit",
+		"Marshal.load",
+	} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q", text)
+		}
+	}
+}
+
 func TestBuildIssuePromptForNonPythonRepoDoesNotIncludePythonGuidance(t *testing.T) {
 	target := state.WatchTarget{
 		Repo: "owner/repo",
@@ -1604,6 +1686,25 @@ func TestBuildIssuePromptForNonDotNetRepoDoesNotIncludeDotNetGuidance(t *testing
 	}
 }
 
+func TestBuildIssuePromptForRubyRepoSelectsRubySkill(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackRuby},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if !strings.Contains(prompt, VigilanteIssueImplementationOnRuby) {
+		t.Fatalf("prompt should reference Ruby skill, got: %s", prompt[:300])
+	}
+}
+
 func TestBuildIssuePromptForNonGoRepoDoesNotIncludeGoGuidance(t *testing.T) {
 	target := state.WatchTarget{
 		Repo: "owner/repo",
@@ -1619,6 +1720,24 @@ func TestBuildIssuePromptForNonGoRepoDoesNotIncludeGoGuidance(t *testing.T) {
 
 	if strings.Contains(prompt, "Go security and tooling guidance") {
 		t.Fatalf("prompt should not include Go guidance for non-Go repo")
+	}
+}
+
+func TestBuildIssuePromptForNonRubyRepoDoesNotIncludeRubyGuidance(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape: repo.ShapeTraditional,
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if strings.Contains(prompt, "Ruby security and tooling guidance") {
+		t.Fatalf("prompt should not include Ruby guidance for non-Ruby repo")
 	}
 }
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vigilante Ruby Issue Implementation"
+  short_description: "Implement a Vigilante-dispatched issue in a Ruby repository with Bundler, test, lint, and security guidance"
+  default_prompt: "Use $vigilante-issue-implementation-on-ruby to implement the assigned Ruby issue in the provided worktree, follow the repository's Bundler-managed workflow, comment on the issue, and open a PR."
