@@ -46,6 +46,7 @@ const (
 	TechStackJVM           TechStack = "java_kotlin"
 	TechStackPHP           TechStack = "php"
 	TechStackTerraform     TechStack = "terraform"
+	TechStackRuby          TechStack = "ruby"
 )
 
 type ProcessHints struct {
@@ -61,6 +62,9 @@ type ProcessHints struct {
 	TypeScriptConfigs      []string `json:"typescript_configs,omitempty"`
 	DockerFiles            []string `json:"docker_files,omitempty"`
 	PythonSignals          []string `json:"python_signals,omitempty"`
+	RubyManifestFiles      []string `json:"ruby_manifest_files,omitempty"`
+	RubyVersionFiles       []string `json:"ruby_version_files,omitempty"`
+	RubyAppMarkers         []string `json:"ruby_app_markers,omitempty"`
 }
 
 type Classification struct {
@@ -244,6 +248,7 @@ func Classify(path string) Classification {
 	detectPHPTechStack(absPath, &classification)
 	detectTerraformTechStack(absPath, &classification)
 	detectRustTechStack(absPath, &classification)
+	detectRubyTechStack(absPath, &classification)
 
 	slices.Sort(classification.ProcessHints.GradleSettingsFiles)
 	slices.Sort(classification.ProcessHints.GradleRootBuildFiles)
@@ -257,6 +262,9 @@ func Classify(path string) Classification {
 	slices.Sort(classification.ProcessHints.TypeScriptConfigs)
 	slices.Sort(classification.ProcessHints.DockerFiles)
 	slices.Sort(classification.ProcessHints.PythonSignals)
+	slices.Sort(classification.ProcessHints.RubyManifestFiles)
+	slices.Sort(classification.ProcessHints.RubyVersionFiles)
+	slices.Sort(classification.ProcessHints.RubyAppMarkers)
 	return classification
 }
 
@@ -628,6 +636,27 @@ func detectPHPTechStack(absPath string, classification *Classification) {
 	classification.TechStacks = append(classification.TechStacks, TechStackPHP)
 }
 
+func detectRubyTechStack(absPath string, classification *Classification) {
+	for _, manifest := range []string{"Gemfile", "gems.rb"} {
+		if fileExists(filepath.Join(absPath, manifest)) {
+			classification.ProcessHints.RubyManifestFiles = append(classification.ProcessHints.RubyManifestFiles, manifest)
+		}
+	}
+	if fileExists(filepath.Join(absPath, ".ruby-version")) {
+		classification.ProcessHints.RubyVersionFiles = append(classification.ProcessHints.RubyVersionFiles, ".ruby-version")
+	}
+	for _, marker := range []string{"Rakefile", "config/application.rb", "bin/rails"} {
+		if fileExists(filepath.Join(absPath, marker)) {
+			classification.ProcessHints.RubyAppMarkers = append(classification.ProcessHints.RubyAppMarkers, marker)
+		}
+	}
+	if len(classification.ProcessHints.RubyManifestFiles) == 0 &&
+		len(classification.ProcessHints.RubyVersionFiles) == 0 &&
+		len(classification.ProcessHints.RubyAppMarkers) == 0 {
+		return
+	}
+	classification.TechStacks = append(classification.TechStacks, TechStackRuby)
+}
 func isGradleMultiProject(path string, settingsFiles []string) bool {
 	for _, name := range settingsFiles {
 		data, err := os.ReadFile(filepath.Join(path, name))

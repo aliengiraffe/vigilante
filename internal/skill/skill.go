@@ -35,6 +35,7 @@ const VigilanteIssueImplementationOnJavaKotlin = "vigilante-issue-implementation
 const VigilanteIssueImplementationOnPHP = "vigilante-issue-implementation-on-php"
 const VigilanteIssueImplementationOnTerraform = "vigilante-issue-implementation-on-terraform"
 const VigilanteIssueImplementationOnRust = "vigilante-issue-implementation-on-rust"
+const VigilanteIssueImplementationOnRuby = "vigilante-issue-implementation-on-ruby"
 const VigilanteConflictResolution = "vigilante-conflict-resolution"
 const VigilanteCreateIssue = "vigilante-create-issue"
 const VigilanteLocalServiceDependencies = "vigilante-local-service-dependencies"
@@ -66,7 +67,7 @@ func VigilanteSkillNames() []string {
 		VigilanteIssueImplementationOnPHP,
 		VigilanteIssueImplementationOnTerraform,
 		VigilanteIssueImplementationOnRust,
-		VigilanteIssueImplementationOnTerraform,
+		VigilanteIssueImplementationOnRuby,
 		VigilanteConflictResolution,
 		VigilanteCreateIssue,
 		VigilanteLocalServiceDependencies,
@@ -285,9 +286,6 @@ func IssueImplementationSkill(target state.WatchTarget) string {
 		if isJavaKotlinTarget(target) {
 			return VigilanteIssueImplementationOnJavaKotlin
 		}
-		if isGitHubActionsTarget(target) {
-			return VigilanteIssueImplementationOnGitHubActions
-		}
 		if isRustTarget(target) {
 			return VigilanteIssueImplementationOnRust
 		}
@@ -296,6 +294,12 @@ func IssueImplementationSkill(target state.WatchTarget) string {
 		}
 		if isPHPTarget(target) {
 			return VigilanteIssueImplementationOnPHP
+		}
+		if isRubyTarget(target) {
+			return VigilanteIssueImplementationOnRuby
+		}
+		if isGitHubActionsTarget(target) {
+			return VigilanteIssueImplementationOnGitHubActions
 		}
 		if isTerraformTarget(target) {
 			return VigilanteIssueImplementationOnTerraform
@@ -414,6 +418,15 @@ func isTerraformTarget(target state.WatchTarget) bool {
 	return false
 }
 
+func isRubyTarget(target state.WatchTarget) bool {
+	for _, stack := range target.Classification.TechStacks {
+		if stack == repo.TechStackRuby {
+			return true
+		}
+	}
+	return false
+}
+
 func isTurborepoTarget(target state.WatchTarget) bool {
 	if normalizedRepoShape(target) != string(repo.ShapeMonorepo) {
 		return false
@@ -499,7 +512,10 @@ func repoClassificationJSON(target state.WatchTarget) string {
 		len(classification.ProcessHints.NodeLockFiles) > 0 ||
 		len(classification.ProcessHints.TypeScriptConfigs) > 0 ||
 		len(classification.ProcessHints.DockerFiles) > 0 ||
-		len(classification.ProcessHints.PythonSignals) > 0 {
+		len(classification.ProcessHints.PythonSignals) > 0 ||
+		len(classification.ProcessHints.RubyManifestFiles) > 0 ||
+		len(classification.ProcessHints.RubyVersionFiles) > 0 ||
+		len(classification.ProcessHints.RubyAppMarkers) > 0 {
 		payload.ProcessHints = &classification.ProcessHints
 	}
 	data, err := json.Marshal(payload)

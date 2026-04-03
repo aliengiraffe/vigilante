@@ -365,6 +365,34 @@ func TestSecurityGuidanceForKubernetesRepo(t *testing.T) {
 	}
 }
 
+func TestSecurityGuidanceForRubyRepo(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackRuby},
+		ProcessHints: repo.ProcessHints{
+			RubyManifestFiles: []string{"Gemfile"},
+			RubyVersionFiles:  []string{".ruby-version"},
+		},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	for _, text := range []string{
+		"Ruby security and tooling guidance",
+		"Bundler-managed commands",
+		"bundle exec rspec",
+		"RuboCop",
+		"bundler-audit",
+		"Brakeman",
+		"Marshal.load",
+		"do not broaden issue scope",
+	} {
+		if !strings.Contains(guidance, text) {
+			t.Fatalf("Ruby guidance missing %q", text)
+		}
+	}
+}
+
 func TestSecurityGuidanceForJavaKotlinRepo(t *testing.T) {
 	classification := repo.Classification{
 		Shape:      repo.ShapeTraditional,
@@ -430,6 +458,18 @@ func TestSecurityGuidanceEmptyForNonKubernetesRepo(t *testing.T) {
 	}
 }
 
+func TestSecurityGuidanceEmptyForNonRubyRepo(t *testing.T) {
+	classification := repo.Classification{
+		Shape: repo.ShapeTraditional,
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	if strings.Contains(guidance, "Ruby security and tooling guidance") {
+		t.Fatalf("guidance should not include Ruby section for non-Ruby repo")
+	}
+}
+
 func TestSecurityGuidanceForGradleJavaKotlinRepoMentionsGradle(t *testing.T) {
 	classification := repo.Classification{
 		Shape:      repo.ShapeTraditional,
@@ -462,6 +502,23 @@ func TestSecurityGuidanceForKubernetesAndGoRepo(t *testing.T) {
 	}
 	if !strings.Contains(guidance, "Kubernetes manifest and workload security guidance") {
 		t.Fatalf("guidance missing Kubernetes section for Go+K8s repo")
+	}
+}
+
+func TestSecurityGuidanceForMixedRubyRepo(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackRuby, repo.TechStackNodeJS},
+		ProcessHints: repo.ProcessHints{
+			RubyManifestFiles:   []string{"Gemfile"},
+			NodePackageManagers: []string{"npm"},
+		},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	if !strings.Contains(guidance, "Mixed-language scope") {
+		t.Fatalf("Ruby guidance missing mixed-language section")
 	}
 }
 

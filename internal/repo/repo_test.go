@@ -477,6 +477,31 @@ func TestClassifyRustRepoFromCargoToml(t *testing.T) {
 	}
 }
 
+func TestClassifyRubyRepoFromGemfile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Gemfile"), []byte("source \"https://rubygems.org\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".ruby-version"), []byte("3.3.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if got.Shape != ShapeTraditional {
+		t.Fatalf("expected traditional shape, got %#v", got.Shape)
+	}
+	if len(got.TechStacks) != 1 || got.TechStacks[0] != TechStackRuby {
+		t.Fatalf("expected ruby tech stack, got %#v", got.TechStacks)
+	}
+	if len(got.ProcessHints.RubyManifestFiles) != 1 || got.ProcessHints.RubyManifestFiles[0] != "Gemfile" {
+		t.Fatalf("expected Gemfile ruby manifest hint, got %#v", got.ProcessHints.RubyManifestFiles)
+	}
+	if len(got.ProcessHints.RubyVersionFiles) != 1 || got.ProcessHints.RubyVersionFiles[0] != ".ruby-version" {
+		t.Fatalf("expected .ruby-version hint, got %#v", got.ProcessHints.RubyVersionFiles)
+	}
+}
+
 func TestClassifyRustRepoFromRustToolchainWithoutCargoToml(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "rust-toolchain.toml"), []byte("[toolchain]\nchannel = \"stable\"\n"), 0o644); err != nil {
@@ -487,6 +512,31 @@ func TestClassifyRustRepoFromRustToolchainWithoutCargoToml(t *testing.T) {
 
 	if len(got.TechStacks) != 1 || got.TechStacks[0] != TechStackRust {
 		t.Fatalf("expected rust tech stack from rust-toolchain.toml, got %#v", got.TechStacks)
+	}
+}
+
+func TestClassifyRubyRepoFromRailsLayout(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config", "application.rb"), []byte("module Demo\nend\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bin", "rails"), []byte("#!/usr/bin/env ruby\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	if len(got.TechStacks) != 1 || got.TechStacks[0] != TechStackRuby {
+		t.Fatalf("expected ruby tech stack from rails layout, got %#v", got.TechStacks)
+	}
+	if len(got.ProcessHints.RubyAppMarkers) != 2 {
+		t.Fatalf("expected rails markers, got %#v", got.ProcessHints.RubyAppMarkers)
 	}
 }
 
@@ -911,6 +961,39 @@ func TestClassifyGoAndGitHubActionsRepoDetectsBoth(t *testing.T) {
 	}
 	if !hasGo {
 		t.Fatalf("expected go tech stack, got %#v", got.TechStacks)
+	}
+	if !hasActions {
+		t.Fatalf("expected github-actions tech stack, got %#v", got.TechStacks)
+	}
+}
+
+func TestClassifyRubyAndGitHubActionsRepoDetectsBoth(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Gemfile"), []byte("source \"https://rubygems.org\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	workflowsDir := filepath.Join(dir, ".github", "workflows")
+	if err := os.MkdirAll(workflowsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowsDir, "ci.yml"), []byte("name: CI\non: push\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	hasRuby := false
+	hasActions := false
+	for _, stack := range got.TechStacks {
+		if stack == TechStackRuby {
+			hasRuby = true
+		}
+		if stack == TechStackGitHubActions {
+			hasActions = true
+		}
+	}
+	if !hasRuby {
+		t.Fatalf("expected ruby tech stack, got %#v", got.TechStacks)
 	}
 	if !hasActions {
 		t.Fatalf("expected github-actions tech stack, got %#v", got.TechStacks)
