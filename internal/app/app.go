@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -26,6 +27,7 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	forkmode "github.com/nicobistolfi/vigilante/internal/fork"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
+	"github.com/nicobistolfi/vigilante/internal/hardening"
 	"github.com/nicobistolfi/vigilante/internal/logging"
 	"github.com/nicobistolfi/vigilante/internal/provider"
 	"github.com/nicobistolfi/vigilante/internal/repo"
@@ -62,6 +64,7 @@ const (
 	labelNeedsHumanInput        = "vigilante:needs-human-input"
 	labelNeedsProviderFix       = "vigilante:needs-provider-fix"
 	labelNeedsGitFix            = "vigilante:needs-git-fix"
+	labelFlaggedSecurityReview  = "vigilante:flagged-security-review"
 )
 
 var managedIssueLabels = []string{
@@ -1766,6 +1769,8 @@ func (a *App) ScanOnce(ctx context.Context) error {
 
 		fmt.Fprintf(a.stdout, "scanned %d watch target(s), started %d issue session(s)\n", len(targets), startedCount)
 		a.logger.Info("scan complete", "targets", len(targets), "started", startedCount)
+
+		a.scanPackageHardeningForTargets(ctx, targets)
 
 		return a.state.SaveWatchTargets(targets)
 	})
@@ -6099,4 +6104,214 @@ func findWatchTargetProvider(targets []state.WatchTarget, path string) string {
 		}
 	}
 	return provider.DefaultID
+}
+
+// scanPackageHardeningForTargets runs deterministic JS/TS package hardening
+// scans on all watched targets that have the nodejs tech stack. It examines
+// open pull requests for package.json modifications and posts structured
+// findings comments when issues are detected.
+func (a *App) scanPackageHardeningForTargets(ctx context.Context, targets []state.WatchTarget) {
+	config, err := a.state.LoadServiceConfig()
+	if err != nil {
+		a.logger.Error("package hardening config load failed", "err", err)
+		return
+	}
+	if !config.IsPackageHardeningEnabled() {
+		a.logger.Info("package hardening disabled via config")
+		return
+	}
+
+	hardeningState, err := a.state.LoadHardeningState()
+	if err != nil {
+		a.logger.Error("package hardening state load failed", "err", err)
+		return
+	}
+
+	changed := false
+	for _, target := range targets {
+		if !isNodeJSTarget(target) {
+			continue
+		}
+		if a.scanPackageHardeningForTarget(ctx, target, hardeningState) {
+			changed = true
+		}
+	}
+
+	if changed {
+		if err := a.state.SaveHardeningState(hardeningState); err != nil {
+			a.logger.Error("package hardening state save failed", "err", err)
+		}
+	}
+}
+
+func isNodeJSTarget(target state.WatchTarget) bool {
+	return slices.Contains(target.Classification.TechStacks, repo.TechStackNodeJS)
+}
+
+func (a *App) scanPackageHardeningForTarget(ctx context.Context, target state.WatchTarget, hs state.HardeningState) bool {
+	prMgr := a.prManagerForTarget(target)
+	prs, err := prMgr.ListOpenPullRequests(ctx, target.Repo)
+	if err != nil {
+		a.logger.Error("package hardening pr list failed", "repo", target.Repo, "err", err)
+		return false
+	}
+
+	changed := false
+	for _, pr := range prs {
+		key := state.HardeningPRKey(target.Repo, pr.Number)
+
+		// Check for checkbox state changes on already-commented PRs.
+		if existing, ok := hs[key]; ok && existing.CommentID > 0 {
+			if a.checkHardeningCheckbox(ctx, target, pr, &existing) {
+				hs[key] = existing
+				changed = true
+			}
+			continue
+		}
+
+		files, err := prMgr.ListPullRequestFiles(ctx, target.Repo, pr.Number)
+		if err != nil {
+			a.logger.Error("package hardening pr files failed", "repo", target.Repo, "pr", pr.Number, "err", err)
+			continue
+		}
+
+		packageJSONPaths := extractPackageJSONPaths(files)
+		if len(packageJSONPaths) == 0 {
+			continue
+		}
+
+		a.logger.Info("package hardening scan", "repo", target.Repo, "pr", pr.Number, "package_json_files", len(packageJSONPaths))
+		result := hardening.Run(ctx, a.env.Runner, target.Path, packageJSONPaths)
+
+		if !result.HasFindings() {
+			a.logger.Info("package hardening clean", "repo", target.Repo, "pr", pr.Number)
+			continue
+		}
+
+		body := hardening.FormatHardeningComment(result, pr.Number)
+		if err := prMgr.CommentOnPullRequest(ctx, target.Repo, pr.Number, body); err != nil {
+			a.logger.Error("package hardening comment failed", "repo", target.Repo, "pr", pr.Number, "err", err)
+			continue
+		}
+
+		if err := prMgr.AddPullRequestLabel(ctx, target.Repo, pr.Number, labelFlaggedSecurityReview); err != nil {
+			a.logger.Error("package hardening label failed", "repo", target.Repo, "pr", pr.Number, "err", err)
+		}
+
+		commentID := findHardeningCommentID(ctx, prMgr, target.Repo, pr.Number)
+		hs[key] = state.HardeningPRState{
+			Repo:          target.Repo,
+			PRNumber:      pr.Number,
+			CommentID:     commentID,
+			CommentedAt:   a.clock().Format(time.RFC3339),
+			LabelApplied:  true,
+			FindingsCount: len(result.Findings),
+		}
+		changed = true
+		a.logger.Info("package hardening findings posted", "repo", target.Repo, "pr", pr.Number, "findings", len(result.Findings))
+	}
+
+	return changed
+}
+
+func extractPackageJSONPaths(files []backend.PullRequestFile) []string {
+	var paths []string
+	for _, f := range files {
+		base := filepath.Base(f.Filename)
+		if strings.EqualFold(base, "package.json") {
+			paths = append(paths, f.Filename)
+		}
+	}
+	return paths
+}
+
+func findHardeningCommentID(ctx context.Context, prMgr backend.PullRequestManager, repo string, prNumber int) int64 {
+	comments, err := prMgr.ListPullRequestComments(ctx, repo, prNumber)
+	if err != nil {
+		return 0
+	}
+	for i := len(comments) - 1; i >= 0; i-- {
+		if hardening.IsHardeningComment(comments[i].Body) {
+			return comments[i].ID
+		}
+	}
+	return 0
+}
+
+func (a *App) checkHardeningCheckbox(ctx context.Context, target state.WatchTarget, pr backend.PullRequest, prState *state.HardeningPRState) bool {
+	if prState.RemediationSentAt != "" {
+		return false
+	}
+
+	prMgr := a.prManagerForTarget(target)
+	comments, err := prMgr.ListPullRequestComments(ctx, target.Repo, pr.Number)
+	if err != nil {
+		a.logger.Error("package hardening comment check failed", "repo", target.Repo, "pr", pr.Number, "err", err)
+		return false
+	}
+
+	for _, comment := range comments {
+		if comment.ID != prState.CommentID {
+			continue
+		}
+		if !hardening.IsImplementFixesChecked(comment.Body) {
+			return false
+		}
+
+		a.logger.Info("package hardening implement-fixes checked", "repo", target.Repo, "pr", pr.Number, "comment_id", comment.ID)
+
+		if err := prMgr.AddPullRequestCommentReaction(ctx, target.Repo, comment.ID, "eyes"); err != nil {
+			a.logger.Error("package hardening eyes reaction failed", "repo", target.Repo, "pr", pr.Number, "err", err)
+		}
+
+		a.dispatchPackageRemediation(ctx, target, pr, prState)
+		return true
+	}
+
+	return false
+}
+
+func (a *App) dispatchPackageRemediation(ctx context.Context, target state.WatchTarget, pr backend.PullRequest, prState *state.HardeningPRState) {
+	prState.RemediationSentAt = a.clock().Format(time.RFC3339)
+
+	prMgr := a.prManagerForTarget(target)
+	selectedProvider, err := provider.Resolve(target.Provider)
+	if err != nil {
+		body := hardening.FormatRemediationResultComment(false, fmt.Sprintf("Failed to resolve provider: %s", err.Error()))
+		_ = prMgr.CommentOnPullRequest(ctx, target.Repo, pr.Number, body)
+		a.logger.Error("package remediation provider failed", "repo", target.Repo, "pr", pr.Number, "err", err)
+		return
+	}
+
+	if err := provider.ValidateRuntimeCompatibility(ctx, a.env.Runner, selectedProvider); err != nil {
+		body := hardening.FormatRemediationResultComment(false, fmt.Sprintf("Provider runtime check failed: %s", err.Error()))
+		_ = prMgr.CommentOnPullRequest(ctx, target.Repo, pr.Number, body)
+		a.logger.Error("package remediation provider compat failed", "repo", target.Repo, "pr", pr.Number, "err", err)
+		return
+	}
+
+	invocation, err := selectedProvider.BuildPackageRemediationInvocation(provider.PackageRemediationTask{
+		Target:        target,
+		PRNumber:      pr.Number,
+		PRBranch:      pr.BaseRefName,
+		FindingsCount: prState.FindingsCount,
+	})
+	if err != nil {
+		body := hardening.FormatRemediationResultComment(false, fmt.Sprintf("Failed to build remediation invocation: %s", err.Error()))
+		_ = prMgr.CommentOnPullRequest(ctx, target.Repo, pr.Number, body)
+		a.logger.Error("package remediation invocation build failed", "repo", target.Repo, "pr", pr.Number, "err", err)
+		return
+	}
+
+	output, err := a.env.Runner.Run(ctx, invocation.Dir, invocation.Name, invocation.Args...)
+	if err != nil {
+		body := hardening.FormatRemediationResultComment(false, fmt.Sprintf("Remediation session failed.\n\n```\n%s\n```", summarizeMaintenanceError(err)))
+		_ = prMgr.CommentOnPullRequest(ctx, target.Repo, pr.Number, body)
+		a.logger.Error("package remediation session failed", "repo", target.Repo, "pr", pr.Number, "err", err, "output_bytes", len(output))
+		return
+	}
+
+	body := hardening.FormatRemediationResultComment(true, "Remediation changes have been pushed to the PR branch. Please review the updated dependency state.")
+	_ = prMgr.CommentOnPullRequest(ctx, target.Repo, pr.Number, body)
+	a.logger.Info("package remediation succeeded", "repo", target.Repo, "pr", pr.Number)
 }

@@ -85,3 +85,15 @@ func (claudeProvider) BuildIssueCreateInvocation(task IssueCreateTask) (Invocati
 		},
 	}, nil
 }
+
+func (claudeProvider) BuildPackageRemediationInvocation(task PackageRemediationTask) (Invocation, error) {
+	return Invocation{
+		Dir:  task.Target.Path,
+		Name: "claude",
+		Args: []string{
+			"--print",
+			"--permission-mode", "acceptEdits",
+			skill.BuildPackageRemediationPrompt(task.Target, task.PRNumber, task.PRBranch, task.FindingsCount),
+		},
+	}, nil
+}

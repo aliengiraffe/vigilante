@@ -82,3 +82,15 @@ func (codexProvider) BuildIssueCreateInvocation(task IssueCreateTask) (Invocatio
 		},
 	}, nil
 }
+
+func (codexProvider) BuildPackageRemediationInvocation(task PackageRemediationTask) (Invocation, error) {
+	return Invocation{
+		Name: "codex",
+		Args: []string{
+			"exec",
+			"--cd", task.Target.Path,
+			"--dangerously-bypass-approvals-and-sandbox",
+			skill.BuildPackageRemediationPrompt(task.Target, task.PRNumber, task.PRBranch, task.FindingsCount),
+		},
+	}, nil
+}
