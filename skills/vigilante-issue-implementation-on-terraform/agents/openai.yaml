@@ -1,0 +1,4 @@
+interface:
+  display_name: "Vigilante Terraform Issue Implementation"
+  short_description: "Implement a Vigilante-dispatched issue in a Terraform repository with fmt, validate, and secret-safe infrastructure guidance"
+  default_prompt: "Use $vigilante-issue-implementation-on-terraform to implement the assigned Terraform issue in the provided worktree, follow idiomatic Terraform conventions, comment on the issue, and open a PR."
