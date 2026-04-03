@@ -37,6 +37,7 @@ type TechStack string
 const (
 	TechStackNodeJS        TechStack = "nodejs"
 	TechStackGo            TechStack = "go"
+	TechStackRust          TechStack = "rust"
 	TechStackGitHubActions TechStack = "github-actions"
 	TechStackDocker        TechStack = "docker"
 	TechStackKubernetes    TechStack = "kubernetes"
@@ -242,6 +243,7 @@ func Classify(path string) Classification {
 	detectJVMTechStack(absPath, &classification)
 	detectPHPTechStack(absPath, &classification)
 	detectTerraformTechStack(absPath, &classification)
+	detectRustTechStack(absPath, &classification)
 
 	slices.Sort(classification.ProcessHints.GradleSettingsFiles)
 	slices.Sort(classification.ProcessHints.GradleRootBuildFiles)
@@ -533,6 +535,15 @@ func detectTerraformTechStack(absPath string, classification *Classification) {
 	}
 }
 
+func detectRustTechStack(absPath string, classification *Classification) {
+	for _, name := range []string{"Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rust-toolchain"} {
+		if fileExists(filepath.Join(absPath, name)) {
+			classification.TechStacks = append(classification.TechStacks, TechStackRust)
+			return
+		}
+	}
+}
+
 func hasKubernetesYAML(dir string) bool {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -556,7 +567,6 @@ func hasKubernetesYAML(dir string) bool {
 	}
 	return false
 }
-
 func detectPythonTechStack(absPath string, classification *Classification) {
 	for _, signal := range []string{"pyproject.toml", "requirements.txt", "requirements-dev.txt", "requirements-test.txt", "setup.py", "setup.cfg", "tox.ini", "noxfile.py"} {
 		if fileExists(filepath.Join(absPath, signal)) {

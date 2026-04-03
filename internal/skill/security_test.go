@@ -392,6 +392,32 @@ func TestSecurityGuidanceForJavaKotlinRepo(t *testing.T) {
 	}
 }
 
+func TestSecurityGuidanceForRustRepo(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackRust},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	for _, text := range []string{
+		"Rust security and tooling guidance",
+		"cargo fmt",
+		"cargo test",
+		"cargo clippy",
+		"cargo-audit",
+		"cargo deny",
+		"unsafe",
+		"Result",
+		"MSRV",
+		"do not broaden issue scope",
+	} {
+		if !strings.Contains(guidance, text) {
+			t.Fatalf("Rust guidance missing %q", text)
+		}
+	}
+}
+
 func TestSecurityGuidanceEmptyForNonKubernetesRepo(t *testing.T) {
 	classification := repo.Classification{
 		Shape: repo.ShapeTraditional,
@@ -458,6 +484,25 @@ func TestSecurityGuidanceForMixedJavaKotlinRepoIncludesMixedScope(t *testing.T) 
 	}
 	if !strings.Contains(guidance, "Mixed-language scope") {
 		t.Fatalf("guidance missing mixed-language JVM section")
+	}
+}
+
+func TestSecurityGuidanceForRustAndNodeJSRepo(t *testing.T) {
+	classification := repo.Classification{
+		Shape:      repo.ShapeTraditional,
+		TechStacks: []repo.TechStack{repo.TechStackRust, repo.TechStackNodeJS},
+		ProcessHints: repo.ProcessHints{
+			NodePackageManagers: []string{"npm"},
+		},
+	}
+
+	guidance := securityGuidanceForClassification(classification)
+
+	if !strings.Contains(guidance, "Rust security and tooling guidance") {
+		t.Fatalf("guidance missing Rust section for dual-stack repo")
+	}
+	if !strings.Contains(guidance, "JS/TS/Node security guidance") {
+		t.Fatalf("guidance missing Node.js section for dual-stack repo")
 	}
 }
 
