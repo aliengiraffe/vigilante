@@ -967,6 +967,39 @@ func TestClassifyGoAndGitHubActionsRepoDetectsBoth(t *testing.T) {
 	}
 }
 
+func TestClassifyRubyAndGitHubActionsRepoDetectsBoth(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Gemfile"), []byte("source \"https://rubygems.org\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	workflowsDir := filepath.Join(dir, ".github", "workflows")
+	if err := os.MkdirAll(workflowsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workflowsDir, "ci.yml"), []byte("name: CI\non: push\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Classify(dir)
+
+	hasRuby := false
+	hasActions := false
+	for _, stack := range got.TechStacks {
+		if stack == TechStackRuby {
+			hasRuby = true
+		}
+		if stack == TechStackGitHubActions {
+			hasActions = true
+		}
+	}
+	if !hasRuby {
+		t.Fatalf("expected ruby tech stack, got %#v", got.TechStacks)
+	}
+	if !hasActions {
+		t.Fatalf("expected github-actions tech stack, got %#v", got.TechStacks)
+	}
+}
+
 func TestClassifyDockerRepoFromDockerfile(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM alpine:3.19\n"), 0o644); err != nil {

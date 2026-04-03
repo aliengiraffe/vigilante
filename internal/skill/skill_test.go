@@ -1866,6 +1866,18 @@ func TestIssueImplementationSkillPrefersDotNetOverGitHubActions(t *testing.T) {
 		t.Fatalf("expected dotnet skill to take priority over github-actions, got %s", got)
 	}
 }
+
+func TestIssueImplementationSkillPrefersRubyOverGitHubActions(t *testing.T) {
+	target := state.WatchTarget{
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackRuby, repo.TechStackGitHubActions},
+		},
+	}
+	if got := IssueImplementationSkill(target); got != VigilanteIssueImplementationOnRuby {
+		t.Fatalf("expected ruby skill to take priority over github-actions, got %s", got)
+	}
+}
 func TestIssueImplementationSkillPrefersMonorepoOverGitHubActions(t *testing.T) {
 	target := state.WatchTarget{
 		Classification: repo.Classification{
@@ -1993,6 +2005,34 @@ func TestBuildIssuePromptForDotNetAndActionsRepoIncludesBothGuidances(t *testing
 	}
 	if !strings.Contains(prompt, VigilanteIssueImplementationOnDotNet) {
 		t.Fatalf("prompt should select dotnet skill for dotnet+actions repo")
+	}
+}
+
+func TestBuildIssuePromptForRubyAndActionsRepoIncludesBothGuidances(t *testing.T) {
+	target := state.WatchTarget{
+		Repo: "owner/repo",
+		Path: "/tmp/repo",
+		Classification: repo.Classification{
+			Shape:      repo.ShapeTraditional,
+			TechStacks: []repo.TechStack{repo.TechStackRuby, repo.TechStackGitHubActions},
+			ProcessHints: repo.ProcessHints{
+				RubyManifestFiles: []string{"Gemfile"},
+			},
+		},
+	}
+	issue := ghcli.Issue{Number: 1, Title: "test", URL: "https://github.com/owner/repo/issues/1"}
+	session := state.Session{WorktreePath: "/tmp/wt", Branch: "test-branch"}
+
+	prompt := BuildIssuePromptForRuntime(RuntimeClaude, target, issue, session)
+
+	if !strings.Contains(prompt, "Ruby security and tooling guidance") {
+		t.Fatalf("prompt missing Ruby guidance")
+	}
+	if !strings.Contains(prompt, "GitHub Actions workflow security guidance") {
+		t.Fatalf("prompt missing GitHub Actions guidance")
+	}
+	if !strings.Contains(prompt, VigilanteIssueImplementationOnRuby) {
+		t.Fatalf("prompt should select Ruby skill for Ruby+Actions repo")
 	}
 }
 

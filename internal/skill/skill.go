@@ -286,9 +286,6 @@ func IssueImplementationSkill(target state.WatchTarget) string {
 		if isJavaKotlinTarget(target) {
 			return VigilanteIssueImplementationOnJavaKotlin
 		}
-		if isGitHubActionsTarget(target) {
-			return VigilanteIssueImplementationOnGitHubActions
-		}
 		if isRustTarget(target) {
 			return VigilanteIssueImplementationOnRust
 		}
@@ -300,6 +297,9 @@ func IssueImplementationSkill(target state.WatchTarget) string {
 		}
 		if isRubyTarget(target) {
 			return VigilanteIssueImplementationOnRuby
+		}
+		if isGitHubActionsTarget(target) {
+			return VigilanteIssueImplementationOnGitHubActions
 		}
 		if isTerraformTarget(target) {
 			return VigilanteIssueImplementationOnTerraform
