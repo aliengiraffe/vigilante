@@ -82,3 +82,15 @@ func (geminiProvider) BuildIssueCreateInvocation(task IssueCreateTask) (Invocati
 		},
 	}, nil
 }
+
+func (geminiProvider) BuildPackageRemediationInvocation(task PackageRemediationTask) (Invocation, error) {
+	return Invocation{
+		Dir:  task.Target.Path,
+		Name: "gemini",
+		Args: []string{
+			"--prompt",
+			skill.BuildPackageRemediationPrompt(task.Target, task.PRNumber, task.PRBranch, task.FindingsCount),
+			"--yolo",
+		},
+	}, nil
+}

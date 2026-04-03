@@ -727,3 +727,63 @@ func isAutomationComment(body string) bool {
 	}
 	return false
 }
+
+// PullRequestFile represents a file changed in a pull request.
+type PullRequestFile struct {
+	Filename string `json:"filename"`
+	Status   string `json:"status"` // added, removed, modified, renamed, etc.
+}
+
+// ListPullRequestFiles returns the files changed in a pull request.
+func ListPullRequestFiles(ctx context.Context, runner environment.Runner, repo string, number int) ([]PullRequestFile, error) {
+	output, err := runner.Run(ctx, "", "gh", "api", fmt.Sprintf("repos/%s/pulls/%d/files", repo, number), "--paginate")
+	if err != nil {
+		return nil, fmt.Errorf("list pr files: %w", err)
+	}
+	var files []PullRequestFile
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &files); err != nil {
+		return nil, fmt.Errorf("parse pr files: %w", err)
+	}
+	return files, nil
+}
+
+// ListOpenPullRequests returns open pull requests for a repository.
+func ListOpenPullRequests(ctx context.Context, runner environment.Runner, repo string) ([]PullRequest, error) {
+	output, err := runner.Run(ctx, "", "gh", "pr", "list", "--repo", repo, "--state", "open", "--json", "number,title,url,labels,baseRefName")
+	if err != nil {
+		return nil, fmt.Errorf("list open prs: %w", err)
+	}
+	var prs []PullRequest
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &prs); err != nil {
+		return nil, fmt.Errorf("parse pr list: %w", err)
+	}
+	return prs, nil
+}
+
+// AddPullRequestLabel adds a label to a pull request. On GitHub, PR labels
+// use the same issue label API.
+func AddPullRequestLabel(ctx context.Context, runner environment.Runner, repo string, number int, label string) error {
+	_, err := runner.Run(ctx, "", "gh", "pr", "edit", "--repo", repo, fmt.Sprintf("%d", number), "--add-label", label)
+	return err
+}
+
+// CommentOnPullRequest posts a comment on a pull request. On GitHub, PR
+// comments use the same issue comment API.
+func CommentOnPullRequest(ctx context.Context, runner environment.Runner, repo string, number int, body string) error {
+	return CommentOnIssue(ctx, runner, repo, number, body)
+}
+
+// ListPullRequestComments returns comments on a pull request. On GitHub,
+// PR issue comments use the same API as issue comments.
+func ListPullRequestComments(ctx context.Context, runner environment.Runner, repo string, number int) ([]IssueComment, error) {
+	output, err := runIssueCommentsCommand(ctx, runner, repo, number)
+	if err != nil {
+		return nil, err
+	}
+	return parseIssueComments(output)
+}
+
+// AddPullRequestCommentReaction adds a reaction emoji to a PR comment.
+func AddPullRequestCommentReaction(ctx context.Context, runner environment.Runner, repo string, commentID int64, content string) error {
+	return AddIssueCommentReaction(ctx, runner, repo, commentID, content)
+}

@@ -73,6 +73,12 @@ type PullRequest struct {
 	StatusCheckRollup []StatusCheck `json:"statusCheckRollup"`
 }
 
+// PullRequestFile represents a file changed in a pull request.
+type PullRequestFile struct {
+	Filename string `json:"filename"`
+	Status   string `json:"status"`
+}
+
 // StatusCheck represents a CI status check on a pull request.
 type StatusCheck struct {
 	Context    string `json:"context"`

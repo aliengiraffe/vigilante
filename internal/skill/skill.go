@@ -866,3 +866,34 @@ func copyFile(src string, dst string, mode os.FileMode) error {
 func pathJoin(parts ...string) string {
 	return strings.Join(parts, "/")
 }
+
+// BuildPackageRemediationPrompt generates a prompt for an agentic session
+// that remediates package-hardening findings on an existing PR branch.
+func BuildPackageRemediationPrompt(target state.WatchTarget, prNumber int, prBranch string, findingsCount int) string {
+	lines := []string{
+		fmt.Sprintf("Repository: %s", target.Repo),
+		fmt.Sprintf("Local repository path: %s", target.Path),
+		fmt.Sprintf("Pull Request: #%d", prNumber),
+		fmt.Sprintf("PR branch: %s", prBranch),
+		fmt.Sprintf("Package hardening findings: %d issue(s) flagged by the deterministic scanner.", findingsCount),
+		"",
+		"Vigilante's package hardening scan found dependency-related issues on this PR.",
+		"Your task is to remediate the flagged findings by making the smallest safe changes to the dependency configuration.",
+		"",
+		"Remediation steps to consider:",
+		"- Ensure a lockfile is present and committed (package-lock.json, pnpm-lock.yaml, or yarn.lock).",
+		"- Run `npm audit fix` or equivalent to patch known vulnerabilities where safe.",
+		"- Add `overrides` in package.json for vulnerable transitive dependencies when upstream fixes are not yet available.",
+		"- Verify that CI uses deterministic install commands (npm ci, pnpm install --frozen-lockfile, yarn install --immutable).",
+		"- Do not remove or downgrade dependencies unless explicitly required to resolve a vulnerability.",
+		"",
+	}
+	lines = append(lines, commitIdentityPolicyLines()...)
+	lines = append(lines,
+		"Use `vigilante commit` for all commit-producing operations.",
+		"Push changes to the existing PR branch with `vigilante git push`. Do not create a new pull request.",
+		"If you cannot remediate safely, explain the blocker and exit with a non-zero status.",
+		"Keep changes minimal and focused on dependency hardening for the existing PR.",
+	)
+	return strings.Join(lines, "\n")
+}

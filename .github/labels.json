@@ -199,6 +199,19 @@
       "notes": [
         "Keep until existing operator workflows are migrated."
       ]
+    },
+    {
+      "name": "vigilante:flagged-security-review",
+      "color": "D93F0B",
+      "group": "security",
+      "behavior": "informational",
+      "applied_by": "vigilante",
+      "description": "Vigilante's deterministic package hardening process found issues requiring human review.",
+      "notes": [
+        "Applied when the JS/TS package hardening scan detects lockfile, vulnerability, or dependency-range issues.",
+        "The associated PR comment includes a checkbox to opt in to automated remediation.",
+        "Clear manually after the security concerns have been addressed or accepted."
+      ]
     }
   ]
 }

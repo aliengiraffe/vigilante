@@ -43,6 +43,16 @@ type IssueCreateTask struct {
 	Prompt string
 }
 
+// PackageRemediationTask describes a package-hardening remediation session
+// dispatched when a human checks the "implement fixes" checkbox on a PR
+// hardening comment.
+type PackageRemediationTask struct {
+	Target        state.WatchTarget
+	PRNumber      int
+	PRBranch      string
+	FindingsCount int
+}
+
 type Provider interface {
 	ID() string
 	DisplayName() string
@@ -53,6 +63,7 @@ type Provider interface {
 	BuildConflictResolutionInvocation(task ConflictTask) (Invocation, error)
 	BuildCIRemediationInvocation(task CIRemediationTask) (Invocation, error)
 	BuildIssueCreateInvocation(task IssueCreateTask) (Invocation, error)
+	BuildPackageRemediationInvocation(task PackageRemediationTask) (Invocation, error)
 }
 
 var registry = map[string]Provider{

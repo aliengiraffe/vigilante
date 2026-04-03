@@ -329,6 +329,10 @@ func (p testProvider) BuildIssueCreateInvocation(task IssueCreateTask) (Invocati
 	return Invocation{}, nil
 }
 
+func (p testProvider) BuildPackageRemediationInvocation(task PackageRemediationTask) (Invocation, error) {
+	return Invocation{}, nil
+}
+
 func TestBuildIssueCreateInvocationForAllProviders(t *testing.T) {
 	task := IssueCreateTask{
 		Target: state.WatchTarget{

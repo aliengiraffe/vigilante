@@ -121,6 +121,16 @@ const DefaultBlockedSessionInactivityTimeout = 20 * time.Minute
 
 type ServiceConfig struct {
 	BlockedSessionInactivityTimeout string `json:"blocked_session_inactivity_timeout,omitempty"`
+	PackageHardeningEnabled         *bool  `json:"package_hardening_enabled,omitempty"`
+}
+
+// IsPackageHardeningEnabled returns whether the deterministic JS/TS package
+// hardening feature is enabled. Defaults to true when not explicitly set.
+func (c ServiceConfig) IsPackageHardeningEnabled() bool {
+	if c.PackageHardeningEnabled == nil {
+		return true
+	}
+	return *c.PackageHardeningEnabled
 }
 
 type SessionStatus string
@@ -338,6 +348,48 @@ func (s *Store) serviceConfigPath() string {
 
 func (s *Store) scanLockPath() string {
 	return filepath.Join(s.root, "scan.lock")
+}
+
+func (s *Store) hardeningStatePath() string {
+	return filepath.Join(s.root, "hardening_state.json")
+}
+
+// HardeningPRState tracks the package hardening state for a single PR.
+type HardeningPRState struct {
+	Repo              string `json:"repo"`
+	PRNumber          int    `json:"pr_number"`
+	CommentID         int64  `json:"comment_id,omitempty"`
+	CommentedAt       string `json:"commented_at,omitempty"`
+	LabelApplied      bool   `json:"label_applied,omitempty"`
+	RemediationSentAt string `json:"remediation_sent_at,omitempty"`
+	FindingsCount     int    `json:"findings_count,omitempty"`
+}
+
+// HardeningState maps "repo#number" to per-PR hardening state.
+type HardeningState map[string]HardeningPRState
+
+// HardeningPRKey builds a state map key from a repo and PR number.
+func HardeningPRKey(repo string, prNumber int) string {
+	return fmt.Sprintf("%s#%d", repo, prNumber)
+}
+
+// LoadHardeningState loads the package hardening state from disk.
+// Returns an empty map if the file does not exist.
+func (s *Store) LoadHardeningState() (HardeningState, error) {
+	state := make(HardeningState)
+	path := s.hardeningStatePath()
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return state, nil
+	}
+	if err := readJSONFile(path, &state); err != nil {
+		return nil, err
+	}
+	return state, nil
+}
+
+// SaveHardeningState persists the package hardening state to disk.
+func (s *Store) SaveHardeningState(hs HardeningState) error {
+	return writeJSONFile(s.hardeningStatePath(), hs)
 }
 
 func (s *Store) LoadWatchTargets() ([]WatchTarget, error) {

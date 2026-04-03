@@ -193,3 +193,95 @@ func TestSaveServiceConfigNormalizesInvalidBlockedSessionTimeout(t *testing.T) {
 		t.Fatalf("expected invalid timeout to normalize to %q, got %q", DefaultBlockedSessionInactivityTimeout.String(), got)
 	}
 }
+
+func TestIsPackageHardeningEnabledDefault(t *testing.T) {
+	config := ServiceConfig{}
+	if !config.IsPackageHardeningEnabled() {
+		t.Error("package hardening should be enabled by default")
+	}
+}
+
+func TestIsPackageHardeningEnabledExplicit(t *testing.T) {
+	enabled := true
+	config := ServiceConfig{PackageHardeningEnabled: &enabled}
+	if !config.IsPackageHardeningEnabled() {
+		t.Error("expected enabled when explicitly set to true")
+	}
+
+	disabled := false
+	config = ServiceConfig{PackageHardeningEnabled: &disabled}
+	if config.IsPackageHardeningEnabled() {
+		t.Error("expected disabled when explicitly set to false")
+	}
+}
+
+func TestHardeningStateRoundTrip(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	store := NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Initially empty.
+	hs, err := store.LoadHardeningState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hs) != 0 {
+		t.Fatalf("expected empty hardening state, got %d entries", len(hs))
+	}
+
+	// Save and reload.
+	hs[HardeningPRKey("owner/repo", 42)] = HardeningPRState{
+		Repo:          "owner/repo",
+		PRNumber:      42,
+		CommentID:     12345,
+		LabelApplied:  true,
+		FindingsCount: 3,
+	}
+	if err := store.SaveHardeningState(hs); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := store.LoadHardeningState()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, ok := loaded[HardeningPRKey("owner/repo", 42)]
+	if !ok {
+		t.Fatal("expected entry for owner/repo#42")
+	}
+	if entry.PRNumber != 42 || entry.CommentID != 12345 || entry.FindingsCount != 3 {
+		t.Errorf("unexpected entry: %+v", entry)
+	}
+}
+
+func TestHardeningPRKey(t *testing.T) {
+	key := HardeningPRKey("owner/repo", 99)
+	if key != "owner/repo#99" {
+		t.Errorf("key = %q, want owner/repo#99", key)
+	}
+}
+
+func TestServiceConfigPackageHardeningPersistence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	store := NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+
+	disabled := false
+	if err := store.SaveServiceConfig(ServiceConfig{PackageHardeningEnabled: &disabled}); err != nil {
+		t.Fatal(err)
+	}
+
+	config, err := store.LoadServiceConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.IsPackageHardeningEnabled() {
+		t.Error("expected package hardening to be disabled after save/load")
+	}
+}

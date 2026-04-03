@@ -81,6 +81,24 @@ type PullRequestManager interface {
 
 	// DeleteRemoteBranch deletes a remote branch from the repository.
 	DeleteRemoteBranch(ctx context.Context, repoPath string, remote string, branch string) error
+
+	// ListOpenPullRequests returns open pull requests for a repository.
+	ListOpenPullRequests(ctx context.Context, repo string) ([]PullRequest, error)
+
+	// ListPullRequestFiles returns files changed in a pull request.
+	ListPullRequestFiles(ctx context.Context, repo string, number int) ([]PullRequestFile, error)
+
+	// ListPullRequestComments returns comments on a pull request.
+	ListPullRequestComments(ctx context.Context, repo string, number int) ([]WorkItemComment, error)
+
+	// CommentOnPullRequest posts a comment on a pull request.
+	CommentOnPullRequest(ctx context.Context, repo string, number int, body string) error
+
+	// AddPullRequestCommentReaction adds a reaction to a PR comment.
+	AddPullRequestCommentReaction(ctx context.Context, repo string, commentID int64, content string) error
+
+	// AddPullRequestLabel adds a label to a pull request.
+	AddPullRequestLabel(ctx context.Context, repo string, number int, label string) error
 }
 
 // RateLimiter provides rate limit awareness for backends that enforce API quotas.

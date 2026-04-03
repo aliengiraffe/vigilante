@@ -118,6 +118,38 @@ func (b *Backend) DeleteRemoteBranch(ctx context.Context, repoPath string, remot
 	return ghcli.DeleteRemoteBranch(ctx, b.runner(), repoPath, remote, branch)
 }
 
+func (b *Backend) ListOpenPullRequests(ctx context.Context, repo string) ([]backend.PullRequest, error) {
+	return ghcli.ListOpenPullRequests(ctx, b.runner(), repo)
+}
+
+func (b *Backend) ListPullRequestFiles(ctx context.Context, repo string, number int) ([]backend.PullRequestFile, error) {
+	ghFiles, err := ghcli.ListPullRequestFiles(ctx, b.runner(), repo, number)
+	if err != nil {
+		return nil, err
+	}
+	files := make([]backend.PullRequestFile, len(ghFiles))
+	for i, f := range ghFiles {
+		files[i] = backend.PullRequestFile{Filename: f.Filename, Status: f.Status}
+	}
+	return files, nil
+}
+
+func (b *Backend) ListPullRequestComments(ctx context.Context, repo string, number int) ([]backend.WorkItemComment, error) {
+	return ghcli.ListPullRequestComments(ctx, b.runner(), repo, number)
+}
+
+func (b *Backend) CommentOnPullRequest(ctx context.Context, repo string, number int, body string) error {
+	return ghcli.CommentOnPullRequest(ctx, b.runner(), repo, number, body)
+}
+
+func (b *Backend) AddPullRequestCommentReaction(ctx context.Context, repo string, commentID int64, content string) error {
+	return ghcli.AddPullRequestCommentReaction(ctx, b.runner(), repo, commentID, content)
+}
+
+func (b *Backend) AddPullRequestLabel(ctx context.Context, repo string, number int, label string) error {
+	return ghcli.AddPullRequestLabel(ctx, b.runner(), repo, number, label)
+}
+
 // --- RateLimiter ---
 
 func (b *Backend) GetRateLimitSnapshot(ctx context.Context) (backend.RateLimitSnapshot, error) {
