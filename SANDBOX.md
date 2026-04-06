@@ -1,12 +1,30 @@
-# Sandbox
+# Sandbox Design
 
-Sandbox is a security feature that runs coding agents inside isolated Docker containers on your local machine. Instead of giving agents direct access to the host environment, Vigilante uses the Docker API or a compatible container runtime API to spin up locked-down execution environments where agents can work on a repository without reaching anything else.
+Sandbox is a planned security feature for Vigilante that would run coding agents inside isolated Docker containers on your local machine. It is an additional isolation layer managed by Vigilante, not the built-in sandboxing behavior of a coding-agent CLI such as Codex.
 
-## Why Sandbox Exists
+Today, Vigilante launches coding agents from the host machine against isolated git worktrees. The design in this document describes a future containerized execution mode that would reduce host exposure further by moving each session into a repo-scoped container with scoped GitHub access.
+
+## Current State vs Planned Sandbox
+
+Current Vigilante execution:
+
+- Runs the selected coding-agent CLI from the host machine.
+- Uses an isolated git worktree per issue.
+- Uses the operator's locally authenticated tooling such as `gh`.
+- Tracks session lifecycle, recovery, PR maintenance, and cleanup in local state.
+
+Planned sandbox execution:
+
+- Runs each coding-agent session inside an isolated container.
+- Keeps the repo checkout and required config mounted into that container.
+- Replaces broad host GitHub access with repo-scoped proxy-mediated access.
+- Uses short-lived session credentials and guaranteed teardown.
+
+## Why Add Sandbox
 
 Coding agents need broad tool access to be effective — they read files, run tests, install packages, spin up services, and interact with GitHub. That breadth of access creates risk when the agent runs directly on the host. A misconfigured or misbehaving agent could read credentials, access unrelated repositories, or interact with services it was never intended to touch.
 
-Sandbox draws a hard boundary. The agent operates inside a container that has everything it needs to do its job and nothing it does not.
+The current Vigilante model already improves safety by isolating work per issue in dedicated git worktrees. Sandbox is intended to add a stronger boundary around execution itself. In the planned design, the agent would operate inside a container that has what it needs to do its job and no direct access to the rest of the host environment.
 
 ## Architecture Overview
 
@@ -42,15 +60,15 @@ graph TB
     style Host fill:#0f3460,stroke:#16213e,stroke-width:2px
 ```
 
-## How It Works
+## Planned Execution Model
 
-When Vigilante dispatches an issue in sandbox mode, it provisions a Docker container through the Docker API or a compatible runtime. The container is purpose-built for coding-agent execution:
+When Vigilante dispatches an issue in planned sandbox mode, it would provision a Docker container through the Docker API or a compatible runtime. The container is purpose-built for coding-agent execution:
 
 - **Pre-installed coding agents.** Codex, Claude Code, and Gemini CLI are available inside the container. The selected provider runs the same way it would on the host.
-- **Volume sync at spinoff.** Vigilante mounts the repository code and each agent's configuration into the container at creation time. The agent starts with the same settings, credentials, and codebase state it would have locally.
+- **Mounted repo and config at container creation.** Vigilante bind-mounts the repository code and the agent configuration required for execution into the container. The goal is to preserve the working context without directly sharing the host's broad credentials.
 - **Docker-in-Docker.** The container includes DinD capability, so the coding agent can spin up additional containers for databases, caches, message brokers, and other services required during implementation. Service dependencies stay inside the sandbox boundary.
 
-## Container Lifecycle
+## Planned Container Lifecycle
 
 ```mermaid
 stateDiagram-v2
@@ -81,16 +99,16 @@ stateDiagram-v2
 | Phase | Description |
 |-------|-------------|
 | **Provisioning** | Vigilante calls the Docker API to create the container from the sandbox base image. Network, resource limits, and DinD capability are configured at this stage. |
-| **Creating Credentials** | Scoped, short-lived credentials are generated and injected into the container as environment variables. See [Credential Provisioning](#credential-provisioning). |
+| **Creating Credentials** | Scoped, short-lived credentials are generated and injected into the container as environment variables. See [Planned Credential Provisioning](#planned-credential-provisioning). |
 | **Mounting Volumes** | The target repository worktree and agent configuration directories are bind-mounted into the container. |
 | **Starting Proxy** | The reverse proxy API starts listening on a host port mapped into the container. The `gh` mirror binary inside the sandbox is configured to target this endpoint. |
 | **Ready / Running** | The coding agent launches and works normally. All `gh` calls are intercepted by the reverse proxy. |
 | **Extracting** | Before teardown, Vigilante extracts commits, branch state, and execution logs from the container. |
 | **Tearing Down** | The container is stopped and removed. Scoped credentials are revoked. Temporary volumes are deleted. |
 
-## Credential Provisioning
+## Planned Credential Provisioning
 
-Sandbox credentials are scoped, short-lived, and single-purpose. The host never shares its own tokens or keys with the container directly. Instead, Vigilante mints constrained credentials at provision time and revokes them at teardown.
+Sandbox credentials are intended to be scoped, short-lived, and single-purpose. In this design, the host would not share its own broad tokens or keys with the container directly. Instead, Vigilante would mint constrained credentials at provision time and revoke them at teardown.
 
 ### Credential Creation Sequence
 
@@ -158,9 +176,9 @@ Every request from the `gh` mirror binary to the reverse proxy carries the `VIGI
 
 If any check fails, the proxy returns an error to the `gh` mirror binary, which surfaces it to the agent as a standard `gh` CLI error.
 
-## GitHub CLI Reverse Proxy
+## Planned GitHub CLI Reverse Proxy
 
-The most important security mechanism in sandbox mode is how GitHub access works inside the container.
+The most important security mechanism in the planned sandbox mode is how GitHub access would work inside the container.
 
 The host machine's `gh` CLI is not mapped into the sandbox. Instead, the container receives a `gh` binary that acts as a mirror, forwarding CLI commands to a Vigilante API running on the host. That API enforces repository-scoped access control before executing anything.
 
@@ -198,15 +216,15 @@ What this means in practice:
 
 This reverse-proxy design ensures that even if the host GitHub identity has organization-wide or cross-repository access, the sandboxed agent cannot see issues, pull requests, or code from repositories outside its assignment.
 
-## Vigilante Sandbox API
+## Planned Vigilante Sandbox API
 
-The daemon exposes internal API endpoints for sandbox orchestration. These are called by the Vigilante daemon itself during dispatch and by the reverse proxy during agent execution.
+The daemon would expose internal API endpoints for sandbox orchestration. These would be called by the Vigilante daemon itself during dispatch and by the reverse proxy during agent execution.
 
 ### Provisioning Endpoints
 
 #### `POST /api/sandbox/provision`
 
-Creates a new sandbox session. Called by the daemon when dispatching an issue in sandbox mode.
+Creates a new sandbox session. In this design, it would be called by the daemon when dispatching an issue in sandbox mode.
 
 **Request:**
 
@@ -264,7 +282,7 @@ Returns the current state of a sandbox session.
 
 #### `POST /api/sandbox/sessions/:session_id/teardown`
 
-Initiates graceful teardown of a sandbox session. See [Teardown](#environment-teardown).
+Initiates graceful teardown of a sandbox session. See [Planned Environment Teardown](#planned-environment-teardown).
 
 **Request:**
 
@@ -323,9 +341,9 @@ Extends the TTL of a sandbox token when the daemon determines additional time is
 }
 ```
 
-## Environment Teardown
+## Planned Environment Teardown
 
-Sandboxes are designed to be ephemeral. Every sandbox has a maximum TTL, and teardown is guaranteed whether the agent completes successfully, fails, or times out.
+Sandboxes are designed to be ephemeral. In this planned model, every sandbox would have a maximum TTL, and teardown would be guaranteed whether the agent completes successfully, fails, or times out.
 
 ### Teardown Sequence
 
@@ -392,7 +410,7 @@ Teardown is implemented as a checklist where each step is idempotent and retried
 
 If the host is interrupted (power loss, crash) before teardown completes, the daemon runs a **stale session reconciler** on startup that detects orphaned containers and credentials and cleans them up.
 
-## Security Model
+## Target Security Model
 
 What agents **can** do inside the sandbox:
 
@@ -415,4 +433,6 @@ What agents **cannot** do:
 
 ## Why It Matters
 
-Sandbox mode lets Vigilante run coding agents with full tool access while keeping the blast radius of any single session limited to exactly one repository. The agent gets the environment it needs to be productive. The operator gets confidence that autonomous execution cannot leak across repository boundaries, access unrelated credentials, or interact with infrastructure it was never assigned to.
+Today, Vigilante's main isolation primitive is the per-issue git worktree. The sandbox design would add a stronger container boundary around agent execution itself while preserving the existing orchestration model.
+
+If implemented, sandbox mode would let Vigilante run coding agents with the tool access they need while keeping the blast radius of any single session limited to one repository and one short-lived execution environment. The agent would get the environment it needs to be productive. The operator would get stronger confidence that autonomous execution cannot leak across repository boundaries, access unrelated credentials, or interact with infrastructure it was never assigned to.
