@@ -36,6 +36,7 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/provider"
 	"github.com/nicobistolfi/vigilante/internal/repo"
 	issuerunner "github.com/nicobistolfi/vigilante/internal/runner"
+	"github.com/nicobistolfi/vigilante/internal/sandbox"
 	"github.com/nicobistolfi/vigilante/internal/service"
 	"github.com/nicobistolfi/vigilante/internal/skill"
 	"github.com/nicobistolfi/vigilante/internal/state"
@@ -118,6 +119,7 @@ type App struct {
 	githubRateLimitMu         sync.Mutex
 	githubRateLimitState      githubRateLimitState
 	proxyExec                 func(context.Context, io.Reader, io.Writer, io.Writer, string, ...string) (int, error)
+	sandboxManager            *sandbox.Manager
 }
 
 type githubRateLimitState struct {
@@ -1889,6 +1891,12 @@ func (a *App) DaemonRun(ctx context.Context, interval time.Duration, once bool) 
 		})
 	}()
 
+	// Initialize sandbox manager if sandbox mode is enabled.
+	if err := a.initSandboxIfEnabled(ctx); err != nil {
+		a.logger.Warn("sandbox initialization skipped", "err", err)
+	}
+	defer a.shutdownSandbox(ctx)
+
 	if once {
 		if err := a.ScanOnce(ctx); err != nil {
 			return err
@@ -2606,7 +2614,12 @@ func (a *App) launchIssueSession(ctx context.Context, target state.WatchTarget, 
 		defer a.sessionWG.Done()
 		defer a.clearSessionCancel(key)
 
-		result := issuerunner.RunIssueSession(runCtx, a.env, a.state, a.issueTrackerForTarget(target), target, issue, session)
+		var result state.Session
+		if session.SandboxMode && a.sandboxManager != nil {
+			result = a.runSandboxSession(runCtx, target, issue, session)
+		} else {
+			result = issuerunner.RunIssueSession(runCtx, a.env, a.state, a.issueTrackerForTarget(target), target, issue, session)
+		}
 
 		a.sessionMu.Lock()
 		defer a.sessionMu.Unlock()
@@ -5416,7 +5429,23 @@ func (a *App) dispatchIssueSession(ctx context.Context, target state.WatchTarget
 		session.LastIterationCommentID = triggeringComment.ID
 		session.LastIterationCommentAt = triggeringComment.CreatedAt.UTC().Format(time.RFC3339)
 	}
+
+	// Mark the session for sandbox execution when the watch target or
+	// service config has sandbox mode enabled.
+	if target.SandboxMode || a.isSandboxEnabled() {
+		session.SandboxMode = true
+	}
+
 	return session, nil
+}
+
+// isSandboxEnabled checks the service config for sandbox mode.
+func (a *App) isSandboxEnabled() bool {
+	config, err := a.state.LoadServiceConfig()
+	if err != nil {
+		return false
+	}
+	return config.IsSandboxEnabled()
 }
 
 func reuseExistingIterationSession(target state.WatchTarget, issue ghcli.Issue, selectedProvider string, previous state.Session, issueBody string, iterationContext string, triggeringComment *ghcli.IssueComment, now time.Time) (state.Session, error) {
@@ -7097,4 +7126,113 @@ func (a *App) dispatchPackageRemediation(ctx context.Context, target state.Watch
 	body := hardening.FormatRemediationResultComment(true, "Remediation changes have been pushed to the PR branch. Please review the updated dependency state.")
 	_ = prMgr.CommentOnPullRequest(ctx, target.Repo, pr.Number, body)
 	a.logger.Info("package remediation succeeded", "repo", target.Repo, "pr", pr.Number)
+}
+
+// runSandboxSession provisions a sandbox container, runs the coding agent
+// inside it, and tears down the sandbox when done.
+func (a *App) runSandboxSession(ctx context.Context, target state.WatchTarget, issue ghcli.Issue, session state.Session) state.Session {
+	config, _ := a.state.LoadServiceConfig()
+
+	sbxSession, err := a.sandboxManager.Provision(ctx, sandbox.SessionConfig{
+		Repository:   target.Repo,
+		IssueNumber:  issue.Number,
+		Provider:     session.Provider,
+		WorktreePath: session.WorktreePath,
+		Image:        firstNonEmpty(target.SandboxImage, config.SandboxImage, sandbox.DefaultImage),
+		MemoryLimit:  firstNonEmpty(config.SandboxMemoryLimit, sandbox.DefaultMemoryLimit),
+		CPUs:         firstNonEmpty(config.SandboxCPUs, sandbox.DefaultCPUs),
+		EnableDinD:   true,
+	})
+	if err != nil {
+		session.Status = state.SessionStatusFailed
+		session.LastError = fmt.Sprintf("sandbox provision: %s", err)
+		session.EndedAt = a.clock().Format(time.RFC3339)
+		session.UpdatedAt = session.EndedAt
+		return session
+	}
+
+	session.SandboxSessionID = sbxSession.ID
+	session.SandboxContainerName = sbxSession.ContainerName
+	session.SandboxContainerID = sbxSession.ContainerID
+	session.SandboxExpiresAt = sbxSession.ExpiresAt.Format(time.RFC3339)
+
+	if err := a.sandboxManager.Start(ctx, sbxSession.ID); err != nil {
+		session.Status = state.SessionStatusFailed
+		session.LastError = fmt.Sprintf("sandbox start: %s", err)
+		session.EndedAt = a.clock().Format(time.RFC3339)
+		session.UpdatedAt = session.EndedAt
+		_ = a.sandboxManager.Teardown(ctx, sbxSession.ID, "start_failed")
+		return session
+	}
+
+	// Run the actual coding-agent session (host-side runner against the
+	// container worktree). The provider invocation runs as normal but
+	// gh commands inside the sandbox are routed through the proxy.
+	result := issuerunner.RunIssueSession(ctx, a.env, a.state, a.issueTrackerForTarget(target), target, issue, session)
+
+	// Tear down the sandbox after the session completes.
+	teardownReason := "completed"
+	if result.Status == state.SessionStatusFailed {
+		teardownReason = "failed"
+	} else if result.Status == state.SessionStatusBlocked {
+		teardownReason = "blocked"
+	}
+	if err := a.sandboxManager.Teardown(ctx, sbxSession.ID, teardownReason); err != nil {
+		a.logger.Warn("sandbox teardown after session failed", "session_id", sbxSession.ID, "err", err)
+	}
+
+	return result
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// initSandboxIfEnabled checks whether sandbox mode is enabled in the service
+// config and initializes the sandbox manager, reverse proxy, and stale session
+// reconciler when it is.
+func (a *App) initSandboxIfEnabled(ctx context.Context) error {
+	config, err := a.state.LoadServiceConfig()
+	if err != nil {
+		return fmt.Errorf("load service config for sandbox: %w", err)
+	}
+	if !config.IsSandboxEnabled() {
+		return nil
+	}
+
+	mgr, err := sandbox.NewManager(a.env.Runner, a.logger, a.state.Root())
+	if err != nil {
+		return fmt.Errorf("create sandbox manager: %w", err)
+	}
+
+	if err := mgr.StartProxy("127.0.0.1:0"); err != nil {
+		return fmt.Errorf("start sandbox proxy: %w", err)
+	}
+	a.sandboxManager = mgr
+	a.logger.Info("sandbox mode initialized", "proxy_addr", mgr.ProxyAddr())
+
+	if err := mgr.ReconcileStale(ctx); err != nil {
+		a.logger.Warn("sandbox stale reconciliation failed", "err", err)
+	}
+	return nil
+}
+
+// shutdownSandbox tears down all active sandbox sessions and stops the proxy.
+func (a *App) shutdownSandbox(ctx context.Context) {
+	if a.sandboxManager == nil {
+		return
+	}
+	for _, id := range a.sandboxManager.ActiveSessions() {
+		if err := a.sandboxManager.Teardown(ctx, id, "daemon_shutdown"); err != nil {
+			a.logger.Warn("sandbox teardown on shutdown failed", "session_id", id, "err", err)
+		}
+	}
+	if err := a.sandboxManager.StopProxy(ctx); err != nil {
+		a.logger.Warn("sandbox proxy shutdown failed", "err", err)
+	}
 }

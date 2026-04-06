@@ -96,6 +96,42 @@ Vigilante includes a deterministic, code-driven package hardening scan for pull 
 
 The feature is enabled by default and can be toggled with the `package_hardening_enabled` field in `config.json`. For operational details including trigger conditions, checks performed, and remediation flow, see [DOCS.md](DOCS.md).
 
+## Sandbox Mode
+
+Sandbox mode runs each coding-agent session inside an isolated Docker container instead of directly on the host. The container receives a bind-mounted repository worktree, scoped credentials, and a `gh` mirror binary that routes all GitHub CLI commands through a Vigilante reverse proxy enforcing repository-level access control.
+
+Enable sandbox mode globally in `~/.vigilante/config.json`:
+
+```json
+{
+  "sandbox_enabled": true,
+  "sandbox_image": "vigilante-sandbox:latest",
+  "sandbox_memory_limit": "8g",
+  "sandbox_cpus": "4"
+}
+```
+
+Or per repository when adding a watch target:
+
+```sh
+vigilante watch --sandbox ~/my-repo
+```
+
+What sandbox mode provides:
+
+- **Container isolation.** The coding agent runs inside a Docker container with only the assigned repository mounted. Host files, credentials, and processes are not accessible.
+- **Scoped GitHub access.** A reverse proxy intercepts every `gh` command from the container and rejects operations targeting repositories outside the assigned scope.
+- **Short-lived credentials.** Each session receives an HMAC-signed token with a TTL and an ephemeral SSH deploy key. Both are revoked at teardown.
+- **Docker-in-Docker.** The container supports starting local service dependencies (databases, caches) via `docker compose` without escaping the sandbox boundary.
+- **Guaranteed teardown.** Containers, credentials, and proxy sessions are cleaned up whether the agent completes, fails, or times out. A stale session reconciler runs on daemon startup to handle orphaned containers.
+
+Requirements for sandbox mode:
+
+- Docker (or a compatible container runtime) available on the host
+- A sandbox base image with the selected coding-agent CLI pre-installed
+
+For the full architecture and security model, see [SANDBOX.md](SANDBOX.md).
+
 ## Key Commands
 
 - `vigilante setup`: verify dependencies, install bundled skills, and install the managed service

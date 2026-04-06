@@ -85,6 +85,27 @@ Why it matters:
 
 Isolation is the boundary that lets Vigilante run unattended while keeping the primary checkout stable.
 
+### 3b. Sandbox Execution
+Status: `Implemented`
+
+Sandbox mode adds an optional container isolation layer on top of worktree-based execution.
+
+Key capabilities:
+
+- Run coding-agent sessions inside Docker containers with bind-mounted worktrees.
+- Mint HMAC-signed session tokens scoped to a single repository and TTL.
+- Generate ephemeral SSH deploy keys for git push/pull inside the sandbox.
+- Reverse-proxy all `gh` CLI commands through a Vigilante API that enforces repository scope.
+- Docker-in-Docker support for agent-driven local service dependencies.
+- Guaranteed teardown: token invalidation, deploy key revocation, container removal, and SSH key cleanup.
+- Stale session reconciler on daemon startup cleans up orphaned containers.
+- Sandbox management API endpoints: provision, get session, teardown, token refresh.
+- Per-repository or global sandbox configuration via watch target or service config.
+
+Why it matters:
+
+Worktree isolation protects the primary checkout. Sandbox mode protects the host by moving agent execution into a container with scoped credentials and controlled GitHub access.
+
 ### 4. Agent Runtime Orchestration
 Status: `Implemented`
 

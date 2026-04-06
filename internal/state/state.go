@@ -40,6 +40,8 @@ type WatchTarget struct {
 	GitBackend            string              `json:"git_backend,omitempty"`
 	PRBackend             string              `json:"pr_backend,omitempty"`
 	ProjectRef            string              `json:"project_ref,omitempty"`
+	SandboxMode           bool                `json:"sandbox_mode,omitempty"`
+	SandboxImage          string              `json:"sandbox_image,omitempty"`
 }
 
 type BranchMode string
@@ -123,6 +125,20 @@ const DefaultBlockedSessionInactivityTimeout = 20 * time.Minute
 type ServiceConfig struct {
 	BlockedSessionInactivityTimeout string `json:"blocked_session_inactivity_timeout,omitempty"`
 	PackageHardeningEnabled         *bool  `json:"package_hardening_enabled,omitempty"`
+	SandboxEnabled                  *bool  `json:"sandbox_enabled,omitempty"`
+	SandboxImage                    string `json:"sandbox_image,omitempty"`
+	SandboxDefaultTTL               string `json:"sandbox_default_ttl,omitempty"`
+	SandboxMemoryLimit              string `json:"sandbox_memory_limit,omitempty"`
+	SandboxCPUs                     string `json:"sandbox_cpus,omitempty"`
+}
+
+// IsSandboxEnabled returns whether sandbox mode is enabled.
+// Defaults to false when not explicitly set.
+func (c ServiceConfig) IsSandboxEnabled() bool {
+	if c.SandboxEnabled == nil {
+		return false
+	}
+	return *c.SandboxEnabled
 }
 
 // IsPackageHardeningEnabled returns whether the deterministic JS/TS package
@@ -244,6 +260,11 @@ type Session struct {
 	EndedAt                        string              `json:"ended_at,omitempty"`
 	UpdatedAt                      string              `json:"updated_at,omitempty"`
 	LastError                      string              `json:"last_error,omitempty"`
+	SandboxMode                    bool                `json:"sandbox_mode,omitempty"`
+	SandboxSessionID               string              `json:"sandbox_session_id,omitempty"`
+	SandboxContainerName           string              `json:"sandbox_container_name,omitempty"`
+	SandboxContainerID             string              `json:"sandbox_container_id,omitempty"`
+	SandboxExpiresAt               string              `json:"sandbox_expires_at,omitempty"`
 }
 
 type Store struct {
