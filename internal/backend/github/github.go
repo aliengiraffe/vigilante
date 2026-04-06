@@ -138,6 +138,18 @@ func (b *Backend) ListPullRequestComments(ctx context.Context, repo string, numb
 	return ghcli.ListPullRequestComments(ctx, b.runner(), repo, number)
 }
 
+func (b *Backend) ListPullRequestCommentsForPolling(ctx context.Context, repo string, number int, purpose string, logger *slog.Logger) ([]backend.WorkItemComment, error) {
+	return ghcli.ListPullRequestCommentsForPolling(ctx, b.runner(), repo, number, purpose, logger)
+}
+
+func (b *Backend) ListPullRequestReviewComments(ctx context.Context, repo string, number int) ([]backend.WorkItemComment, error) {
+	return ghcli.ListPullRequestReviewComments(ctx, b.runner(), repo, number)
+}
+
+func (b *Backend) ListPullRequestReviewCommentsForPolling(ctx context.Context, repo string, number int, purpose string, logger *slog.Logger) ([]backend.WorkItemComment, error) {
+	return ghcli.ListPullRequestReviewCommentsForPolling(ctx, b.runner(), repo, number, purpose, logger)
+}
+
 func (b *Backend) CommentOnPullRequest(ctx context.Context, repo string, number int, body string) error {
 	return ghcli.CommentOnPullRequest(ctx, b.runner(), repo, number, body)
 }

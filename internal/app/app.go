@@ -3085,6 +3085,44 @@ func (a *App) listRunningSessions() error {
 	return nil
 }
 
+// collectSessionComments fetches issue comments and, when the session has an
+// associated open PR, also fetches PR timeline comments and PR review comments.
+// All surfaces are merged and deduplicated by comment ID so that the same
+// command is never processed twice regardless of where it was posted.
+func (a *App) collectSessionComments(ctx context.Context, session state.Session, purpose string) ([]ghcli.IssueComment, error) {
+	issueTracker := a.issueTrackerForSession(session)
+	project := a.issueProjectForSession(session)
+
+	issueComments, err := issueTracker.ListWorkItemCommentsForPolling(ctx, project, session.IssueNumber, purpose, a.logger)
+	if err != nil {
+		return nil, err
+	}
+
+	if session.PullRequestNumber == 0 || session.PullRequestState != "OPEN" {
+		return issueComments, nil
+	}
+
+	prMgr := a.prManagerForSession(session)
+
+	prComments, err := prMgr.ListPullRequestCommentsForPolling(ctx, session.Repo, session.PullRequestNumber, purpose+"_pr", a.logger)
+	if err != nil {
+		if a.logger != nil {
+			a.logger.Warn("pr comment poll failed, continuing with issue comments only", "repo", session.Repo, "pr", session.PullRequestNumber, "purpose", purpose, "err", err)
+		}
+		return issueComments, nil
+	}
+
+	reviewComments, err := prMgr.ListPullRequestReviewCommentsForPolling(ctx, session.Repo, session.PullRequestNumber, purpose+"_pr_review", a.logger)
+	if err != nil {
+		if a.logger != nil {
+			a.logger.Warn("pr review comment poll failed, continuing with issue+pr comments", "repo", session.Repo, "pr", session.PullRequestNumber, "purpose", purpose, "err", err)
+		}
+		return ghcli.MergeCommentSurfaces(issueComments, prComments), nil
+	}
+
+	return ghcli.MergeCommentSurfaces(issueComments, prComments, reviewComments), nil
+}
+
 func (a *App) processGitHubCleanupRequests(ctx context.Context, sessions []state.Session) ([]state.Session, error) {
 	for i := range sessions {
 		session := &sessions[i]
@@ -3092,7 +3130,7 @@ func (a *App) processGitHubCleanupRequests(ctx context.Context, sessions []state
 			continue
 		}
 
-		comments, err := a.issueTrackerForSession(*session).ListWorkItemCommentsForPolling(ctx, a.issueProjectForSession(*session), session.IssueNumber, "cleanup", a.logger)
+		comments, err := a.collectSessionComments(ctx, *session, "cleanup")
 		if err != nil {
 			a.logger.Error("cleanup comment lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 			session.LastError = err.Error()
@@ -3154,7 +3192,7 @@ func (a *App) processGitHubRecreateRequests(ctx context.Context, sessions []stat
 			continue
 		}
 
-		comments, err := a.issueTrackerForSession(*session).ListWorkItemCommentsForPolling(ctx, a.issueProjectForSession(*session), session.IssueNumber, "recreate", a.logger)
+		comments, err := a.collectSessionComments(ctx, *session, "recreate")
 		if err != nil {
 			a.logger.Error("recreate comment lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 			session.LastError = err.Error()
@@ -3325,7 +3363,7 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 			continue
 		}
 
-		comments, err := a.issueTrackerForSession(*session).ListWorkItemCommentsForPolling(ctx, a.issueProjectForSession(*session), session.IssueNumber, "resume", a.logger)
+		comments, err := a.collectSessionComments(ctx, *session, "resume")
 		if err != nil {
 			a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), "gh issue comments", err)
 			a.logger.Error("resume comment lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
@@ -4886,7 +4924,7 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 			continue
 		}
 
-		comments, err := a.issueTrackerForSession(*session).ListWorkItemCommentsForPolling(ctx, a.issueProjectForSession(*session), session.IssueNumber, "iteration", a.logger)
+		comments, err := a.collectSessionComments(ctx, *session, "iteration")
 		if err != nil {
 			a.logger.Error("iteration comment lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 			session.LastError = err.Error()

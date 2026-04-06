@@ -565,3 +565,184 @@ func TestLatestUserCommentTimeIgnoresAutomationComments(t *testing.T) {
 		t.Fatalf("expected latest user comment at %s, got %s", want, got)
 	}
 }
+
+func TestListPullRequestReviewComments(t *testing.T) {
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/pulls/12/comments --paginate": `[{"id":100,"body":"@vigilanteai resume","created_at":"2026-03-12T12:00:00Z","user":{"login":"alice"}},{"id":101,"body":"looks good","created_at":"2026-03-12T12:01:00Z","user":{"login":"bob"}}]`,
+		},
+	}
+
+	comments, err := ListPullRequestReviewComments(context.Background(), runner, "owner/repo", 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 2 {
+		t.Fatalf("expected 2 review comments, got %d", len(comments))
+	}
+	if comments[0].ID != 100 || comments[0].User.Login != "alice" {
+		t.Fatalf("unexpected first review comment: %#v", comments[0])
+	}
+	if comments[1].ID != 101 || comments[1].Body != "looks good" {
+		t.Fatalf("unexpected second review comment: %#v", comments[1])
+	}
+}
+
+func TestListPullRequestCommentsForPolling(t *testing.T) {
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/12/comments": `[{"id":200,"body":"@vigilanteai cleanup","created_at":"2026-03-12T12:00:00Z","user":{"login":"alice"}}]`,
+		},
+	}
+
+	comments, err := ListPullRequestCommentsForPolling(context.Background(), runner, "owner/repo", 12, "test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 1 || comments[0].ID != 200 {
+		t.Fatalf("unexpected PR comments: %#v", comments)
+	}
+}
+
+func TestMergeCommentSurfacesDeduplicatesByID(t *testing.T) {
+	now := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
+	issueComments := []IssueComment{
+		{ID: 10, Body: "hello", CreatedAt: now.Add(-3 * time.Minute)},
+		{ID: 11, Body: "@vigilanteai resume", CreatedAt: now.Add(-2 * time.Minute)},
+	}
+	prComments := []IssueComment{
+		{ID: 11, Body: "@vigilanteai resume", CreatedAt: now.Add(-2 * time.Minute)}, // duplicate
+		{ID: 20, Body: "@vigilanteai cleanup", CreatedAt: now.Add(-1 * time.Minute)},
+	}
+	reviewComments := []IssueComment{
+		{ID: 30, Body: "inline feedback", CreatedAt: now.Add(-30 * time.Second)},
+	}
+
+	merged := MergeCommentSurfaces(issueComments, prComments, reviewComments)
+	if len(merged) != 4 {
+		t.Fatalf("expected 4 merged comments after dedup, got %d: %#v", len(merged), merged)
+	}
+	// Verify chronological order
+	for i := 1; i < len(merged); i++ {
+		if merged[i].CreatedAt.Before(merged[i-1].CreatedAt) {
+			t.Fatalf("merged comments not in chronological order at index %d", i)
+		}
+	}
+	// Verify IDs
+	wantIDs := []int64{10, 11, 20, 30}
+	for i, want := range wantIDs {
+		if merged[i].ID != want {
+			t.Fatalf("expected merged[%d].ID = %d, got %d", i, want, merged[i].ID)
+		}
+	}
+}
+
+func TestMergeCommentSurfacesHandlesEmptySurfaces(t *testing.T) {
+	now := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
+	comments := []IssueComment{
+		{ID: 10, Body: "hello", CreatedAt: now},
+	}
+
+	merged := MergeCommentSurfaces(comments, nil, nil)
+	if len(merged) != 1 || merged[0].ID != 10 {
+		t.Fatalf("unexpected merged result: %#v", merged)
+	}
+
+	merged = MergeCommentSurfaces(nil, nil)
+	if len(merged) != 0 {
+		t.Fatalf("expected empty merge result, got %#v", merged)
+	}
+}
+
+func TestFindResumeCommentAcrossPRSurface(t *testing.T) {
+	now := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
+	issueComments := []IssueComment{
+		{ID: 10, Body: "working on it", CreatedAt: now.Add(-2 * time.Minute)},
+	}
+	prComments := []IssueComment{
+		{ID: 20, Body: "@vigilanteai resume", CreatedAt: now.Add(-1 * time.Minute)},
+	}
+
+	merged := MergeCommentSurfaces(issueComments, prComments)
+	comment := FindResumeComment(merged, 0)
+	if comment == nil || comment.ID != 20 {
+		t.Fatalf("expected resume command from PR comments to be found, got %#v", comment)
+	}
+}
+
+func TestFindCleanupCommentAcrossPRReviewSurface(t *testing.T) {
+	now := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
+	issueComments := []IssueComment{
+		{ID: 10, Body: "looks good", CreatedAt: now.Add(-2 * time.Minute)},
+	}
+	reviewComments := []IssueComment{
+		{ID: 30, Body: "@vigilanteai cleanup", CreatedAt: now.Add(-1 * time.Minute)},
+	}
+
+	merged := MergeCommentSurfaces(issueComments, nil, reviewComments)
+	comment := FindCleanupComment(merged, 0)
+	if comment == nil || comment.ID != 30 {
+		t.Fatalf("expected cleanup command from review comments to be found, got %#v", comment)
+	}
+}
+
+func TestFindIterationCommentAcrossMergedSurfaces(t *testing.T) {
+	now := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
+	issueComments := []IssueComment{
+		{ID: 10, Body: "@vigilanteai please fix the tests", CreatedAt: now.Add(-3 * time.Minute)},
+	}
+	prComments := []IssueComment{
+		{ID: 20, Body: "@vigilanteai also update the docs", CreatedAt: now.Add(-1 * time.Minute)},
+	}
+
+	merged := MergeCommentSurfaces(issueComments, prComments)
+	// With no claimed comment, should find the latest iteration comment (from PR)
+	comment := FindIterationComment(merged, 0, "")
+	if comment == nil || comment.ID != 20 {
+		t.Fatalf("expected iteration comment from PR, got %#v", comment)
+	}
+
+	// After claiming the PR comment, should find the issue comment
+	comment = FindIterationComment(merged, 20, now.Add(-1*time.Minute).Format(time.RFC3339))
+	if comment != nil {
+		t.Fatalf("expected no new iteration comment after claiming latest, got %#v", comment)
+	}
+}
+
+func TestMergeCommentSurfacesPreservesIDOrderAtSameTimestamp(t *testing.T) {
+	now := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
+	comments1 := []IssueComment{
+		{ID: 20, Body: "second", CreatedAt: now},
+	}
+	comments2 := []IssueComment{
+		{ID: 10, Body: "first", CreatedAt: now},
+	}
+
+	merged := MergeCommentSurfaces(comments1, comments2)
+	if len(merged) != 2 || merged[0].ID != 10 || merged[1].ID != 20 {
+		t.Fatalf("expected ID-ordered tie-breaking, got %#v", merged)
+	}
+}
+
+func TestCommandsFromMultipleSessionsRouteCorrectly(t *testing.T) {
+	now := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
+
+	session1Comments := []IssueComment{
+		{ID: 10, Body: "@vigilanteai resume", CreatedAt: now.Add(-2 * time.Minute)},
+	}
+	session2Comments := []IssueComment{
+		{ID: 20, Body: "@vigilanteai resume", CreatedAt: now.Add(-1 * time.Minute)},
+	}
+
+	// Session 1 already claimed comment 10
+	comment1 := FindResumeComment(session1Comments, 10)
+	if comment1 != nil {
+		t.Fatalf("session 1 should not find new resume after claiming 10, got %#v", comment1)
+	}
+
+	// Session 2 has not claimed any comment yet
+	comment2 := FindResumeComment(session2Comments, 0)
+	if comment2 == nil || comment2.ID != 20 {
+		t.Fatalf("session 2 should find resume comment 20, got %#v", comment2)
+	}
+}
