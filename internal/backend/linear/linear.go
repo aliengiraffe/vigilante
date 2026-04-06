@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -43,14 +44,23 @@ func (b *Backend) ResolveAssignee(_ context.Context, assignee string) (string, e
 }
 
 func (b *Backend) ListOpenWorkItems(ctx context.Context, project string, assignee string) ([]backend.WorkItem, error) {
-	output, err := b.runner().Run(ctx, "", "linear", "issue", "list", "--json")
+	output, err := b.runner().Run(ctx, "", "linear", "issue", "list")
 	if err != nil {
 		return nil, err
 	}
 
-	items, err := parseLinearWorkItems(strings.TrimSpace(output))
-	if err != nil {
-		return nil, fmt.Errorf("parse linear issue list output: %w", err)
+	ids := parseLinearIssueListIDs(strings.TrimSpace(output))
+	items := make([]backend.WorkItem, 0, len(ids))
+	for _, id := range ids {
+		output, err := b.runner().Run(ctx, "", "linear", "issue", "view", id, "--json")
+		if err != nil {
+			return nil, err
+		}
+		item, err := parseLinearWorkItem(strings.TrimSpace(output))
+		if err != nil {
+			return nil, fmt.Errorf("parse linear issue view output for %q: %w", id, err)
+		}
+		items = append(items, item)
 	}
 	assignee = strings.TrimSpace(assignee)
 	if assignee == "" || assignee == "me" {
@@ -178,6 +188,29 @@ func parseLinearWorkItems(raw string) ([]backend.WorkItem, error) {
 	return items, nil
 }
 
+func parseLinearWorkItem(raw string) (backend.WorkItem, error) {
+	var item linearWorkItem
+	if err := json.Unmarshal([]byte(raw), &item); err != nil {
+		return backend.WorkItem{}, err
+	}
+	number := item.Number
+	if number == 0 {
+		number = parseLinearIssueNumber(item.Identifier)
+	}
+	createdAt, _ := time.Parse(time.RFC3339, strings.TrimSpace(item.CreatedAt))
+	workItem := backend.WorkItem{
+		Number:    number,
+		Title:     strings.TrimSpace(item.Title),
+		CreatedAt: createdAt,
+		URL:       strings.TrimSpace(item.URL),
+		Labels:    item.Labels,
+	}
+	if item.State != nil {
+		workItem.Stage = strings.TrimSpace(item.State.Name)
+	}
+	return workItem, nil
+}
+
 func parseLinearWorkItemDetails(raw string) (*backend.WorkItemDetails, error) {
 	var item linearWorkItem
 	if err := json.Unmarshal([]byte(raw), &item); err != nil {
@@ -243,4 +276,42 @@ func parseLinearIssueNumber(identifier string) int {
 	}
 	number, _ := strconv.Atoi(parts[len(parts)-1])
 	return number
+}
+
+func parseLinearIssueListIDs(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	lines := strings.Split(raw, "\n")
+	ids := make([]string, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if isLinearIssueListSeparator(trimmed) {
+			continue
+		}
+		if linearIssueListHeaderRegex.MatchString(line) {
+			continue
+		}
+		match := linearIssueListIDRegex.FindString(line)
+		if match == "" {
+			continue
+		}
+		ids = append(ids, match)
+	}
+	return ids
+}
+
+var linearIssueListHeaderRegex = regexp.MustCompile(`(^|\s)ID(\s|$)`)
+var linearIssueListIDRegex = regexp.MustCompile(`\b[A-Z][A-Z0-9]*-\d+\b`)
+
+func isLinearIssueListSeparator(line string) bool {
+	for _, r := range line {
+		if r != '-' && r != '─' && r != ' ' {
+			return false
+		}
+	}
+	return true
 }
