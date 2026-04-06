@@ -787,3 +787,147 @@ func ListPullRequestComments(ctx context.Context, runner environment.Runner, rep
 func AddPullRequestCommentReaction(ctx context.Context, runner environment.Runner, repo string, commentID int64, content string) error {
 	return AddIssueCommentReaction(ctx, runner, repo, commentID, content)
 }
+
+// ListPullRequestCommentsForPolling is a polling-safe variant of
+// ListPullRequestComments that logs failures without propagating through
+// access logging.
+func ListPullRequestCommentsForPolling(ctx context.Context, runner environment.Runner, repo string, number int, purpose string, logger *slog.Logger) ([]IssueComment, error) {
+	output, err := runPullRequestCommentsCommand(ctx, runner, repo, number)
+	if err != nil {
+		if logger != nil {
+			logger.Error("pr comment poll failed", "repo", repo, "pr", number, "purpose", purpose, "err", err, "output", summarizeForLog(output))
+		}
+		return nil, err
+	}
+	comments, err := parseIssueComments(output)
+	if err != nil {
+		if logger != nil {
+			logger.Error("pr comment poll parse failed", "repo", repo, "pr", number, "purpose", purpose, "err", err, "output", summarizeForLog(output))
+		}
+		return nil, err
+	}
+	if logger != nil {
+		logger.Info("pr comment poll", "repo", repo, "pr", number, "purpose", purpose, "comments", len(comments))
+	}
+	return comments, nil
+}
+
+// runPullRequestCommentsCommand fetches PR issue comments bypassing the
+// access logger, mirroring runIssueCommentsCommand for the PR number.
+func runPullRequestCommentsCommand(ctx context.Context, runner environment.Runner, repo string, number int) (string, error) {
+	path := issueAPIPath(repo, number) + "/comments"
+	switch typed := runner.(type) {
+	case environment.LoggingRunner:
+		return typed.Base.Run(ctx, "", "gh", "api", path)
+	case *environment.LoggingRunner:
+		return typed.Base.Run(ctx, "", "gh", "api", path)
+	default:
+		return runner.Run(ctx, "", "gh", "api", path)
+	}
+}
+
+// ListPullRequestReviewComments returns inline review comments on a pull
+// request. These are code-level comments left during a PR review, fetched
+// from the pulls review comments API endpoint.
+func ListPullRequestReviewComments(ctx context.Context, runner environment.Runner, repo string, number int) ([]IssueComment, error) {
+	output, err := runner.Run(ctx, "", "gh", "api", pullReviewCommentsAPIPath(repo, number), "--paginate")
+	if err != nil {
+		return nil, err
+	}
+	return parsePullRequestReviewComments(output)
+}
+
+// ListPullRequestReviewCommentsForPolling is a polling-safe variant of
+// ListPullRequestReviewComments that logs failures without propagating
+// through access logging.
+func ListPullRequestReviewCommentsForPolling(ctx context.Context, runner environment.Runner, repo string, number int, purpose string, logger *slog.Logger) ([]IssueComment, error) {
+	output, err := runPullRequestReviewCommentsCommand(ctx, runner, repo, number)
+	if err != nil {
+		if logger != nil {
+			logger.Error("pr review comment poll failed", "repo", repo, "pr", number, "purpose", purpose, "err", err, "output", summarizeForLog(output))
+		}
+		return nil, err
+	}
+	comments, err := parsePullRequestReviewComments(output)
+	if err != nil {
+		if logger != nil {
+			logger.Error("pr review comment poll parse failed", "repo", repo, "pr", number, "purpose", purpose, "err", err, "output", summarizeForLog(output))
+		}
+		return nil, err
+	}
+	if logger != nil {
+		logger.Info("pr review comment poll", "repo", repo, "pr", number, "purpose", purpose, "comments", len(comments))
+	}
+	return comments, nil
+}
+
+func runPullRequestReviewCommentsCommand(ctx context.Context, runner environment.Runner, repo string, number int) (string, error) {
+	path := pullReviewCommentsAPIPath(repo, number)
+	switch typed := runner.(type) {
+	case environment.LoggingRunner:
+		return typed.Base.Run(ctx, "", "gh", "api", path, "--paginate")
+	case *environment.LoggingRunner:
+		return typed.Base.Run(ctx, "", "gh", "api", path, "--paginate")
+	default:
+		return runner.Run(ctx, "", "gh", "api", path, "--paginate")
+	}
+}
+
+func pullReviewCommentsAPIPath(repo string, number int) string {
+	return fmt.Sprintf("repos/%s/pulls/%d/comments", repo, number)
+}
+
+// pullRequestReviewComment is the subset of the GitHub pull request review
+// comment API response that we map into WorkItemComment.
+type pullRequestReviewComment struct {
+	ID        int64     `json:"id"`
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"created_at"`
+	User      struct {
+		Login string `json:"login"`
+	} `json:"user"`
+}
+
+func parsePullRequestReviewComments(output string) ([]IssueComment, error) {
+	var raw []pullRequestReviewComment
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &raw); err != nil {
+		return nil, fmt.Errorf("parse pr review comments: %w", err)
+	}
+	comments := make([]IssueComment, len(raw))
+	for i, r := range raw {
+		comments[i] = IssueComment{
+			ID:        r.ID,
+			Body:      r.Body,
+			CreatedAt: r.CreatedAt,
+		}
+		comments[i].User.Login = r.User.Login
+	}
+	sort.Slice(comments, func(i, j int) bool {
+		return comments[i].CreatedAt.Before(comments[j].CreatedAt)
+	})
+	return comments, nil
+}
+
+// MergeCommentSurfaces merges multiple comment slices into a single
+// deduplicated, chronologically sorted slice. Comments with the same ID
+// are kept only once (first occurrence wins).
+func MergeCommentSurfaces(surfaces ...[]IssueComment) []IssueComment {
+	seen := make(map[int64]struct{})
+	var merged []IssueComment
+	for _, surface := range surfaces {
+		for _, c := range surface {
+			if _, ok := seen[c.ID]; ok {
+				continue
+			}
+			seen[c.ID] = struct{}{}
+			merged = append(merged, c)
+		}
+	}
+	sort.Slice(merged, func(i, j int) bool {
+		if merged[i].CreatedAt.Equal(merged[j].CreatedAt) {
+			return merged[i].ID < merged[j].ID
+		}
+		return merged[i].CreatedAt.Before(merged[j].CreatedAt)
+	})
+	return merged
+}

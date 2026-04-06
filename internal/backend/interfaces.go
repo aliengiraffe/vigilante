@@ -91,6 +91,19 @@ type PullRequestManager interface {
 	// ListPullRequestComments returns comments on a pull request.
 	ListPullRequestComments(ctx context.Context, repo string, number int) ([]WorkItemComment, error)
 
+	// ListPullRequestCommentsForPolling is a polling-safe variant of
+	// ListPullRequestComments that logs failures without propagating through
+	// access logging.
+	ListPullRequestCommentsForPolling(ctx context.Context, repo string, number int, purpose string, logger *slog.Logger) ([]WorkItemComment, error)
+
+	// ListPullRequestReviewComments returns inline review comments on a
+	// pull request (code-level comments from PR reviews).
+	ListPullRequestReviewComments(ctx context.Context, repo string, number int) ([]WorkItemComment, error)
+
+	// ListPullRequestReviewCommentsForPolling is a polling-safe variant of
+	// ListPullRequestReviewComments.
+	ListPullRequestReviewCommentsForPolling(ctx context.Context, repo string, number int, purpose string, logger *slog.Logger) ([]WorkItemComment, error)
+
 	// CommentOnPullRequest posts a comment on a pull request.
 	CommentOnPullRequest(ctx context.Context, repo string, number int, body string) error
 

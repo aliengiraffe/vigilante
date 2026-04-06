@@ -9324,3 +9324,209 @@ func TestLogsCommandMissingLog(t *testing.T) {
 		t.Fatalf("expected error message about missing log, got %q", stderr.String())
 	}
 }
+
+func TestCollectSessionCommentsIssueOnly(t *testing.T) {
+	t.Setenv("VIGILANTE_HOME", t.TempDir())
+	store := state.NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/7/comments": `[{"id":10,"body":"@vigilanteai resume","created_at":"2026-03-12T12:00:00Z","user":{"login":"alice"}}]`,
+		},
+	}
+	env := &environment.Environment{Runner: runner}
+	ghBackend := githubbackend.NewBackend(&env.Runner)
+	app := &App{
+		stdout:       testutil.IODiscard{},
+		stderr:       testutil.IODiscard{},
+		clock:        func() time.Time { return time.Date(2026, 3, 26, 20, 0, 0, 0, time.UTC) },
+		state:        store,
+		issueTracker: ghBackend,
+		prManager:    ghBackend,
+		env:          env,
+	}
+
+	session := state.Session{
+		Repo:        "owner/repo",
+		IssueNumber: 7,
+	}
+	comments, err := app.collectSessionComments(context.Background(), session, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 1 || comments[0].ID != 10 {
+		t.Fatalf("expected 1 issue comment, got %#v", comments)
+	}
+}
+
+func TestCollectSessionCommentsMergesIssueAndPRComments(t *testing.T) {
+	t.Setenv("VIGILANTE_HOME", t.TempDir())
+	store := state.NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/7/comments":            `[{"id":10,"body":"@vigilanteai resume","created_at":"2026-03-12T12:00:00Z","user":{"login":"alice"}}]`,
+			"gh api repos/owner/repo/issues/12/comments":           `[{"id":20,"body":"@vigilanteai cleanup","created_at":"2026-03-12T12:01:00Z","user":{"login":"bob"}}]`,
+			"gh api repos/owner/repo/pulls/12/comments --paginate": `[{"id":30,"body":"@vigilanteai please fix","created_at":"2026-03-12T12:02:00Z","user":{"login":"carol"}}]`,
+		},
+	}
+	env := &environment.Environment{Runner: runner}
+	ghBackend := githubbackend.NewBackend(&env.Runner)
+	app := &App{
+		stdout:       testutil.IODiscard{},
+		stderr:       testutil.IODiscard{},
+		clock:        func() time.Time { return time.Date(2026, 3, 26, 20, 0, 0, 0, time.UTC) },
+		state:        store,
+		issueTracker: ghBackend,
+		prManager:    ghBackend,
+		env:          env,
+	}
+
+	session := state.Session{
+		Repo:              "owner/repo",
+		IssueNumber:       7,
+		PullRequestNumber: 12,
+		PullRequestState:  "OPEN",
+	}
+	comments, err := app.collectSessionComments(context.Background(), session, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 3 {
+		t.Fatalf("expected 3 merged comments, got %d: %#v", len(comments), comments)
+	}
+	wantIDs := []int64{10, 20, 30}
+	for i, want := range wantIDs {
+		if comments[i].ID != want {
+			t.Fatalf("expected comments[%d].ID = %d, got %d", i, want, comments[i].ID)
+		}
+	}
+}
+
+func TestCollectSessionCommentsSkipsPRWhenNotOpen(t *testing.T) {
+	t.Setenv("VIGILANTE_HOME", t.TempDir())
+	store := state.NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/7/comments": `[{"id":10,"body":"hello","created_at":"2026-03-12T12:00:00Z","user":{"login":"alice"}}]`,
+		},
+	}
+	env := &environment.Environment{Runner: runner}
+	ghBackend := githubbackend.NewBackend(&env.Runner)
+	app := &App{
+		stdout:       testutil.IODiscard{},
+		stderr:       testutil.IODiscard{},
+		clock:        func() time.Time { return time.Date(2026, 3, 26, 20, 0, 0, 0, time.UTC) },
+		state:        store,
+		issueTracker: ghBackend,
+		prManager:    ghBackend,
+		env:          env,
+	}
+
+	// PR is MERGED - should not fetch PR comments
+	session := state.Session{
+		Repo:              "owner/repo",
+		IssueNumber:       7,
+		PullRequestNumber: 12,
+		PullRequestState:  "MERGED",
+	}
+	comments, err := app.collectSessionComments(context.Background(), session, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 1 || comments[0].ID != 10 {
+		t.Fatalf("expected only issue comments for merged PR, got %#v", comments)
+	}
+}
+
+func TestCollectSessionCommentsGracefulPRFailure(t *testing.T) {
+	t.Setenv("VIGILANTE_HOME", t.TempDir())
+	store := state.NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/7/comments": `[{"id":10,"body":"hello","created_at":"2026-03-12T12:00:00Z","user":{"login":"alice"}}]`,
+		},
+		Errors: map[string]error{
+			"gh api repos/owner/repo/issues/12/comments":           errors.New("rate limited"),
+			"gh api repos/owner/repo/pulls/12/comments --paginate": errors.New("rate limited"),
+		},
+	}
+	env := &environment.Environment{Runner: runner}
+	ghBackend := githubbackend.NewBackend(&env.Runner)
+	app := &App{
+		stdout:       testutil.IODiscard{},
+		stderr:       testutil.IODiscard{},
+		clock:        func() time.Time { return time.Date(2026, 3, 26, 20, 0, 0, 0, time.UTC) },
+		state:        store,
+		issueTracker: ghBackend,
+		prManager:    ghBackend,
+		env:          env,
+	}
+
+	session := state.Session{
+		Repo:              "owner/repo",
+		IssueNumber:       7,
+		PullRequestNumber: 12,
+		PullRequestState:  "OPEN",
+	}
+	// Should still return issue comments even when PR API fails
+	comments, err := app.collectSessionComments(context.Background(), session, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 1 || comments[0].ID != 10 {
+		t.Fatalf("expected issue comments despite PR failure, got %#v", comments)
+	}
+}
+
+func TestCollectSessionCommentsDeduplicatesAcrossSurfaces(t *testing.T) {
+	t.Setenv("VIGILANTE_HOME", t.TempDir())
+	store := state.NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	// On GitHub, issue comments and PR comments for the same PR share the
+	// same API. Simulate overlapping comment IDs to ensure deduplication.
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/7/comments":            `[{"id":10,"body":"issue comment","created_at":"2026-03-12T12:00:00Z","user":{"login":"alice"}}]`,
+			"gh api repos/owner/repo/issues/12/comments":           `[{"id":10,"body":"issue comment","created_at":"2026-03-12T12:00:00Z","user":{"login":"alice"}},{"id":20,"body":"pr comment","created_at":"2026-03-12T12:01:00Z","user":{"login":"bob"}}]`,
+			"gh api repos/owner/repo/pulls/12/comments --paginate": `[]`,
+		},
+	}
+	env := &environment.Environment{Runner: runner}
+	ghBackend := githubbackend.NewBackend(&env.Runner)
+	app := &App{
+		stdout:       testutil.IODiscard{},
+		stderr:       testutil.IODiscard{},
+		clock:        func() time.Time { return time.Date(2026, 3, 26, 20, 0, 0, 0, time.UTC) },
+		state:        store,
+		issueTracker: ghBackend,
+		prManager:    ghBackend,
+		env:          env,
+	}
+
+	session := state.Session{
+		Repo:              "owner/repo",
+		IssueNumber:       7,
+		PullRequestNumber: 12,
+		PullRequestState:  "OPEN",
+	}
+	comments, err := app.collectSessionComments(context.Background(), session, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comments) != 2 {
+		t.Fatalf("expected 2 deduplicated comments, got %d: %#v", len(comments), comments)
+	}
+}
