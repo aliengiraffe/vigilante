@@ -16,7 +16,7 @@ It is the orchestration layer around agents such as `codex`, `claude`, and `gemi
 
 [Docs](DOCS.md) · [Closed Issues](https://github.com/aliengiraffe/vigilante/issues?q=is%3Aissue%20state%3Aclosed) · [Releases](https://github.com/aliengiraffe/vigilante/releases) · [Contributing](CONTRIBUTE.md)
 
-Start here: install `vigilante`, run `vigilante setup`, then register a repo with `vigilante watch /path/to/repo`.
+Start here: install `vigilante`, run `vigilante setup`, then clone and auto-register a repo with `vigilante clone <repo>` or register an existing checkout with `vigilante watch /path/to/repo`.
 
 ## Install
 
@@ -43,7 +43,7 @@ vigilante setup --provider codex
 Register a repository and let Vigilante manage it:
 
 ```sh
-vigilante watch ~/path/to/repo
+vigilante clone git@github.com:owner/repo.git
 ```
 
 Useful follow-up commands:
@@ -60,7 +60,7 @@ Typical first-run flow:
 ```sh
 brew install vigilante
 vigilante setup --provider codex
-vigilante watch ~/hello-world-app
+vigilante clone git@github.com:owner/hello-world-app.git
 vigilante daemon run --once
 ```
 
@@ -99,6 +99,7 @@ The feature is enabled by default and can be toggled with the `package_hardening
 ## Key Commands
 
 - `vigilante setup`: verify dependencies, install bundled skills, and install the managed service
+- `vigilante clone <repo> [<path>]`: clone a repository with `git clone` semantics and auto-add it to watch targets
 - `vigilante watch <path>`: register a local repository for issue monitoring
 - `vigilante list`: show watched repositories
 - `vigilante status`: show service health, watched repos, active sessions, and rate-limit state

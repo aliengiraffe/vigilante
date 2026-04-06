@@ -144,6 +144,7 @@ For each watched repository:
 `vigilante --help` and `vigilante -h` print top-level usage. Each command also supports command-specific help, for example:
 
 ```sh
+vigilante clone --help
 vigilante watch --help
 vigilante daemon run --help
 ```
@@ -201,6 +202,29 @@ vigilante commit --amend --no-edit
 ```
 
 Coding agents must use `vigilante commit` instead of `git commit` or GitHub CLI commit flows. This ensures that all agent-produced commits remain user-authored and signed.
+
+### `vigilante clone [git-clone-flags...] [--] <repo> [<path>]`
+
+Clone a repository using `git clone`, then automatically register the resulting local path as a Vigilante watch target.
+
+Expected behavior:
+
+- forwards clone flags and arguments through to `git clone`
+- supports both explicit destination paths and git-derived default destination names
+- adds the cloned repository to `~/.vigilante/watchlist.json` only after clone success
+- reuses existing watch-target deduplication when the cloned repository is already watched
+- returns a non-zero exit code if clone fails
+- returns a non-zero exit code if clone succeeds but automatic watch-target registration fails
+
+Examples:
+
+```sh
+vigilante clone git@github.com:owner/hello-world-app.git
+```
+
+```sh
+vigilante clone --depth 1 https://github.com/owner/hello-world-app.git ~/src/hello-world-app
+```
 
 ## Installation
 
