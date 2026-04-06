@@ -63,6 +63,11 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		appendSessionLog(logPath, "fork worktree configuration failed", session, err.Error())
 		return session
 	}
+	if session.ForkMode && strings.TrimSpace(session.ContributingGuide) == "" {
+		guide, guidePath, _ := forkmode.DiscoverContributingGuide(ctx, env.Runner, session.WorktreePath)
+		session.ContributingGuide = guide
+		session.ContributingGuidePath = guidePath
+	}
 	startItems := []string{
 		fmt.Sprintf("Vigilante launched this implementation session in `%s`.", session.WorktreePath),
 		fmt.Sprintf("Branch: `%s`.", session.Branch),

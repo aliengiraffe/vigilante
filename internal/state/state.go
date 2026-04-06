@@ -26,6 +26,7 @@ type WatchTarget struct {
 	ForkOwner             string              `json:"fork_owner,omitempty"`
 	PushRemote            string              `json:"push_remote,omitempty"`
 	PushRepo              string              `json:"push_repo,omitempty"`
+	UpstreamRepo          string              `json:"upstream_repo,omitempty"`
 	Classification        repo.Classification `json:"classification,omitempty"`
 	Provider              string              `json:"provider,omitempty"`
 	Labels                []string            `json:"labels,omitempty"`
@@ -174,6 +175,12 @@ type Session struct {
 	ForkOwner                      string              `json:"fork_owner,omitempty"`
 	PushRemote                     string              `json:"push_remote,omitempty"`
 	PushRepo                       string              `json:"push_repo,omitempty"`
+	UpstreamRepo                   string              `json:"upstream_repo,omitempty"`
+	UpstreamPRNumber               int                 `json:"upstream_pr_number,omitempty"`
+	UpstreamPRURL                  string              `json:"upstream_pr_url,omitempty"`
+	UpstreamPRError                string              `json:"upstream_pr_error,omitempty"`
+	ContributingGuide              string              `json:"contributing_guide,omitempty"`
+	ContributingGuidePath          string              `json:"contributing_guide_path,omitempty"`
 	ReusedRemoteBranch             string              `json:"reused_remote_branch,omitempty"`
 	BranchDiffSummary              string              `json:"branch_diff_summary,omitempty"`
 	Status                         SessionStatus       `json:"status"`

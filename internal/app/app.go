@@ -812,19 +812,29 @@ func (a *App) runCommitCommand(ctx context.Context, args []string) error {
 
 func (a *App) runCloneCommand(ctx context.Context, args []string) error {
 	if len(args) == 1 && isHelpToken(args[0]) {
-		fmt.Fprintln(a.stdout, "usage: vigilante clone [git-clone-flags...] [--] <repo> [<path>]")
+		fmt.Fprintln(a.stdout, "usage: vigilante clone [--fork] [git-clone-flags...] [--] <repo> [<path>]")
 		fmt.Fprintln(a.stdout)
 		fmt.Fprintln(a.stdout, "Clone a repository using git, then automatically register the")
 		fmt.Fprintln(a.stdout, "resulting local path as a Vigilante watch target.")
+		fmt.Fprintln(a.stdout)
+		fmt.Fprintln(a.stdout, "  --fork    Create a GitHub fork under the authenticated user's account,")
+		fmt.Fprintln(a.stdout, "            clone the fork locally, and register with fork metadata so")
+		fmt.Fprintln(a.stdout, "            Vigilante can open upstream PRs automatically.")
 		return nil
 	}
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
 	}
 
+	forkMode, gitArgs := extractCloneForkFlag(args)
+
+	if forkMode {
+		return a.runCloneFork(ctx, gitArgs)
+	}
+
 	var cloneStderr bytes.Buffer
 	stderr := io.MultiWriter(a.stderr, &cloneStderr)
-	exitCode, err := a.proxyExec(ctx, a.stdin, a.stdout, stderr, "git", append([]string{"clone"}, args...)...)
+	exitCode, err := a.proxyExec(ctx, a.stdin, a.stdout, stderr, "git", append([]string{"clone"}, gitArgs...)...)
 	if err != nil {
 		return err
 	}
@@ -832,7 +842,7 @@ func (a *App) runCloneCommand(ctx context.Context, args []string) error {
 		return commandExitError{code: exitCode}
 	}
 
-	clonePath, err := resolveCloneTargetPath(args, cloneStderr.String())
+	clonePath, err := resolveCloneTargetPath(gitArgs, cloneStderr.String())
 	if err != nil {
 		return fmt.Errorf("clone succeeded but automatic watch-target registration failed: %w", err)
 	}
@@ -851,6 +861,149 @@ func (a *App) runCloneCommand(ctx context.Context, args []string) error {
 		fmt.Fprintf(a.stdout, "added cloned repository to watch targets: %s\n", clonePath)
 	}
 	return nil
+}
+
+func (a *App) runCloneFork(ctx context.Context, args []string) error {
+	parsed, err := parseCloneArgs(args)
+	if err != nil {
+		return fmt.Errorf("--fork requires a repository argument: %w", err)
+	}
+	upstreamRepo := parsed.repo
+
+	// Resolve the upstream repo slug from the URL/SSH form.
+	upstreamSlug := inferRepoSlugFromURL(upstreamRepo)
+	if upstreamSlug == "" {
+		return fmt.Errorf("could not determine GitHub repository slug from %q", upstreamRepo)
+	}
+
+	// Get the authenticated user.
+	authOwner, err := forkmode.AuthenticatedOwner(ctx, a.env.Runner)
+	if err != nil {
+		return fmt.Errorf("--fork requires GitHub authentication: %w", err)
+	}
+
+	// Create the fork deterministically.
+	upstreamName := upstreamSlug[strings.LastIndex(upstreamSlug, "/")+1:]
+	forkRepo := authOwner + "/" + upstreamName
+	fmt.Fprintf(a.stdout, "forking %s into %s...\n", upstreamSlug, forkRepo)
+	if err := forkmode.EnsureFork(ctx, a.env.Runner, upstreamSlug, forkRepo, authOwner, authOwner); err != nil {
+		return fmt.Errorf("fork creation failed: %w", err)
+	}
+	fmt.Fprintf(a.stdout, "fork ready: %s\n", forkRepo)
+
+	// Build the clone URL using the fork repo.
+	forkCloneURL := "https://github.com/" + forkRepo + ".git"
+
+	// Replace the upstream repo argument with the fork URL in git clone args.
+	forkGitArgs := replaceCloneRepoArg(args, upstreamRepo, forkCloneURL)
+
+	// Clone the fork.
+	var cloneStderr bytes.Buffer
+	stderr := io.MultiWriter(a.stderr, &cloneStderr)
+	exitCode, err := a.proxyExec(ctx, a.stdin, a.stdout, stderr, "git", append([]string{"clone"}, forkGitArgs...)...)
+	if err != nil {
+		return err
+	}
+	if exitCode != 0 {
+		return commandExitError{code: exitCode}
+	}
+
+	clonePath, err := resolveCloneTargetPath(forkGitArgs, cloneStderr.String())
+	if err != nil {
+		return fmt.Errorf("clone succeeded but automatic watch-target registration failed: %w", err)
+	}
+
+	// Add the upstream remote so users can fetch from the parent.
+	upstreamURL := "https://github.com/" + upstreamSlug + ".git"
+	if _, err := a.env.Runner.Run(ctx, clonePath, "git", "remote", "add", "upstream", upstreamURL); err != nil {
+		fmt.Fprintf(a.stderr, "warning: could not add upstream remote: %v\n", err)
+	}
+
+	// Register the watch target with fork metadata.
+	branchOptions := watchBranchOptions{
+		forkMode:    true,
+		forkFlagSet: true,
+		forkOwner:   authOwner,
+	}
+	targets, err := a.state.LoadWatchTargets()
+	if err != nil {
+		return fmt.Errorf("clone succeeded but automatic watch-target registration failed for %s: load watch targets: %w", clonePath, err)
+	}
+	alreadyWatched := findWatchTargetByPath(targets, clonePath).Path != ""
+	if err := a.watchWithOptions(ctx, clonePath, nil, "", unsetMaxParallel, "", watchIssueOptions{}, branchOptions); err != nil {
+		return fmt.Errorf("clone succeeded but automatic watch-target registration failed for %s: %w", clonePath, err)
+	}
+
+	// Set the upstream repo metadata on the watch target.
+	targets, err = a.state.LoadWatchTargets()
+	if err == nil {
+		for i, t := range targets {
+			if t.Path == clonePath || (clonePath != "" && t.Path != "" && t.Path == clonePath) {
+				targets[i].UpstreamRepo = upstreamSlug
+				break
+			}
+		}
+		_ = a.state.SaveWatchTargets(targets)
+	}
+
+	if alreadyWatched {
+		fmt.Fprintf(a.stdout, "watch target already existed for cloned fork: %s\n", clonePath)
+	} else {
+		fmt.Fprintf(a.stdout, "added cloned fork to watch targets: %s (fork of %s)\n", clonePath, upstreamSlug)
+	}
+	return nil
+}
+
+// extractCloneForkFlag removes --fork from the argument list and returns
+// whether it was present along with the remaining arguments.
+func extractCloneForkFlag(args []string) (bool, []string) {
+	forkMode := false
+	var remaining []string
+	for _, arg := range args {
+		if arg == "--fork" {
+			forkMode = true
+			continue
+		}
+		remaining = append(remaining, arg)
+	}
+	return forkMode, remaining
+}
+
+// inferRepoSlugFromURL extracts an "owner/repo" slug from a GitHub URL or
+// SSH address.  Returns "" if the input does not look like a GitHub repo.
+func inferRepoSlugFromURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	trimmed = strings.TrimRight(trimmed, "/")
+	trimmed = strings.TrimSuffix(trimmed, ".git")
+
+	// SSH: git@github.com:owner/repo
+	if idx := strings.Index(trimmed, "github.com:"); idx >= 0 {
+		return trimmed[idx+len("github.com:"):]
+	}
+	// HTTPS: https://github.com/owner/repo
+	if idx := strings.Index(trimmed, "github.com/"); idx >= 0 {
+		return trimmed[idx+len("github.com/"):]
+	}
+	// Already a slug: owner/repo
+	parts := strings.Split(trimmed, "/")
+	if len(parts) == 2 && parts[0] != "" && parts[1] != "" && !strings.Contains(trimmed, ":") && !strings.Contains(trimmed, ".") {
+		return trimmed
+	}
+	return ""
+}
+
+// replaceCloneRepoArg replaces the repository positional argument in a
+// clone args list.
+func replaceCloneRepoArg(args []string, oldRepo string, newRepo string) []string {
+	result := make([]string, len(args))
+	copy(result, args)
+	for i, arg := range result {
+		if arg == oldRepo {
+			result[i] = newRepo
+			return result
+		}
+	}
+	return result
 }
 
 func (a *App) runResumeCommand(ctx context.Context, args []string) error {
@@ -1791,6 +1944,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 					WorktreePath:       wt.Path,
 					ForkMode:           target.ForkMode,
 					ForkOwner:          target.ForkOwner,
+					UpstreamRepo:       target.UpstreamRepo,
 					PushRemote:         target.EffectivePushRemote(),
 					PushRepo:           target.PushRepo,
 					ReusedRemoteBranch: wt.ReusedRemoteBranch,
@@ -2576,7 +2730,103 @@ func (a *App) maintainPullRequestChecks(ctx context.Context, session *state.Sess
 	if requiredChecksState(pr.StatusCheckRollup) == "failing" {
 		return nil
 	}
+	if requiredChecksState(pr.StatusCheckRollup) == "passing" {
+		if err := a.tryCreateUpstreamPR(ctx, session, pr); err != nil {
+			a.logger.Error("upstream PR creation failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "err", err)
+			session.UpstreamPRError = err.Error()
+		}
+	}
 	return a.tryAutoSquashMerge(ctx, session, pr, issueDetails, issueCache)
+}
+
+// tryCreateUpstreamPR creates a pull request against the parent repository
+// when a fork-mode session has all required checks passing.  It is a no-op
+// for non-fork sessions or when the upstream PR already exists.
+func (a *App) tryCreateUpstreamPR(ctx context.Context, session *state.Session, pr ghcli.PullRequest) error {
+	if !session.ForkMode {
+		return nil
+	}
+	upstreamRepo := strings.TrimSpace(session.UpstreamRepo)
+	if upstreamRepo == "" {
+		return nil
+	}
+	if session.UpstreamPRNumber > 0 {
+		return nil
+	}
+
+	headSelector := pullRequestHeadSelector(*session)
+	if headSelector == "" {
+		return fmt.Errorf("cannot determine head selector for upstream PR")
+	}
+
+	// Prevent duplicate: check if an upstream PR already exists for this head.
+	existingPR, err := a.prManager.FindPullRequestForBranch(ctx, upstreamRepo, headSelector)
+	if err != nil {
+		return fmt.Errorf("check existing upstream PR: %w", err)
+	}
+	if existingPR != nil {
+		session.UpstreamPRNumber = existingPR.Number
+		session.UpstreamPRURL = strings.TrimSpace(existingPR.URL)
+		session.UpstreamPRError = ""
+		a.logger.Info("upstream PR already exists", "repo", upstreamRepo, "pr", existingPR.Number, "url", existingPR.URL)
+		return nil
+	}
+
+	// Create the upstream PR using the fork branch as the head.
+	baseBranch := pullRequestBaseBranch(*session)
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+	title := strings.TrimSpace(pr.Title)
+	if title == "" {
+		title = fmt.Sprintf("PR #%d from fork", pr.Number)
+	}
+	body := strings.TrimSpace(pr.Body)
+	if body == "" {
+		body = fmt.Sprintf("Automated upstream PR from fork PR %s#%d.", session.Repo, pr.Number)
+	}
+
+	output, err := a.env.Runner.Run(ctx, "", "gh", "pr", "create",
+		"--repo", upstreamRepo,
+		"--head", headSelector,
+		"--base", baseBranch,
+		"--title", title,
+		"--body", body,
+	)
+	if err != nil {
+		return fmt.Errorf("create upstream PR: %w", err)
+	}
+
+	// Parse the PR URL from the output to extract the number.
+	prURL := strings.TrimSpace(output)
+	session.UpstreamPRURL = prURL
+	session.UpstreamPRError = ""
+
+	// Try to find the created PR to get the number.
+	upstreamPR, findErr := a.prManager.FindPullRequestForBranch(ctx, upstreamRepo, headSelector)
+	if findErr == nil && upstreamPR != nil {
+		session.UpstreamPRNumber = upstreamPR.Number
+		session.UpstreamPRURL = strings.TrimSpace(upstreamPR.URL)
+	}
+
+	a.logger.Info("upstream PR created", "repo", upstreamRepo, "issue", session.IssueNumber, "url", prURL)
+
+	commentBody := ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Upstream PR Created",
+		Emoji:      "🚀",
+		Percent:    95,
+		ETAMinutes: 3,
+		Items: []string{
+			fmt.Sprintf("Fork PR #%d passed all required checks.", pr.Number),
+			fmt.Sprintf("Opened upstream PR against `%s`: %s", upstreamRepo, prURL),
+			"Waiting for upstream review and merge.",
+		},
+		Tagline: "From fork to upstream — the contribution circle is complete.",
+	})
+	if commentErr := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, commentBody, "progress", "upstream_pr"); commentErr != nil {
+		a.logger.Error("upstream PR comment failed", "repo", session.Repo, "issue", session.IssueNumber, "err", commentErr)
+	}
+	return nil
 }
 
 func (a *App) tryAutoSquashMerge(ctx context.Context, session *state.Session, pr ghcli.PullRequest, issueDetails *ghcli.IssueDetails, issueCache scanIssueDetailsCache) error {
@@ -3327,6 +3577,7 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 		WorktreePath:       wt.Path,
 		ForkMode:           target.ForkMode,
 		ForkOwner:          target.ForkOwner,
+		UpstreamRepo:       target.UpstreamRepo,
 		PushRemote:         target.EffectivePushRemote(),
 		PushRepo:           target.PushRepo,
 		ReusedRemoteBranch: wt.ReusedRemoteBranch,
@@ -4548,6 +4799,7 @@ func blockedIssueSessionForDispatchFailure(target state.WatchTarget, issue ghcli
 		WorktreePath: worktree.IssueWorktreePath(target.Path, issue.Number),
 		ForkMode:     target.ForkMode,
 		ForkOwner:    target.ForkOwner,
+		UpstreamRepo: target.UpstreamRepo,
 		PushRemote:   target.EffectivePushRemote(),
 		PushRepo:     target.PushRepo,
 		Status:       state.SessionStatusFailed,
@@ -4833,6 +5085,7 @@ func (a *App) dispatchIssueSession(ctx context.Context, target state.WatchTarget
 	session.WorktreePath = wt.Path
 	session.ForkMode = target.ForkMode
 	session.ForkOwner = target.ForkOwner
+	session.UpstreamRepo = target.UpstreamRepo
 	session.PushRemote = target.EffectivePushRemote()
 	session.PushRepo = target.PushRepo
 	session.ReusedRemoteBranch = wt.ReusedRemoteBranch

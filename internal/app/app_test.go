@@ -623,6 +623,358 @@ func TestRunCloneCommandHelp(t *testing.T) {
 	}
 }
 
+func TestRunCloneForkCreatesForkedWatchTarget(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Chdir(home)
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = &stderr
+	app.proxyExec = func(_ context.Context, _ io.Reader, _ io.Writer, errOut io.Writer, name string, args ...string) (int, error) {
+		// Verify git clone is called with the fork URL, not the upstream.
+		if name == "git" && len(args) > 1 && args[0] == "clone" {
+			for _, arg := range args[1:] {
+				if strings.Contains(arg, "forker/repo") {
+					fmt.Fprint(errOut, "Cloning into 'repo'...\n")
+					return 0, nil
+				}
+			}
+			t.Fatalf("expected fork URL in git clone args: %v", args)
+		}
+		return 0, nil
+	}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			testutil.Key("gh", "api", "user"):                                                              `{"login":"forker"}`,
+			testutil.Key("gh", "api", "repos/forker/repo"):                                                 `{"full_name":"forker/repo","parent":{"full_name":"upstream-owner/repo"}}`,
+			testutil.Key("git", "remote", "add", "upstream", "https://github.com/upstream-owner/repo.git"): "",
+			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                                      "true\n",
+			testutil.Key("git", "remote", "get-url", "origin"):                                             "https://github.com/forker/repo.git\n",
+			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"):                     "origin/main\n",
+		},
+	}
+
+	exitCode := app.Run(context.Background(), []string{"clone", "--fork", "https://github.com/upstream-owner/repo.git"})
+	if exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	if !strings.Contains(stdout.String(), "fork ready: forker/repo") {
+		t.Fatalf("expected fork creation output, got %q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "fork of upstream-owner/repo") {
+		t.Fatalf("expected upstream reference in output, got %q", stdout.String())
+	}
+
+	targets, err := app.state.LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 watch target, got %d: %#v", len(targets), targets)
+	}
+	target := targets[0]
+	if !target.ForkMode {
+		t.Fatal("expected ForkMode=true")
+	}
+	if target.ForkOwner != "forker" {
+		t.Fatalf("expected ForkOwner=forker, got %q", target.ForkOwner)
+	}
+	if target.UpstreamRepo != "upstream-owner/repo" {
+		t.Fatalf("expected UpstreamRepo=upstream-owner/repo, got %q", target.UpstreamRepo)
+	}
+}
+
+func TestRunCloneForkWithExplicitDestinationPath(t *testing.T) {
+	home := t.TempDir()
+	destPath := filepath.Join(home, "my-fork-dir")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Chdir(home)
+	if err := os.MkdirAll(destPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.proxyExec = func(_ context.Context, _ io.Reader, _ io.Writer, errOut io.Writer, _ string, _ ...string) (int, error) {
+		fmt.Fprint(errOut, "Cloning into 'my-fork-dir'...\n")
+		return 0, nil
+	}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			testutil.Key("gh", "api", "user"):                                                     `{"login":"forker"}`,
+			testutil.Key("gh", "api", "repos/forker/repo"):                                        `{"full_name":"forker/repo","parent":{"full_name":"owner/repo"}}`,
+			testutil.Key("git", "remote", "add", "upstream", "https://github.com/owner/repo.git"): "",
+			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                             "true\n",
+			testutil.Key("git", "remote", "get-url", "origin"):                                    "https://github.com/forker/repo.git\n",
+			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"):            "origin/main\n",
+		},
+	}
+
+	exitCode := app.Run(context.Background(), []string{"clone", "--fork", "git@github.com:owner/repo.git", destPath})
+	if exitCode != 0 {
+		t.Fatalf("expected success, got %d", exitCode)
+	}
+
+	targets, err := app.state.LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].Path != destPath {
+		t.Fatalf("expected explicit destination to be watched with fork metadata, got %#v", targets)
+	}
+}
+
+func TestRunCloneForkFailsWhenForkCreationFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			testutil.Key("gh", "api", "user"): `{"login":"forker"}`,
+		},
+		Errors: map[string]error{
+			testutil.Key("gh", "api", "repos/forker/repo"):                          errors.New("HTTP 404: Not Found"),
+			testutil.Key("gh", "api", "--method", "POST", "repos/owner/repo/forks"): errors.New("HTTP 403: Forbidden"),
+		},
+		ErrorOutputs: map[string]string{
+			testutil.Key("gh", "api", "repos/forker/repo"):                          "Not Found",
+			testutil.Key("gh", "api", "--method", "POST", "repos/owner/repo/forks"): "Forbidden",
+		},
+	}
+
+	exitCode := app.Run(context.Background(), []string{"clone", "--fork", "git@github.com:owner/repo.git"})
+	if exitCode == 0 {
+		t.Fatal("expected failure when fork creation fails")
+	}
+}
+
+func TestRunCloneForkDoesNotCloneWhenAuthFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Errors: map[string]error{
+			testutil.Key("gh", "api", "user"): errors.New("not authenticated"),
+		},
+		ErrorOutputs: map[string]string{
+			testutil.Key("gh", "api", "user"): "auth required",
+		},
+	}
+
+	exitCode := app.Run(context.Background(), []string{"clone", "--fork", "git@github.com:owner/repo.git"})
+	if exitCode == 0 {
+		t.Fatal("expected failure when auth fails")
+	}
+}
+
+func TestExtractCloneForkFlag(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		wantFork bool
+		wantArgs []string
+	}{
+		{
+			name:     "no fork flag",
+			args:     []string{"git@github.com:owner/repo.git"},
+			wantFork: false,
+			wantArgs: []string{"git@github.com:owner/repo.git"},
+		},
+		{
+			name:     "fork flag at start",
+			args:     []string{"--fork", "git@github.com:owner/repo.git"},
+			wantFork: true,
+			wantArgs: []string{"git@github.com:owner/repo.git"},
+		},
+		{
+			name:     "fork flag at end",
+			args:     []string{"git@github.com:owner/repo.git", "--fork"},
+			wantFork: true,
+			wantArgs: []string{"git@github.com:owner/repo.git"},
+		},
+		{
+			name:     "fork flag with destination",
+			args:     []string{"--fork", "git@github.com:owner/repo.git", "/tmp/dest"},
+			wantFork: true,
+			wantArgs: []string{"git@github.com:owner/repo.git", "/tmp/dest"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotFork, gotArgs := extractCloneForkFlag(tc.args)
+			if gotFork != tc.wantFork {
+				t.Errorf("fork = %v, want %v", gotFork, tc.wantFork)
+			}
+			if len(gotArgs) != len(tc.wantArgs) {
+				t.Fatalf("args = %v, want %v", gotArgs, tc.wantArgs)
+			}
+			for i := range gotArgs {
+				if gotArgs[i] != tc.wantArgs[i] {
+					t.Errorf("args[%d] = %q, want %q", i, gotArgs[i], tc.wantArgs[i])
+				}
+			}
+		})
+	}
+}
+
+func TestInferRepoSlugFromURL(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"https://github.com/owner/repo.git", "owner/repo"},
+		{"https://github.com/owner/repo", "owner/repo"},
+		{"git@github.com:owner/repo.git", "owner/repo"},
+		{"git@github.com:owner/repo", "owner/repo"},
+		{"owner/repo", "owner/repo"},
+		{"not-a-repo-url", ""},
+		{"", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			got := inferRepoSlugFromURL(tc.input)
+			if got != tc.want {
+				t.Errorf("inferRepoSlugFromURL(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestReplaceCloneRepoArg(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		oldRepo string
+		newRepo string
+		want    []string
+	}{
+		{
+			name:    "simple replacement",
+			args:    []string{"git@github.com:owner/repo.git"},
+			oldRepo: "git@github.com:owner/repo.git",
+			newRepo: "https://github.com/forker/repo.git",
+			want:    []string{"https://github.com/forker/repo.git"},
+		},
+		{
+			name:    "with flags and destination",
+			args:    []string{"--depth", "1", "git@github.com:owner/repo.git", "/tmp/dest"},
+			oldRepo: "git@github.com:owner/repo.git",
+			newRepo: "https://github.com/forker/repo.git",
+			want:    []string{"--depth", "1", "https://github.com/forker/repo.git", "/tmp/dest"},
+		},
+		{
+			name:    "no match returns unchanged",
+			args:    []string{"other-repo"},
+			oldRepo: "not-present",
+			newRepo: "new-url",
+			want:    []string{"other-repo"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := replaceCloneRepoArg(tc.args, tc.oldRepo, tc.newRepo)
+			if len(got) != len(tc.want) {
+				t.Fatalf("len = %d, want %d: %v", len(got), len(tc.want), got)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("args[%d] = %q, want %q", i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestRunCloneForkHelpOutput(t *testing.T) {
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+
+	exitCode := app.Run(context.Background(), []string{"clone", "--help"})
+	if exitCode != 0 {
+		t.Fatalf("expected success, got %d", exitCode)
+	}
+	if !strings.Contains(stdout.String(), "--fork") {
+		t.Fatalf("expected help to mention --fork, got %q", stdout.String())
+	}
+}
+
+func TestNonForkCloneUnchangedByForkFeature(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "hello-world")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Chdir(home)
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	var gotName string
+	var gotArgs []string
+	app.proxyExec = func(_ context.Context, _ io.Reader, _ io.Writer, errOut io.Writer, name string, args ...string) (int, error) {
+		gotName = name
+		gotArgs = append([]string(nil), args...)
+		fmt.Fprint(errOut, "Cloning into 'hello-world'...\n")
+		return 0, nil
+	}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                  "true\n",
+			testutil.Key("git", "remote", "get-url", "origin"):                         "git@github.com:owner/hello-world.git\n",
+			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): "origin/main\n",
+		},
+	}
+
+	exitCode := app.Run(context.Background(), []string{"clone", "git@github.com:owner/hello-world.git"})
+	if exitCode != 0 {
+		t.Fatalf("expected success, got %d", exitCode)
+	}
+	if gotName != "git" {
+		t.Fatalf("clone tool = %q, want %q", gotName, "git")
+	}
+	if got := strings.Join(gotArgs, " "); got != "clone git@github.com:owner/hello-world.git" {
+		t.Fatalf("clone args = %q, want standard non-fork clone", got)
+	}
+
+	targets, err := app.state.LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].Path != repoPath {
+		t.Fatalf("expected watch target at cloned path, got %#v", targets)
+	}
+	if targets[0].ForkMode {
+		t.Fatal("non-fork clone should not set ForkMode")
+	}
+	if targets[0].UpstreamRepo != "" {
+		t.Fatal("non-fork clone should not set UpstreamRepo")
+	}
+}
+
 func TestDesiredSessionLabels(t *testing.T) {
 	tests := []struct {
 		name             string
