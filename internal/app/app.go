@@ -1,15 +1,19 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"sort"
@@ -86,6 +90,7 @@ var automergeLabels = []string{"vigilante:automerge", "automerge"}
 
 var supportedCompletionShells = []string{"bash", "fish", "zsh"}
 var errHelpHandled = errors.New("help handled")
+var cloneIntoPattern = regexp.MustCompile(`Cloning into (?:bare repository )?'([^']+)'`)
 
 type App struct {
 	stdin  io.Reader
@@ -601,6 +606,8 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "commit":
 		return a.runCommitCommand(ctx, args[1:])
+	case "clone":
+		return a.runCloneCommand(ctx, args[1:])
 	case "setup":
 		fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 		configureFlagSet(fs, func(w io.Writer) {
@@ -799,6 +806,49 @@ func (a *App) runCommitCommand(ctx context.Context, args []string) error {
 	}
 	if exitCode != 0 {
 		return commandExitError{code: exitCode}
+	}
+	return nil
+}
+
+func (a *App) runCloneCommand(ctx context.Context, args []string) error {
+	if len(args) == 1 && isHelpToken(args[0]) {
+		fmt.Fprintln(a.stdout, "usage: vigilante clone [git-clone-flags...] [--] <repo> [<path>]")
+		fmt.Fprintln(a.stdout)
+		fmt.Fprintln(a.stdout, "Clone a repository using git, then automatically register the")
+		fmt.Fprintln(a.stdout, "resulting local path as a Vigilante watch target.")
+		return nil
+	}
+	if err := a.state.EnsureLayout(); err != nil {
+		return err
+	}
+
+	var cloneStderr bytes.Buffer
+	stderr := io.MultiWriter(a.stderr, &cloneStderr)
+	exitCode, err := a.proxyExec(ctx, a.stdin, a.stdout, stderr, "git", append([]string{"clone"}, args...)...)
+	if err != nil {
+		return err
+	}
+	if exitCode != 0 {
+		return commandExitError{code: exitCode}
+	}
+
+	clonePath, err := resolveCloneTargetPath(args, cloneStderr.String())
+	if err != nil {
+		return fmt.Errorf("clone succeeded but automatic watch-target registration failed: %w", err)
+	}
+
+	targets, err := a.state.LoadWatchTargets()
+	if err != nil {
+		return fmt.Errorf("clone succeeded but automatic watch-target registration failed for %s: load watch targets: %w", clonePath, err)
+	}
+	alreadyWatched := findWatchTargetByPath(targets, clonePath).Path != ""
+	if err := a.watchWithOptions(ctx, clonePath, nil, "", unsetMaxParallel, "", watchIssueOptions{}, watchBranchOptions{}); err != nil {
+		return fmt.Errorf("clone succeeded but automatic watch-target registration failed for %s: %w", clonePath, err)
+	}
+	if alreadyWatched {
+		fmt.Fprintf(a.stdout, "watch target already existed for cloned repository: %s\n", clonePath)
+	} else {
+		fmt.Fprintf(a.stdout, "added cloned repository to watch targets: %s\n", clonePath)
 	}
 	return nil
 }
@@ -5738,6 +5788,7 @@ func (a *App) issueCreate(ctx context.Context, repoSlug string, providerOverride
 func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage:")
 	fmt.Fprintln(w, "  vigilante setup [--provider value]")
+	fmt.Fprintln(w, "  vigilante clone [git-clone-flags...] [--] <repo> [<path>]")
 	fmt.Fprintln(w, "  vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] [--fork [--fork-owner value]] <path>")
 	fmt.Fprintln(w, "  vigilante unwatch <path>")
 	fmt.Fprintln(w, "  vigilante list [--blocked | --running]")
@@ -6006,6 +6057,118 @@ func ExpandPath(raw string) (string, error) {
 		}
 	}
 	return filepath.Abs(raw)
+}
+
+func resolveCloneTargetPath(args []string, stderr string) (string, error) {
+	cloneArgs, err := parseCloneArgs(args)
+	if err != nil {
+		return "", err
+	}
+	if cloneArgs.destination != "" {
+		return ExpandPath(cloneArgs.destination)
+	}
+	if match := cloneIntoPattern.FindStringSubmatch(stderr); len(match) == 2 {
+		return ExpandPath(match[1])
+	}
+
+	inferred := inferCloneDestination(cloneArgs.repo)
+	if inferred == "" {
+		return "", errors.New("could not determine cloned repository path")
+	}
+	return ExpandPath(inferred)
+}
+
+type cloneArgs struct {
+	repo        string
+	destination string
+}
+
+func parseCloneArgs(args []string) (cloneArgs, error) {
+	var positionals []string
+	endOfOptions := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if !endOfOptions && arg == "--" {
+			endOfOptions = true
+			continue
+		}
+		if !endOfOptions && strings.HasPrefix(arg, "-") && arg != "-" {
+			if cloneOptionConsumesNext(arg) {
+				i++
+				if i >= len(args) {
+					return cloneArgs{}, fmt.Errorf("clone succeeded but automatic watch-target registration could not resolve the destination path from %q", arg)
+				}
+				continue
+			}
+			continue
+		}
+		positionals = append(positionals, arg)
+	}
+
+	if len(positionals) == 0 {
+		return cloneArgs{}, errors.New("clone succeeded but automatic watch-target registration could not resolve the repository argument")
+	}
+	result := cloneArgs{repo: positionals[0]}
+	if len(positionals) > 1 {
+		result.destination = positionals[1]
+	}
+	return result, nil
+}
+
+func cloneOptionConsumesNext(arg string) bool {
+	if strings.Contains(arg, "=") {
+		return false
+	}
+	switch arg {
+	case "-j", "--jobs",
+		"--template",
+		"--reference",
+		"--reference-if-able",
+		"-o", "--origin",
+		"-b", "--branch",
+		"-u", "--upload-pack",
+		"--depth",
+		"--shallow-since",
+		"--shallow-exclude",
+		"--separate-git-dir",
+		"-c", "--config",
+		"--server-option",
+		"--filter",
+		"--bundle-uri":
+		return true
+	}
+	for _, prefix := range []string{"-j", "-o", "-b", "-u", "-c"} {
+		if strings.HasPrefix(arg, prefix) && len(arg) > len(prefix) {
+			return false
+		}
+	}
+	return false
+}
+
+func inferCloneDestination(rawRepo string) string {
+	trimmed := strings.TrimSpace(rawRepo)
+	trimmed = strings.TrimRight(trimmed, "/")
+	if trimmed == "" {
+		return ""
+	}
+
+	if parsed, err := url.Parse(trimmed); err == nil && parsed.Scheme != "" {
+		trimmed = parsed.Path
+	}
+	trimmed = strings.TrimRight(trimmed, "/")
+	if trimmed == "" {
+		return ""
+	}
+	if idx := strings.LastIndex(trimmed, ":"); idx > strings.LastIndex(trimmed, "/") {
+		trimmed = trimmed[idx+1:]
+	}
+
+	base := path.Base(trimmed)
+	base = strings.TrimSuffix(base, ".git")
+	if base == "." || base == "/" || base == "" {
+		return ""
+	}
+	return base
 }
 
 func findWatchTargetByRepo(targets []state.WatchTarget, repo string) (state.WatchTarget, bool) {

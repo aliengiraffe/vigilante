@@ -252,6 +252,7 @@ func TestRunSupportsTopLevelHelpFlags(t *testing.T) {
 			}
 			for _, want := range []string{
 				"usage:",
+				"vigilante clone",
 				"vigilante watch",
 				"vigilante status",
 				"vigilante service restart",
@@ -421,6 +422,204 @@ func TestRunCommitCommandHelp(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "vigilante commit") {
 		t.Fatalf("expected help output to mention vigilante commit, got %q", stdout.String())
+	}
+}
+
+func TestRunCloneCommandProxiesToGitCloneAndRegistersWatchTarget(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "hello-world")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Chdir(home)
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = &stderr
+	var gotName string
+	var gotArgs []string
+	app.proxyExec = func(_ context.Context, _ io.Reader, _ io.Writer, errOut io.Writer, name string, args ...string) (int, error) {
+		gotName = name
+		gotArgs = append([]string(nil), args...)
+		fmt.Fprint(errOut, "Cloning into 'hello-world'...\n")
+		return 0, nil
+	}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                  "true\n",
+			testutil.Key("git", "remote", "get-url", "origin"):                         "git@github.com:owner/hello-world.git\n",
+			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): "origin/main\n",
+		},
+	}
+
+	exitCode := app.Run(context.Background(), []string{"clone", "git@github.com:owner/hello-world.git"})
+	if exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d", exitCode)
+	}
+	if gotName != "git" {
+		t.Fatalf("clone tool = %q, want %q", gotName, "git")
+	}
+	if got, want := strings.Join(gotArgs, " "), "clone git@github.com:owner/hello-world.git"; got != want {
+		t.Fatalf("clone args = %q, want %q", got, want)
+	}
+	if got := stderr.String(); !strings.Contains(got, "Cloning into 'hello-world'...") {
+		t.Fatalf("expected git stderr to be preserved, got %q", got)
+	}
+	if got := stdout.String(); !strings.Contains(got, "added cloned repository to watch targets: "+repoPath) {
+		t.Fatalf("expected automatic watch registration output, got %q", got)
+	}
+
+	targets, err := app.state.LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].Path != repoPath {
+		t.Fatalf("expected cloned repository to be watched, got %#v", targets)
+	}
+}
+
+func TestRunCloneCommandUsesExplicitDestinationPath(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "custom-destination")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Chdir(home)
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.proxyExec = func(_ context.Context, _ io.Reader, _ io.Writer, errOut io.Writer, _ string, _ ...string) (int, error) {
+		fmt.Fprint(errOut, "Cloning into 'custom-destination'...\n")
+		return 0, nil
+	}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                  "true\n",
+			testutil.Key("git", "remote", "get-url", "origin"):                         "git@github.com:owner/repo.git\n",
+			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): "origin/main\n",
+		},
+	}
+
+	if exitCode := app.Run(context.Background(), []string{"clone", "git@github.com:owner/repo.git", repoPath}); exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d", exitCode)
+	}
+
+	targets, err := app.state.LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].Path != repoPath {
+		t.Fatalf("expected explicit destination to be watched, got %#v", targets)
+	}
+}
+
+func TestRunCloneCommandInfersDestinationWhenGitCloneIsQuiet(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "hello-world")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Chdir(home)
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.proxyExec = func(_ context.Context, _ io.Reader, _ io.Writer, _ io.Writer, _ string, _ ...string) (int, error) {
+		return 0, nil
+	}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                  "true\n",
+			testutil.Key("git", "remote", "get-url", "origin"):                         "git@github.com:owner/hello-world.git\n",
+			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): "origin/main\n",
+		},
+	}
+
+	if exitCode := app.Run(context.Background(), []string{"clone", "--quiet", "git@github.com:owner/hello-world.git"}); exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d", exitCode)
+	}
+
+	targets, err := app.state.LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].Path != repoPath {
+		t.Fatalf("expected inferred destination to be watched, got %#v", targets)
+	}
+}
+
+func TestRunCloneCommandDoesNotRegisterWatchTargetWhenCloneFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.proxyExec = func(context.Context, io.Reader, io.Writer, io.Writer, string, ...string) (int, error) {
+		return 1, nil
+	}
+
+	if got := app.Run(context.Background(), []string{"clone", "git@github.com:owner/repo.git"}); got != 1 {
+		t.Fatalf("Run() = %d, want %d", got, 1)
+	}
+
+	targets, err := app.state.LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 0 {
+		t.Fatalf("expected no persisted targets after clone failure: %#v", targets)
+	}
+}
+
+func TestRunCloneCommandReturnsErrorWhenWatchRegistrationFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	var stderr bytes.Buffer
+	app.stderr = &stderr
+	app.proxyExec = func(_ context.Context, _ io.Reader, _ io.Writer, errOut io.Writer, _ string, _ ...string) (int, error) {
+		fmt.Fprint(errOut, "Cloning into 'hello-world'...\n")
+		return 0, nil
+	}
+
+	exitCode := app.Run(context.Background(), []string{"clone", "git@github.com:owner/hello-world.git"})
+	if exitCode == 0 {
+		t.Fatal("expected clone registration failure")
+	}
+	if got := stderr.String(); !strings.Contains(got, "Cloning into 'hello-world'...") {
+		t.Fatalf("expected git stderr to be preserved, got %q", got)
+	}
+	if got := stderr.String(); !strings.Contains(got, "automatic watch-target registration failed") {
+		t.Fatalf("expected registration failure to be reported, got %q", got)
+	}
+}
+
+func TestRunCloneCommandHelp(t *testing.T) {
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+
+	exitCode := app.Run(context.Background(), []string{"clone", "--help"})
+	if exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d", exitCode)
+	}
+	if !strings.Contains(stdout.String(), "vigilante clone") {
+		t.Fatalf("expected help output to mention vigilante clone, got %q", stdout.String())
 	}
 }
 
