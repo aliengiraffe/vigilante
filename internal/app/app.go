@@ -36,6 +36,7 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/provider"
 	"github.com/nicobistolfi/vigilante/internal/repo"
 	issuerunner "github.com/nicobistolfi/vigilante/internal/runner"
+	"github.com/nicobistolfi/vigilante/internal/sandbox"
 	"github.com/nicobistolfi/vigilante/internal/service"
 	"github.com/nicobistolfi/vigilante/internal/skill"
 	"github.com/nicobistolfi/vigilante/internal/state"
@@ -118,6 +119,7 @@ type App struct {
 	githubRateLimitMu         sync.Mutex
 	githubRateLimitState      githubRateLimitState
 	proxyExec                 func(context.Context, io.Reader, io.Writer, io.Writer, string, ...string) (int, error)
+	sandboxManager            *sandbox.Manager
 }
 
 type githubRateLimitState struct {
@@ -1650,6 +1652,10 @@ func (a *App) DaemonRun(ctx context.Context, interval time.Duration, once bool) 
 		return errors.New("interval must be positive")
 	}
 	startedAt := time.Now().UTC()
+
+	// Initialize sandbox manager if any watch target uses sandbox mode.
+	a.initSandboxManagerIfNeeded()
+
 	a.logger.Info("daemon run start", "once", once, "interval", interval)
 	telemetry.CaptureWorkflowEvent("daemon_execution_started", map[string]any{
 		"feature_area":     "daemon",
@@ -1658,6 +1664,9 @@ func (a *App) DaemonRun(ctx context.Context, interval time.Duration, once bool) 
 		"interval_seconds": int(interval / time.Second),
 	})
 	defer func() {
+		if a.sandboxManager != nil {
+			a.sandboxManager.TeardownAll(context.Background())
+		}
 		result := "success"
 		if runErr != nil {
 			result = "failure"
@@ -2391,7 +2400,72 @@ func (a *App) launchIssueSession(ctx context.Context, target state.WatchTarget, 
 		defer a.sessionWG.Done()
 		defer a.clearSessionCancel(key)
 
+		// Provision sandbox container when sandbox mode is enabled.
+		var sandboxSession *sandbox.Session
+		if target.SandboxMode && a.sandboxManager != nil {
+			limits := sandbox.DefaultResourceLimits()
+			if target.SandboxResourceLimits != nil {
+				if target.SandboxResourceLimits.Memory != "" {
+					limits.Memory = target.SandboxResourceLimits.Memory
+				}
+				if target.SandboxResourceLimits.CPUs > 0 {
+					limits.CPUs = target.SandboxResourceLimits.CPUs
+				}
+				if target.SandboxResourceLimits.Disk != "" {
+					limits.Disk = target.SandboxResourceLimits.Disk
+				}
+			}
+			ttl := target.SandboxTTLSeconds
+			if ttl <= 0 {
+				ttl = 7200
+			}
+			sbx, err := a.sandboxManager.Provision(runCtx, sandbox.ProvisionRequest{
+				Repository:     target.Repo,
+				IssueNumber:    issue.Number,
+				Provider:       session.Provider,
+				TTLSeconds:     ttl,
+				ResourceLimits: limits,
+				WorktreePath:   session.WorktreePath,
+				BaseImage:      target.SandboxImage,
+			})
+			if err != nil {
+				a.logger.Error("sandbox provision failed", "repo", target.Repo, "issue", issue.Number, "err", err)
+				result := session
+				result.Status = state.SessionStatusFailed
+				result.LastError = fmt.Sprintf("sandbox provision: %v", err)
+				result.EndedAt = a.clock().Format(time.RFC3339)
+				result.UpdatedAt = result.EndedAt
+				a.sessionMu.Lock()
+				if sessions, loadErr := a.state.LoadSessions(); loadErr == nil {
+					sessions = upsertSession(sessions, result)
+					_ = a.state.SaveSessions(sessions)
+				}
+				a.sessionMu.Unlock()
+				return
+			}
+			sandboxSession = sbx
+			session.SandboxEnabled = true
+			session.SandboxSessionID = sbx.ID
+			session.SandboxContainerID = sbx.ContainerID
+			session.SandboxProxyPort = sbx.ProxyPort
+			session.SandboxToken = sbx.Token
+			session.SandboxExpiresAt = sbx.ExpiresAt.Format(time.RFC3339)
+		}
+
 		result := issuerunner.RunIssueSession(runCtx, a.env, a.state, a.issueTrackerForTarget(target), target, issue, session)
+
+		// Tear down sandbox after session completes.
+		if sandboxSession != nil {
+			reason := "completed"
+			if result.Status == state.SessionStatusFailed {
+				reason = "failed"
+			} else if result.Status == state.SessionStatusBlocked {
+				reason = "blocked"
+			}
+			if err := a.sandboxManager.Teardown(ctx, sandboxSession.ID, reason); err != nil {
+				a.logger.Error("sandbox teardown failed", "session_id", sandboxSession.ID, "err", err)
+			}
+		}
 
 		a.sessionMu.Lock()
 		defer a.sessionMu.Unlock()
@@ -2564,6 +2638,27 @@ func (a *App) runPullRequestMaintenance(ctx context.Context, session *state.Sess
 
 func (a *App) waitForSessions() {
 	a.sessionWG.Wait()
+}
+
+func (a *App) initSandboxManagerIfNeeded() {
+	if a.sandboxManager != nil {
+		return
+	}
+	targets, err := a.state.LoadWatchTargets()
+	if err != nil {
+		return
+	}
+	for _, t := range targets {
+		if t.SandboxMode {
+			docker := sandbox.NewEngineClient("")
+			a.sandboxManager = sandbox.NewManager(docker, a.logger)
+			// Reconcile any orphaned containers from a previous run.
+			if err := a.sandboxManager.ReconcileStale(context.Background()); err != nil {
+				a.logger.Error("sandbox reconcile stale failed", "err", err)
+			}
+			return
+		}
+	}
 }
 
 func (a *App) maintainOpenPullRequest(ctx context.Context, session *state.Session, pr ghcli.PullRequest, issueCache scanIssueDetailsCache) (*ghcli.PullRequest, *ghcli.IssueDetails, error) {

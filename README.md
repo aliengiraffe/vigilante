@@ -137,6 +137,41 @@ Operational notes:
 
 For command details and full flags, see [DOCS.md](DOCS.md).
 
+### Sandbox Mode
+
+Sandbox mode runs coding agents inside isolated Docker containers instead of directly on the host. The agent gets the same codebase access and tool availability, but cannot reach credentials, repositories, or services outside the assigned scope.
+
+Enable sandbox mode per watch target in `watchlist.json`:
+
+```json
+{
+  "path": "/home/user/repos/my-app",
+  "repo": "owner/my-app",
+  "sandbox": true,
+  "sandbox_ttl_seconds": 7200,
+  "sandbox_resource_limits": {
+    "memory": "8g",
+    "cpus": 4,
+    "disk": "20g"
+  }
+}
+```
+
+Requirements:
+
+- Docker Engine or a compatible container runtime accessible via `/var/run/docker.sock`
+- A sandbox base image (`vigilante/sandbox:latest` by default, or set `sandbox_image` in the watch target)
+
+What sandbox mode does:
+
+- Provisions a Docker container per issue session with the repository mounted as a volume.
+- Generates scoped, short-lived HMAC-signed credentials (sandbox API token + ephemeral SSH key) that are injected into the container.
+- Runs a reverse proxy on the host that intercepts all `gh` CLI calls from the container and enforces repository-scoped access control — the agent can only interact with the assigned repository.
+- Supports Docker-in-Docker so the agent can spin up databases, caches, and other services inside the sandbox.
+- Tears down the container, revokes credentials, and cleans up volumes when the session completes, times out, or fails.
+
+The full architecture, credential lifecycle, reverse proxy design, and security model are documented in [SANDBOX.md](SANDBOX.md).
+
 ## Architecture At A Glance
 
 Vigilante keeps orchestration backend-neutral through a small set of interfaces:

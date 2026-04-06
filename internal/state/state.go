@@ -40,6 +40,17 @@ type WatchTarget struct {
 	GitBackend            string              `json:"git_backend,omitempty"`
 	PRBackend             string              `json:"pr_backend,omitempty"`
 	ProjectRef            string              `json:"project_ref,omitempty"`
+	SandboxMode           bool                `json:"sandbox,omitempty"`
+	SandboxImage          string              `json:"sandbox_image,omitempty"`
+	SandboxTTLSeconds     int                 `json:"sandbox_ttl_seconds,omitempty"`
+	SandboxResourceLimits *SandboxLimits      `json:"sandbox_resource_limits,omitempty"`
+}
+
+// SandboxLimits constrains sandbox container resources in a watch target.
+type SandboxLimits struct {
+	Memory string `json:"memory,omitempty"`
+	CPUs   int    `json:"cpus,omitempty"`
+	Disk   string `json:"disk,omitempty"`
 }
 
 type BranchMode string
@@ -236,6 +247,13 @@ type Session struct {
 	MonitoringStoppedAt            string              `json:"monitoring_stopped_at,omitempty"`
 	CleanupCompletedAt             string              `json:"cleanup_completed_at,omitempty"`
 	CleanupError                   string              `json:"cleanup_error,omitempty"`
+	SandboxEnabled                 bool                `json:"sandbox_enabled,omitempty"`
+	SandboxSessionID               string              `json:"sandbox_session_id,omitempty"`
+	SandboxContainerID             string              `json:"sandbox_container_id,omitempty"`
+	SandboxProxyPort               int                 `json:"sandbox_proxy_port,omitempty"`
+	SandboxToken                   string              `json:"sandbox_token,omitempty"`
+	SandboxDeployKeyID             int64               `json:"sandbox_deploy_key_id,omitempty"`
+	SandboxExpiresAt               string              `json:"sandbox_expires_at,omitempty"`
 	ProcessID                      int                 `json:"process_id,omitempty"`
 	StartedAt                      string              `json:"started_at,omitempty"`
 	LastHeartbeatAt                string              `json:"last_heartbeat_at,omitempty"`
