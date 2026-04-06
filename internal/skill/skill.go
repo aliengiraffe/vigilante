@@ -243,12 +243,19 @@ func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue 
 		if owner := strings.TrimSpace(session.ForkOwner); owner != "" {
 			headSelector = owner + ":" + session.Branch
 		}
+		upstreamTarget := target.Repo
+		if upstream := strings.TrimSpace(target.UpstreamRepo); upstream != "" {
+			upstreamTarget = upstream
+		}
 		lines = append(lines,
-			fmt.Sprintf("Fork mode is enabled for this run. Upstream repository context remains `%s`.", target.Repo),
+			fmt.Sprintf("Fork mode is enabled for this run. Upstream repository context remains `%s`.", upstreamTarget),
 			fmt.Sprintf("Push the branch to remote `%s` (repo `%s`) rather than `origin`.", session.PushRemote, fallbackPromptText(session.PushRepo, "fork repo not recorded")),
-			fmt.Sprintf("Open the pull request against `%s` with head `%s` so the PR is cross-repo from the fork.", target.Repo, headSelector),
+			fmt.Sprintf("Open the pull request against `%s` with head `%s` so the PR is cross-repo from the fork.", upstreamTarget, headSelector),
 			"Include a concise implementation summary and a short `Benefits` section in the PR body in addition to the required closing line.",
 		)
+	}
+	if session.ForkMode {
+		lines = append(lines, contributingGuidePromptSection(session))
 	}
 	if normalizedRepoShape(target) == string(repo.ShapeMonorepo) {
 		lines = append(lines,
@@ -892,6 +899,15 @@ func copyFile(src string, dst string, mode os.FileMode) error {
 		return err
 	}
 	return out.Close()
+}
+
+func contributingGuidePromptSection(session state.Session) string {
+	guide := strings.TrimSpace(session.ContributingGuide)
+	guidePath := strings.TrimSpace(session.ContributingGuidePath)
+	if guide == "" {
+		return "No contributor guide (CONTRIBUTING.md or similar) was found in this repository. Follow general open-source contribution best practices."
+	}
+	return fmt.Sprintf("Contributor guide discovered at `%s`. Follow these contribution guidelines on a best-effort basis while keeping Vigilante's operational safety rules authoritative:\n\n%s", guidePath, guide)
 }
 
 func pathJoin(parts ...string) string {

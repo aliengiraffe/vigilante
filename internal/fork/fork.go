@@ -76,6 +76,18 @@ func ConfigureWorktree(ctx context.Context, runner environment.Runner, session s
 	return nil
 }
 
+// AuthenticatedOwner returns the login of the currently authenticated GitHub
+// user via the gh CLI.
+func AuthenticatedOwner(ctx context.Context, runner environment.Runner) (string, error) {
+	return authenticatedOwner(ctx, runner)
+}
+
+// EnsureFork creates a GitHub fork of upstreamRepo under forkOwner's account
+// if it does not already exist, and waits for the fork to become available.
+func EnsureFork(ctx context.Context, runner environment.Runner, upstreamRepo string, forkRepo string, authOwner string, forkOwner string) error {
+	return ensureForkRepository(ctx, runner, upstreamRepo, forkRepo, authOwner, forkOwner)
+}
+
 func authenticatedOwner(ctx context.Context, runner environment.Runner) (string, error) {
 	output, err := runner.Run(ctx, "", "gh", "api", "user")
 	if err != nil {
