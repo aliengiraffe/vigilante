@@ -606,6 +606,8 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "commit":
 		return a.runCommitCommand(ctx, args[1:])
+	case "start":
+		return a.runStartCommand(ctx, args[1:])
 	case "clone":
 		return a.runCloneCommand(ctx, args[1:])
 	case "setup":
@@ -1099,6 +1101,199 @@ func (a *App) runCleanupCommand(ctx context.Context, args []string) error {
 	default:
 		return a.CleanupSession(ctx, *repo, *issue, "cli")
 	}
+}
+
+func (a *App) runStartCommand(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("start", flag.ContinueOnError)
+	configureFlagSet(fs, func(w io.Writer) {
+		fmt.Fprintln(w, "usage: vigilante start <repo-folder> --issue <n> [--provider value]")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Run a one-off issue implementation session against a local repository.")
+		fmt.Fprintln(w, "The repository does not need to be watched.")
+		fmt.Fprintln(w)
+		fs.SetOutput(w)
+		fs.PrintDefaults()
+	})
+	issue := fs.Int("issue", 0, "issue number to implement")
+	selectedProvider := fs.String("provider", "", "coding agent provider")
+	if err := parseFlagSet(fs, args, a.stdout); err != nil {
+		if errors.Is(err, errHelpHandled) {
+			return nil
+		}
+		return err
+	}
+	if fs.NArg() != 1 {
+		return errors.New("usage: vigilante start <repo-folder> --issue <n> [--provider value]")
+	}
+	if *issue <= 0 {
+		return errors.New("usage: vigilante start <repo-folder> --issue <n> [--provider value]")
+	}
+	return a.StartOneOffSession(ctx, fs.Arg(0), *issue, strings.TrimSpace(*selectedProvider))
+}
+
+// StartOneOffSession runs a one-off issue implementation session for a local
+// repository that is not necessarily in the watchlist. The repository is not
+// added to the watchlist as a side effect.
+func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumber int, providerID string) error {
+	if err := a.state.EnsureLayout(); err != nil {
+		return err
+	}
+
+	repoPath, err := ExpandPath(rawPath)
+	if err != nil {
+		return err
+	}
+
+	info, err := repo.Discover(ctx, a.env.Runner, repoPath)
+	if err != nil {
+		return err
+	}
+
+	if providerID != "" {
+		resolvedProvider, err := provider.Resolve(providerID)
+		if err != nil {
+			return err
+		}
+		providerID = resolvedProvider.ID()
+	} else {
+		providerID = provider.DefaultID
+	}
+
+	// Build a transient watch target from the discovered repository info.
+	// This target is never persisted to the watchlist.
+	target := state.WatchTarget{
+		Path:           info.Path,
+		Repo:           info.Repo,
+		BranchMode:     state.BranchModeAuto,
+		Branch:         info.Branch,
+		Classification: info.Classification,
+		Provider:       providerID,
+		MaxParallel:    1,
+	}
+
+	if err := a.ensureIssueTrackerReady(ctx, target.EffectiveIssueBackend()); err != nil {
+		return err
+	}
+
+	issueTracker := a.issueTrackerForTarget(target)
+	details, err := issueTracker.GetWorkItemDetails(ctx, target.EffectiveProjectRef(), issueNumber)
+	if err != nil {
+		return fmt.Errorf("issue #%d could not be resolved for %s: %w", issueNumber, info.Repo, err)
+	}
+	if details.State != "open" && details.State != "OPEN" {
+		return fmt.Errorf("issue #%d is not open (state: %s)", issueNumber, details.State)
+	}
+
+	issueLabels := make([]string, 0, len(details.Labels))
+	for _, l := range details.Labels {
+		issueLabels = append(issueLabels, l.Name)
+	}
+	ghIssue := ghcli.Issue{
+		Number: issueNumber,
+		Title:  details.Title,
+		URL:    details.URL,
+		Labels: labelsToBackendLabels(issueLabels),
+	}
+
+	selectedProvider, err := resolveIssueProvider(target, ghIssue)
+	if err != nil {
+		return err
+	}
+
+	target, err = a.prepareExecutionTarget(ctx, target)
+	if err != nil {
+		return err
+	}
+
+	a.sessionMu.Lock()
+	defer a.sessionMu.Unlock()
+
+	sessions, err := a.state.LoadSessions()
+	if err != nil {
+		return err
+	}
+	if existing, ok := findSession(sessions, info.Repo, issueNumber); ok {
+		if existing.Status == state.SessionStatusRunning {
+			return fmt.Errorf("a session is already running for %s#%d", info.Repo, issueNumber)
+		}
+	}
+
+	wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, target, ghIssue.Number, ghIssue.Title)
+	if err != nil {
+		return err
+	}
+
+	now := a.clock().Format(time.RFC3339)
+	session := state.Session{
+		RepoPath:           target.Path,
+		Repo:               target.Repo,
+		Provider:           selectedProvider,
+		IssueBackend:       target.EffectiveIssueBackend(),
+		GitBackend:         target.EffectiveGitBackend(),
+		PRBackend:          target.EffectivePRBackend(),
+		IssueNumber:        ghIssue.Number,
+		IssueTitle:         ghIssue.Title,
+		IssueURL:           ghIssue.URL,
+		BaseBranch:         target.Branch,
+		Branch:             wt.Branch,
+		WorktreePath:       wt.Path,
+		ForkMode:           target.ForkMode,
+		ForkOwner:          target.ForkOwner,
+		UpstreamRepo:       target.UpstreamRepo,
+		PushRemote:         target.EffectivePushRemote(),
+		PushRepo:           target.PushRepo,
+		ReusedRemoteBranch: wt.ReusedRemoteBranch,
+		Status:             state.SessionStatusRunning,
+		ProcessID:          os.Getpid(),
+		StartedAt:          now,
+		LastHeartbeatAt:    now,
+		UpdatedAt:          now,
+	}
+	sessions = upsertSession(sessions, session)
+	if err := a.state.SaveSessions(sessions); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(a.stdout, "starting one-off session for %s issue #%d in %s\n", info.Repo, issueNumber, wt.Path)
+	fmt.Fprintf(a.stdout, "note: this is a one-off session — the repository was not added to watched targets\n")
+
+	// Run the session synchronously so the CLI blocks until completion.
+	result := issuerunner.RunIssueSession(ctx, a.env, a.state, issueTracker, target, ghIssue, session)
+
+	sessions, err = a.state.LoadSessions()
+	if err != nil {
+		a.logger.Error("start session result load failed", "repo", info.Repo, "issue", issueNumber, "err", err)
+		return fmt.Errorf("session completed with status %s but result could not be saved: %w", result.Status, err)
+	}
+	sessions = upsertSession(sessions, result)
+	if err := a.state.SaveSessions(sessions); err != nil {
+		a.logger.Error("start session result save failed", "repo", info.Repo, "issue", issueNumber, "err", err)
+	}
+
+	a.syncSessionIssueLabelsBestEffort(ctx, &result, nil, nil, nil)
+
+	switch result.Status {
+	case state.SessionStatusSuccess:
+		fmt.Fprintf(a.stdout, "session completed successfully for %s issue #%d\n", info.Repo, issueNumber)
+		return nil
+	case state.SessionStatusBlocked:
+		fmt.Fprintf(a.stdout, "session blocked for %s issue #%d: %s\n", info.Repo, issueNumber, result.ResumeHint)
+		return fmt.Errorf("session blocked: %s", result.BlockedReason.Summary)
+	default:
+		fmt.Fprintf(a.stdout, "session ended with status %s for %s issue #%d\n", result.Status, info.Repo, issueNumber)
+		if result.LastError != "" {
+			return fmt.Errorf("session failed: %s", result.LastError)
+		}
+		return fmt.Errorf("session ended with status %s", result.Status)
+	}
+}
+
+func labelsToBackendLabels(names []string) []ghcli.Label {
+	labels := make([]ghcli.Label, 0, len(names))
+	for _, name := range names {
+		labels = append(labels, ghcli.Label{Name: name})
+	}
+	return labels
 }
 
 func (a *App) runRecreateCommand(ctx context.Context, args []string) error {
@@ -6078,6 +6273,7 @@ func (a *App) issueCreate(ctx context.Context, repoSlug string, providerOverride
 
 func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage:")
+	fmt.Fprintln(w, "  vigilante start <repo-folder> --issue <n> [--provider value]")
 	fmt.Fprintln(w, "  vigilante setup [--provider value]")
 	fmt.Fprintln(w, "  vigilante clone [git-clone-flags...] [--] <repo> [<path>]")
 	fmt.Fprintln(w, "  vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] [--fork [--fork-owner value]] <path>")
