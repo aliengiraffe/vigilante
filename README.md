@@ -128,7 +128,21 @@ What sandbox mode provides:
 Requirements for sandbox mode:
 
 - Docker (or a compatible container runtime) available on the host
-- A sandbox base image with the selected coding-agent CLI pre-installed
+- The `vigilante-sandbox` base image (see below)
+
+### Building the Sandbox Image
+
+Build the image locally:
+
+```sh
+docker build -t vigilante-sandbox:latest .
+```
+
+Pre-built images are published to GitHub Container Registry on every release and main push:
+
+```sh
+docker pull ghcr.io/aliengiraffe/vigilante-sandbox:latest
+```
 
 For the full architecture and security model, see [SANDBOX.md](SANDBOX.md).
 

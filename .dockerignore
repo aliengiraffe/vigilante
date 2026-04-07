@@ -1,0 +1,9 @@
+.git
+.github
+.worktrees
+*.md
+!go.mod
+!go.sum
+LICENSE
+vigilante
+dist/
