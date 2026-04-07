@@ -74,6 +74,8 @@ vigilante daemon run --once
 - Tracks progress, failures, and pull-request state through the issue tracker and local session state.
 - Recovers, resumes, redispatches, and cleans up runs without duplicating work.
 
+In short, Vigilante does the project management so your coding agent doesn't have to explain to Jira why it missed the standup.
+
 ## How It Works
 
 At a high level, Vigilante runs this loop for each watched repository:
