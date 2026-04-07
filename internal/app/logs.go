@@ -84,6 +84,45 @@ func renderAccessLogLines(w io.Writer, data []byte) error {
 	return scanner.Err()
 }
 
+// watchSessionLog follows a plaintext session log file, printing new bytes as
+// they arrive. It prints the full existing content first, then polls for new
+// data until the context is canceled.
+func (a *App) watchSessionLog(ctx context.Context, path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("no session log found for follow mode")
+	}
+	defer f.Close()
+
+	// Print existing content.
+	if _, err := io.Copy(a.stdout, f); err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+
+	buf := make([]byte, 4096)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			for {
+				n, err := f.Read(buf)
+				if n > 0 {
+					if _, wErr := a.stdout.Write(buf[:n]); wErr != nil {
+						return wErr
+					}
+				}
+				if err != nil {
+					break
+				}
+			}
+		}
+	}
+}
+
 func (a *App) watchAccessLog(ctx context.Context, path string) error {
 	f, err := os.Open(path)
 	if err != nil {

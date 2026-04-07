@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -14,6 +15,13 @@ import (
 type Runner interface {
 	Run(ctx context.Context, dir string, name string, args ...string) (string, error)
 	LookPath(file string) (string, error)
+}
+
+// StreamingRunner extends Runner with a variant that copies command output to
+// an io.Writer in real-time while still returning the full output string.
+type StreamingRunner interface {
+	Runner
+	RunStreaming(ctx context.Context, dir string, w io.Writer, name string, args ...string) (string, error)
 }
 
 type ExecRunner struct{}
@@ -46,6 +54,25 @@ func (ExecRunner) Run(ctx context.Context, dir string, name string, args ...stri
 	return output, nil
 }
 
+// RunStreaming executes a command and copies stdout/stderr to w in real-time
+// while also capturing the full output to return as a string.
+func (ExecRunner) RunStreaming(ctx context.Context, dir string, w io.Writer, name string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	var buf bytes.Buffer
+	multi := io.MultiWriter(w, &buf)
+	cmd.Stdout = multi
+	cmd.Stderr = multi
+	err := cmd.Run()
+	output := buf.String()
+	if err != nil {
+		return output, fmt.Errorf("%s %v: %w", name, args, err)
+	}
+	return output, nil
+}
+
 func (ExecRunner) LookPath(file string) (string, error) {
 	return exec.LookPath(file)
 }
@@ -56,6 +83,45 @@ func (r LoggingRunner) Run(ctx context.Context, dir string, name string, args ..
 		r.Logger.Info("command start", "dir", dir, "cmd", commandString(name, args...))
 	}
 	output, err := r.Base.Run(ctx, dir, name, args...)
+	endedAt := time.Now().UTC()
+	exitCode := exitCodeForError(err)
+	if r.CaptureCommand != nil {
+		r.CaptureCommand(ctx, name, args, exitCode, endedAt.Sub(startedAt).Milliseconds())
+	}
+	if r.AccessLog != nil {
+		r.AccessLog(buildAccessLogEntry(ctx, dir, name, args, startedAt, endedAt, output, err))
+	}
+	if r.Logger != nil {
+		if err != nil {
+			r.Logger.Error("command failed", "cmd", commandString(name, args...), "err", err, "output", trimForLog(output))
+		} else {
+			if r.LogSuccessOutput {
+				r.Logger.Info("command ok", "cmd", commandString(name, args...), "output", trimForLog(output))
+			} else {
+				r.Logger.Info("command ok", "cmd", commandString(name, args...))
+			}
+		}
+	}
+	return output, err
+}
+
+// RunStreaming delegates to the base runner's RunStreaming if available,
+// otherwise falls back to Run. Logging and telemetry are applied as usual.
+func (r LoggingRunner) RunStreaming(ctx context.Context, dir string, w io.Writer, name string, args ...string) (string, error) {
+	startedAt := time.Now().UTC()
+	if r.Logger != nil {
+		r.Logger.Info("command start", "dir", dir, "cmd", commandString(name, args...), "streaming", true)
+	}
+	var output string
+	var err error
+	if sr, ok := r.Base.(StreamingRunner); ok {
+		output, err = sr.RunStreaming(ctx, dir, w, name, args...)
+	} else {
+		output, err = r.Base.Run(ctx, dir, name, args...)
+		if w != nil && output != "" {
+			_, _ = io.WriteString(w, output)
+		}
+	}
 	endedAt := time.Now().UTC()
 	exitCode := exitCodeForError(err)
 	if r.CaptureCommand != nil {

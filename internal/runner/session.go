@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -108,6 +110,14 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		Items:      startItems,
 		Tagline:    "Make it simple, but significant.",
 	})
+	// Open the session log writer for real-time streaming and lifecycle events.
+	logWriter, logWriterErr := openSessionLogWriter(logPath)
+	if logWriterErr == nil {
+		defer logWriter.Close()
+	}
+	writeLifecycleEvent(logWriter, fmt.Sprintf("session started provider=%s issue=%d worktree=%s",
+		session.Provider, issue.Number, session.WorktreePath))
+
 	appendSessionLog(logPath, "session started", session, "")
 	if err := issueTracker.CommentOnWorkItem(ctx, target.Repo, issue.Number, startBody); err != nil {
 		session.Status = state.SessionStatusFailed
@@ -131,8 +141,9 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		return session
 	}
 	appendSessionLog(logPath, "issue preflight invocation starting", session, formatInvocationDebug(preflightInvocation))
+	writeLifecycleEvent(logWriter, "preflight invocation starting")
 	preflightStart := time.Now()
-	preflightOutput, err := env.Runner.Run(ctx, preflightInvocation.Dir, preflightInvocation.Name, preflightInvocation.Args...)
+	preflightOutput, err := runStreaming(ctx, env.Runner, preflightInvocation.Dir, logWriter, preflightInvocation.Name, preflightInvocation.Args...)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 			session.Status = state.SessionStatusFailed
@@ -141,6 +152,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 			session.EndedAt = time.Now().UTC().Format(time.RFC3339)
 			session.LastHeartbeatAt = session.EndedAt
 			session.UpdatedAt = session.EndedAt
+			writeLifecycleEvent(logWriter, "preflight canceled")
 			appendSessionLog(logPath, "issue preflight canceled", session, combineLogDetails(preflightOutput, err.Error()))
 			return session
 		}
@@ -150,6 +162,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		session.EndedAt = time.Now().UTC().Format(time.RFC3339)
 		session.LastHeartbeatAt = session.EndedAt
 		session.UpdatedAt = session.EndedAt
+		writeLifecycleEvent(logWriter, fmt.Sprintf("preflight failed duration=%s reason=%s", time.Since(preflightStart).Truncate(time.Second), describeExitError(err)))
 		appendSessionLog(logPath, "issue preflight failed", session, combineLogDetails(preflightOutput, err.Error()))
 		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
 			Stage:      "Blocked",
@@ -162,6 +175,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		_ = issueTracker.CommentOnWorkItem(ctx, target.Repo, issue.Number, body)
 		return session
 	}
+	writeLifecycleEvent(logWriter, fmt.Sprintf("preflight succeeded duration=%s", time.Since(preflightStart).Truncate(time.Second)))
 	appendSessionLog(logPath, fmt.Sprintf("issue preflight succeeded duration=%s output_bytes=%d", time.Since(preflightStart).Truncate(time.Second), len(preflightOutput)), session, preflightOutput)
 
 	invocation, err := selectedProvider.BuildIssueInvocation(provider.IssueTask{Target: target, Issue: issue, Session: session})
@@ -175,8 +189,9 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		return session
 	}
 	appendSessionLog(logPath, "issue invocation starting", session, formatInvocationDebug(invocation))
+	writeLifecycleEvent(logWriter, "implementation invocation starting")
 	invocationStart := time.Now()
-	output, err := env.Runner.Run(ctx, invocation.Dir, invocation.Name, invocation.Args...)
+	output, err := runStreaming(ctx, env.Runner, invocation.Dir, logWriter, invocation.Name, invocation.Args...)
 	session.EndedAt = time.Now().UTC().Format(time.RFC3339)
 	session.LastHeartbeatAt = session.EndedAt
 	session.UpdatedAt = session.EndedAt
@@ -185,12 +200,14 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 			session.Status = state.SessionStatusFailed
 			session.IterationInProgress = false
 			session.LastError = "session canceled"
+			writeLifecycleEvent(logWriter, "session canceled")
 			appendSessionLog(logPath, "session canceled", session, combineLogDetails(output, err.Error()))
 			return session
 		}
 		blocked := classifyBlockedFailure("issue_execution", invocation.Name, output, err)
 		markSessionBlocked(&session, "issue_execution", blocked, time.Now().UTC())
 		session.LastError = err.Error()
+		writeLifecycleEvent(logWriter, fmt.Sprintf("implementation failed duration=%s reason=%s", time.Since(invocationStart).Truncate(time.Second), describeExitError(err)))
 		appendSessionLog(logPath, fmt.Sprintf("session failed duration=%s output_bytes=%d", time.Since(invocationStart).Truncate(time.Second), len(output)), session, combineLogDetails(output, err.Error()))
 		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
 			Stage:      "Blocked",
@@ -210,6 +227,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 
 	session.Status = state.SessionStatusSuccess
 	session.IterationInProgress = false
+	writeLifecycleEvent(logWriter, fmt.Sprintf("session completed status=success duration=%s", time.Since(invocationStart).Truncate(time.Second)))
 	appendSessionLog(logPath, fmt.Sprintf("session succeeded duration=%s output_bytes=%d", time.Since(invocationStart).Truncate(time.Second), len(output)), session, output)
 	return session
 }
@@ -240,6 +258,11 @@ func RunConflictResolutionSession(ctx context.Context, env *environment.Environm
 		return err
 	}
 	session.Provider = selectedProvider.ID()
+	logWriter, logWriterErr := openSessionLogWriter(logPath)
+	if logWriterErr == nil {
+		defer logWriter.Close()
+	}
+	writeLifecycleEvent(logWriter, fmt.Sprintf("conflict resolution started pr=%d", pr.Number))
 	appendSessionLog(logPath, "conflict resolution started", session, fmt.Sprintf("pr=%d url=%s", pr.Number, pr.URL))
 	if err := provider.ValidateRuntimeCompatibility(ctx, env.Runner, selectedProvider); err != nil {
 		appendSessionLog(logPath, "conflict resolution provider compatibility failed", session, err.Error())
@@ -251,8 +274,10 @@ func RunConflictResolutionSession(ctx context.Context, env *environment.Environm
 		appendSessionLog(logPath, "conflict resolution invocation build failed", session, err.Error())
 		return err
 	}
-	output, err := env.Runner.Run(ctx, invocation.Dir, invocation.Name, invocation.Args...)
+	writeLifecycleEvent(logWriter, "conflict resolution invocation starting")
+	output, err := runStreaming(ctx, env.Runner, invocation.Dir, logWriter, invocation.Name, invocation.Args...)
 	if err != nil {
+		writeLifecycleEvent(logWriter, fmt.Sprintf("conflict resolution failed reason=%s", describeExitError(err)))
 		appendSessionLog(logPath, "conflict resolution failed", session, combineLogDetails(output, err.Error()))
 		blocked := classifyBlockedFailure("conflict_resolution", invocation.Name, output, err)
 		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
@@ -271,6 +296,7 @@ func RunConflictResolutionSession(ctx context.Context, env *environment.Environm
 		return err
 	}
 
+	writeLifecycleEvent(logWriter, "conflict resolution succeeded")
 	appendSessionLog(logPath, "conflict resolution succeeded", session, output)
 	return nil
 }
@@ -294,6 +320,11 @@ func RunCIRemediationSession(ctx context.Context, env *environment.Environment, 
 		return err
 	}
 	session.Provider = selectedProvider.ID()
+	logWriter, logWriterErr := openSessionLogWriter(logPath)
+	if logWriterErr == nil {
+		defer logWriter.Close()
+	}
+	writeLifecycleEvent(logWriter, fmt.Sprintf("ci remediation started pr=%d", pr.Number))
 	appendSessionLog(logPath, "ci remediation started", session, fmt.Sprintf("pr=%d url=%s", pr.Number, pr.URL))
 	if err := provider.ValidateRuntimeCompatibility(ctx, env.Runner, selectedProvider); err != nil {
 		appendSessionLog(logPath, "ci remediation provider compatibility failed", session, err.Error())
@@ -305,8 +336,10 @@ func RunCIRemediationSession(ctx context.Context, env *environment.Environment, 
 		appendSessionLog(logPath, "ci remediation invocation build failed", session, err.Error())
 		return err
 	}
-	output, err := env.Runner.Run(ctx, invocation.Dir, invocation.Name, invocation.Args...)
+	writeLifecycleEvent(logWriter, "ci remediation invocation starting")
+	output, err := runStreaming(ctx, env.Runner, invocation.Dir, logWriter, invocation.Name, invocation.Args...)
 	if err != nil {
+		writeLifecycleEvent(logWriter, fmt.Sprintf("ci remediation failed reason=%s", describeExitError(err)))
 		appendSessionLog(logPath, "ci remediation failed", session, combineLogDetails(output, err.Error()))
 		blocked := classifyBlockedFailure("ci_remediation", invocation.Name, output, err)
 		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
@@ -325,6 +358,7 @@ func RunCIRemediationSession(ctx context.Context, env *environment.Environment, 
 		return err
 	}
 
+	writeLifecycleEvent(logWriter, "ci remediation succeeded")
 	appendSessionLog(logPath, "ci remediation succeeded", session, output)
 	return nil
 }
@@ -497,4 +531,47 @@ func filepathDir(path string) string {
 		return "."
 	}
 	return path[:last]
+}
+
+// openSessionLogWriter opens the session log file for appending and returns it
+// as an io.WriteCloser suitable for streaming provider output.
+func openSessionLogWriter(path string) (io.WriteCloser, error) {
+	if err := os.MkdirAll(filepathDir(path), 0o755); err != nil {
+		return nil, err
+	}
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+}
+
+// writeLifecycleEvent writes a [vigilante HH:MM:SS] prefixed event into the
+// session log writer. These events are interleaved with provider output so
+// operators see a single chronological timeline.
+func writeLifecycleEvent(w io.Writer, msg string) {
+	if w == nil {
+		return
+	}
+	ts := logtime.FormatLocal(time.Now())
+	_, _ = fmt.Fprintf(w, "[vigilante %s] %s\n", ts, msg)
+}
+
+// runStreaming attempts to use StreamingRunner for real-time output, falling
+// back to the standard Run method if the runner does not implement it.
+func runStreaming(ctx context.Context, runner environment.Runner, dir string, w io.Writer, name string, args ...string) (string, error) {
+	if sr, ok := runner.(environment.StreamingRunner); ok && w != nil {
+		return sr.RunStreaming(ctx, dir, w, name, args...)
+	}
+	return runner.Run(ctx, dir, name, args...)
+}
+
+// describeExitError returns a human-readable description of the exit code.
+// For exit code 137 in sandboxed execution it adds an OOM annotation.
+func describeExitError(err error) string {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return err.Error()
+	}
+	code := exitErr.ExitCode()
+	if code == 137 {
+		return fmt.Sprintf("exit code %d (likely OOM — container killed by kernel)", code)
+	}
+	return fmt.Sprintf("exit code %d", code)
 }

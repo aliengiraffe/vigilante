@@ -286,6 +286,83 @@ func TestLoggingRunnerAccessLogCapturesSanitizedFailureDiagnostics(t *testing.T)
 	}
 }
 
+func TestExecRunnerStreamingWritesToWriter(t *testing.T) {
+	var buf bytes.Buffer
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"echo hello": "hello\n",
+		},
+	}
+	output, err := runner.RunStreaming(context.Background(), "", &buf, "echo", "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output != "hello\n" {
+		t.Fatalf("expected output %q, got %q", "hello\n", output)
+	}
+	if buf.String() != "hello\n" {
+		t.Fatalf("expected writer to receive %q, got %q", "hello\n", buf.String())
+	}
+}
+
+func TestLoggingRunnerStreamingDelegatesToBase(t *testing.T) {
+	var buf bytes.Buffer
+	var logBuf bytes.Buffer
+	runner := LoggingRunner{
+		Base: testutil.FakeRunner{
+			Outputs: map[string]string{
+				"gh issue list": "[]",
+			},
+		},
+		Logger: newTestLogger(&logBuf),
+	}
+	output, err := runner.RunStreaming(context.Background(), "/tmp/repo", &buf, "gh", "issue", "list")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output != "[]" {
+		t.Fatalf("expected output %q, got %q", "[]", output)
+	}
+	if buf.String() != "[]" {
+		t.Fatalf("expected writer to receive %q, got %q", "[]", buf.String())
+	}
+	if !strings.Contains(logBuf.String(), `msg="command ok"`) {
+		t.Fatalf("expected command ok log, got: %s", logBuf.String())
+	}
+	if !strings.Contains(logBuf.String(), "streaming=true") {
+		t.Fatalf("expected streaming attribute in log, got: %s", logBuf.String())
+	}
+}
+
+func TestLoggingRunnerStreamingFallsBackToRun(t *testing.T) {
+	// Use a runner that doesn't implement StreamingRunner.
+	var buf bytes.Buffer
+	base := nonStreamingRunner{output: "fallback-output"}
+	runner := LoggingRunner{Base: base}
+	output, err := runner.RunStreaming(context.Background(), "", &buf, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output != "fallback-output" {
+		t.Fatalf("expected %q, got %q", "fallback-output", output)
+	}
+	if buf.String() != "fallback-output" {
+		t.Fatalf("expected writer to receive fallback output, got %q", buf.String())
+	}
+}
+
+type nonStreamingRunner struct {
+	output string
+}
+
+func (r nonStreamingRunner) Run(_ context.Context, _ string, _ string, _ ...string) (string, error) {
+	return r.output, nil
+}
+
+func (r nonStreamingRunner) LookPath(_ string) (string, error) {
+	return "", fmt.Errorf("not found")
+}
+
 type capturedCommand struct {
 	Name       string
 	Args       []string

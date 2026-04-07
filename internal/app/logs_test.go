@@ -284,3 +284,104 @@ func TestWatchAccessLogPicksUpNewEntries(t *testing.T) {
 		t.Errorf("expected appended entry to appear in output, got %q", output)
 	}
 }
+
+func TestLogsFollowFlagRequiresRepoAndIssue(t *testing.T) {
+	app := New()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = &stderr
+
+	exitCode := app.Run(context.Background(), []string{"logs", "-f"})
+	if exitCode != 1 {
+		t.Fatalf("expected failure exit code, got %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "-f requires --repo and --issue") {
+		t.Fatalf("expected flag validation error, got %q", stderr.String())
+	}
+}
+
+func TestLogsFollowFlagCannotCombineWithAccess(t *testing.T) {
+	app := New()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = &stderr
+
+	exitCode := app.Run(context.Background(), []string{"logs", "-f", "--access", "--repo", "owner/repo", "--issue", "7"})
+	if exitCode != 1 {
+		t.Fatalf("expected failure exit code, got %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "-f cannot be combined with --access") {
+		t.Fatalf("expected flag validation error, got %q", stderr.String())
+	}
+}
+
+func TestLogsFollowFlagMissingFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+
+	exitCode := app.Run(context.Background(), []string{"logs", "--repo", "owner/repo", "--issue", "7", "-f"})
+	if exitCode != 1 {
+		t.Fatalf("expected failure exit code, got %d", exitCode)
+	}
+}
+
+func TestWatchSessionLogPrintsExistingAndNewContent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	logsDir := filepath.Join(home, ".vigilante", "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(logsDir, "owner-repo-issue-7.log")
+	if err := os.WriteFile(logPath, []byte("[vigilante] session started\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- app.watchSessionLog(ctx, logPath)
+	}()
+
+	// Give watcher time to start and print existing content.
+	time.Sleep(100 * time.Millisecond)
+
+	// Append new content.
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("[vigilante] implementation starting\n"); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+
+	// Wait for poll to pick up the new content.
+	time.Sleep(500 * time.Millisecond)
+	cancel()
+	<-done
+
+	output := stdout.String()
+	if !strings.Contains(output, "session started") {
+		t.Errorf("expected existing content, got %q", output)
+	}
+	if !strings.Contains(output, "implementation starting") {
+		t.Errorf("expected appended content, got %q", output)
+	}
+}
