@@ -159,7 +159,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		}
 		blocked := classifyBlockedFailure("baseline_preflight", preflightInvocation.Name, preflightOutput, err)
 		markSessionBlocked(&session, "baseline_preflight", blocked, time.Now().UTC())
-		session.LastError = err.Error()
+		session.LastError = describeProviderFailure(session, err)
 		session.EndedAt = time.Now().UTC().Format(time.RFC3339)
 		session.LastHeartbeatAt = session.EndedAt
 		session.UpdatedAt = session.EndedAt
@@ -207,7 +207,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		}
 		blocked := classifyBlockedFailure("issue_execution", invocation.Name, output, err)
 		markSessionBlocked(&session, "issue_execution", blocked, time.Now().UTC())
-		session.LastError = err.Error()
+		session.LastError = describeProviderFailure(session, err)
 		writeLifecycleEvent(logWriter, fmt.Sprintf("implementation failed duration=%s reason=%s", time.Since(invocationStart).Truncate(time.Second), describeExitError(err)))
 		appendSessionLog(logPath, fmt.Sprintf("session failed duration=%s output_bytes=%d", time.Since(invocationStart).Truncate(time.Second), len(output)), session, combineLogDetails(output, err.Error()))
 		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
@@ -334,7 +334,7 @@ func RunConflictResolutionSession(ctx context.Context, env *environment.Environm
 	output, err := runProviderInvocationStreaming(ctx, env.Runner, target, session, invocation, logWriter)
 	if err != nil {
 		writeLifecycleEvent(logWriter, fmt.Sprintf("conflict resolution failed reason=%s", describeExitError(err)))
-		appendSessionLog(logPath, "conflict resolution failed", session, combineLogDetails(output, err.Error()))
+		appendSessionLog(logPath, "conflict resolution failed", session, combineLogDetails(output, describeProviderFailure(session, err)))
 		blocked := classifyBlockedFailure("conflict_resolution", invocation.Name, output, err)
 		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
 			Stage:      "Blocked",
@@ -397,7 +397,7 @@ func RunCIRemediationSession(ctx context.Context, env *environment.Environment, 
 	output, err := runProviderInvocationStreaming(ctx, env.Runner, target, session, invocation, logWriter)
 	if err != nil {
 		writeLifecycleEvent(logWriter, fmt.Sprintf("ci remediation failed reason=%s", describeExitError(err)))
-		appendSessionLog(logPath, "ci remediation failed", session, combineLogDetails(output, err.Error()))
+		appendSessionLog(logPath, "ci remediation failed", session, combineLogDetails(output, describeProviderFailure(session, err)))
 		blocked := classifyBlockedFailure("ci_remediation", invocation.Name, output, err)
 		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
 			Stage:      "CI Remediation Blocked",
@@ -424,6 +424,17 @@ func summarizeError(err error) string {
 	text := strings.TrimSpace(err.Error())
 	if len(text) > 400 {
 		return text[:400]
+	}
+	return text
+}
+
+func describeProviderFailure(session state.Session, err error) string {
+	if err == nil {
+		return ""
+	}
+	text := strings.TrimSpace(err.Error())
+	if session.SandboxMode && strings.Contains(text, "exit status 137") {
+		return text + " (sandboxed coding-agent process was killed; likely memory pressure/OOM inside the container)"
 	}
 	return text
 }

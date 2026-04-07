@@ -1287,6 +1287,14 @@ func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumbe
 	fmt.Fprintf(a.stdout, "starting one-off session for %s issue #%d in %s\n", info.Repo, issueNumber, wt.Path)
 	fmt.Fprintf(a.stdout, "note: this is a one-off session — the repository was not added to watched targets\n")
 
+	streamCtx, stopStream := context.WithCancel(ctx)
+	defer stopStream()
+	streamDone := make(chan struct{})
+	go func() {
+		defer close(streamDone)
+		_ = a.streamSessionLog(streamCtx, info.Repo, issueNumber)
+	}()
+
 	// Run the session synchronously so the CLI blocks until completion.
 	var result state.Session
 	if session.SandboxMode && a.sandboxManager != nil {
@@ -1294,6 +1302,8 @@ func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumbe
 	} else {
 		result = issuerunner.RunIssueSession(ctx, a.env, a.state, issueTracker, target, ghIssue, session)
 	}
+	stopStream()
+	<-streamDone
 
 	sessions, err = a.state.LoadSessions()
 	if err != nil {
@@ -7221,15 +7231,33 @@ func (a *App) runSandboxSession(ctx context.Context, target state.WatchTarget, i
 	// gh commands inside the sandbox are routed through the proxy.
 	result := issuerunner.RunIssueSession(ctx, a.env, a.state, a.issueTrackerForTarget(target), target, issue, session)
 
-	// Tear down the sandbox after the session completes.
-	teardownReason := "completed"
-	if result.Status == state.SessionStatusFailed {
-		teardownReason = "failed"
-	} else if result.Status == state.SessionStatusBlocked {
-		teardownReason = "blocked"
-	}
-	if err := a.sandboxManager.Teardown(ctx, sbxSession.ID, teardownReason); err != nil {
-		a.logger.Warn("sandbox teardown after session failed", "session_id", sbxSession.ID, "err", err)
+	// Preserve failed or blocked sandboxes for inspection. Successful runs are
+	// still torn down immediately.
+	if result.Status == state.SessionStatusSuccess {
+		if err := a.sandboxManager.Teardown(ctx, sbxSession.ID, "completed"); err != nil {
+			a.logger.Warn("sandbox teardown after session failed", "session_id", sbxSession.ID, "err", err)
+		}
+	} else {
+		notice := fmt.Sprintf(
+			"sandbox preserved for inspection: container=%s session_id=%s\ncheck session logs with: vigilante logs --repo %s --issue %d\n",
+			sbxSession.ContainerName,
+			sbxSession.ID,
+			target.Repo,
+			issue.Number,
+		)
+		if result.LastError != "" {
+			result.LastError = strings.TrimSpace(result.LastError) + " (sandbox preserved: " + sbxSession.ContainerName + ")"
+		} else {
+			result.LastError = "sandbox preserved: " + sbxSession.ContainerName
+		}
+		fmt.Fprint(a.stdout, notice)
+		a.logger.Warn("sandbox preserved after unsuccessful session",
+			"session_id", sbxSession.ID,
+			"container", sbxSession.ContainerName,
+			"repo", target.Repo,
+			"issue", issue.Number,
+			"status", result.Status,
+		)
 	}
 
 	return result
