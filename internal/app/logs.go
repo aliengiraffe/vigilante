@@ -84,13 +84,37 @@ func renderAccessLogLines(w io.Writer, data []byte) error {
 	return scanner.Err()
 }
 
+// waitForFile polls until the file at path exists or the context is canceled.
+func (a *App) waitForFile(ctx context.Context, path string) error {
+	fmt.Fprintf(a.stderr, "waiting for session log to appear: %s\n", path)
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if _, err := os.Stat(path); err == nil {
+				return nil
+			}
+		}
+	}
+}
+
 // watchSessionLog follows a plaintext session log file, printing new bytes as
 // they arrive. It prints the full existing content first, then polls for new
-// data until the context is canceled.
+// data until the context is canceled. If the file does not yet exist, it waits
+// for the file to appear before tailing.
 func (a *App) watchSessionLog(ctx context.Context, path string) error {
 	f, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("no session log found for follow mode")
+		if waitErr := a.waitForFile(ctx, path); waitErr != nil {
+			return waitErr
+		}
+		f, err = os.Open(path)
+		if err != nil {
+			return fmt.Errorf("no session log found for follow mode")
+		}
 	}
 	defer f.Close()
 
