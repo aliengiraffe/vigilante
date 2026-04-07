@@ -1393,7 +1393,7 @@ func (a *App) runCompletionCommand(args []string) error {
 func (a *App) runLogsCommand(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("logs", flag.ContinueOnError)
 	configureFlagSet(fs, func(w io.Writer) {
-		fmt.Fprintln(w, "usage: vigilante logs [--access [-w]] [--repo <owner/name>] [--issue <n>]")
+		fmt.Fprintln(w, "usage: vigilante logs [--access [-w]] [--repo <owner/name>] [--issue <n>] [-f]")
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "List daemon, access, and session log files or show a specific log.")
 		fmt.Fprintln(w)
@@ -1403,6 +1403,8 @@ func (a *App) runLogsCommand(ctx context.Context, args []string) error {
 	accessFlag := fs.Bool("access", false, "show the structured access log")
 	watchFlag := fs.Bool("w", false, "follow the access log and show new entries as they arrive")
 	fs.BoolVar(watchFlag, "watch", false, "follow the access log and show new entries as they arrive")
+	followFlag := fs.Bool("f", false, "follow the session log in real-time")
+	fs.BoolVar(followFlag, "follow", false, "follow the session log in real-time")
 	repoFlag := fs.String("repo", "", "repository slug")
 	issueFlag := fs.Int("issue", 0, "issue number")
 	if err := parseFlagSet(fs, args, a.stdout); err != nil {
@@ -1413,6 +1415,12 @@ func (a *App) runLogsCommand(ctx context.Context, args []string) error {
 	}
 	if *watchFlag && !*accessFlag {
 		return errors.New("-w is only supported with --access")
+	}
+	if *followFlag && (*repoFlag == "" || *issueFlag <= 0) {
+		return errors.New("-f requires --repo and --issue")
+	}
+	if *followFlag && *accessFlag {
+		return errors.New("-f cannot be combined with --access")
 	}
 	if *accessFlag {
 		if *repoFlag != "" || *issueFlag > 0 {
@@ -1430,6 +1438,9 @@ func (a *App) runLogsCommand(ctx context.Context, args []string) error {
 
 	if *repoFlag != "" && *issueFlag > 0 {
 		path := a.state.SessionLogPath(*repoFlag, *issueFlag)
+		if *followFlag {
+			return a.watchSessionLog(ctx, path)
+		}
 		content, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("no log found for %s#%d", *repoFlag, *issueFlag)

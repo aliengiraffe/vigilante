@@ -788,6 +788,92 @@ func conflictResolutionPromptCommand(worktreePath string, repo string, repoPath 
 	))
 }
 
+func TestRunIssueSessionWritesLifecycleEvents(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	baseRunner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"codex --version": "codex 0.114.0",
+			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Vigilante Session Start",
+				Emoji:      "🧢",
+				Percent:    20,
+				ETAMinutes: 25,
+				Items: []string{
+					"Vigilante launched this implementation session in `/tmp/worktree`.",
+					"Branch: `vigilante/issue-7`.",
+					"Current stage: handing the issue off to the configured coding agent (`Codex`) for investigation and implementation.",
+					"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
+				},
+				Tagline: "Make it simple, but significant.",
+			}): "ok",
+			preflightPromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", "vigilante/issue-7"): "baseline ok",
+			issuePromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", "vigilante/issue-7"):     "done",
+		},
+	}
+	store := state.NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	env := &environment.Environment{
+		OS: "darwin",
+		Runner: environment.LoggingRunner{
+			Base:      baseRunner,
+			AccessLog: store.AppendAccessLogEntry,
+		},
+	}
+	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
+	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	if got.Status != state.SessionStatusSuccess {
+		t.Fatalf("unexpected status: %#v", got)
+	}
+	data, err := os.ReadFile(store.SessionLogPath("owner/repo", 7))
+	if err != nil {
+		t.Fatal(err)
+	}
+	logContent := string(data)
+	for _, want := range []string{
+		"[vigilante ",
+		"session started provider=",
+		"preflight invocation starting",
+		"preflight succeeded",
+		"implementation invocation starting",
+		"session completed status=success",
+	} {
+		if !strings.Contains(logContent, want) {
+			t.Errorf("expected session log to contain %q, got:\n%s", want, logContent)
+		}
+	}
+}
+
+func TestWriteLifecycleEventFormat(t *testing.T) {
+	var buf strings.Builder
+	writeLifecycleEvent(&buf, "test event key=value")
+	output := buf.String()
+	if !strings.HasPrefix(output, "[vigilante ") {
+		t.Fatalf("expected [vigilante prefix, got %q", output)
+	}
+	if !strings.Contains(output, "test event key=value") {
+		t.Fatalf("expected event message in output, got %q", output)
+	}
+	if !strings.HasSuffix(output, "\n") {
+		t.Fatalf("expected trailing newline, got %q", output)
+	}
+}
+
+func TestWriteLifecycleEventNilWriter(t *testing.T) {
+	// Should not panic with a nil writer.
+	writeLifecycleEvent(nil, "ignored event")
+}
+
+func TestDescribeExitErrorOOM(t *testing.T) {
+	desc := describeExitError(errors.New("exit status 137"))
+	// Regular error, not an exec.ExitError — just returns the error string.
+	if !strings.Contains(desc, "exit status 137") {
+		t.Fatalf("expected error string, got %q", desc)
+	}
+}
+
 func containsLine(items []string, want string) bool {
 	for _, item := range items {
 		if item == want {
