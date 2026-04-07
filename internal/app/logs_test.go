@@ -317,19 +317,146 @@ func TestLogsFollowFlagCannotCombineWithAccess(t *testing.T) {
 	}
 }
 
-func TestLogsFollowFlagMissingFile(t *testing.T) {
+func TestLogsFollowFlagWaitsForMissingFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	logsDir := filepath.Join(home, ".vigilante", "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	app := New()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = &stderr
+
+	done := make(chan int, 1)
+	go func() {
+		done <- app.Run(ctx, []string{"logs", "--repo", "owner/repo", "--issue", "7", "-f"})
+	}()
+
+	// Give the watcher time to start waiting.
+	time.Sleep(100 * time.Millisecond)
+
+	// Create the log file.
+	logPath := filepath.Join(logsDir, "owner-repo-issue-7.log")
+	if err := os.WriteFile(logPath, []byte("session log content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for the watcher to pick up the file.
+	time.Sleep(500 * time.Millisecond)
+	cancel()
+
+	exitCode := <-done
+	if exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d", exitCode)
+	}
+	if !strings.Contains(stdout.String(), "session log content") {
+		t.Errorf("expected session log content in output, got %q", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "waiting for session log to appear") {
+		t.Errorf("expected waiting message on stderr, got %q", stderr.String())
+	}
+}
+
+func TestWatchSessionLogWaitsThenTails(t *testing.T) {
+	home := t.TempDir()
+	logsDir := filepath.Join(home, ".vigilante", "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(logsDir, "owner-repo-issue-7.log")
+
+	app := New()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
 	var stdout bytes.Buffer
 	app.stdout = &stdout
 	app.stderr = testutil.IODiscard{}
 
-	exitCode := app.Run(context.Background(), []string{"logs", "--repo", "owner/repo", "--issue", "7", "-f"})
+	done := make(chan error, 1)
+	go func() {
+		done <- app.watchSessionLog(ctx, logPath)
+	}()
+
+	// Give watcher time to start waiting.
+	time.Sleep(100 * time.Millisecond)
+
+	// Create the file with initial content.
+	if err := os.WriteFile(logPath, []byte("line one\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for watcher to pick up the file and print content.
+	time.Sleep(500 * time.Millisecond)
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatalf("expected clean exit, got %v", err)
+	}
+
+	if !strings.Contains(stdout.String(), "line one") {
+		t.Errorf("expected file content in output, got %q", stdout.String())
+	}
+}
+
+func TestWatchSessionLogCancelDuringWait(t *testing.T) {
+	home := t.TempDir()
+	logsDir := filepath.Join(home, ".vigilante", "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(logsDir, "nonexistent.log")
+
+	app := New()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- app.watchSessionLog(ctx, logPath)
+	}()
+
+	// Give watcher time to start waiting, then cancel.
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+
+	err := <-done
+	if err == nil || err != context.Canceled {
+		t.Fatalf("expected context.Canceled error, got %v", err)
+	}
+}
+
+func TestLogsNonFollowMissingFileStillErrors(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	logsDir := filepath.Join(home, ".vigilante", "logs")
+	if err := os.MkdirAll(logsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = &stderr
+
+	exitCode := app.Run(context.Background(), []string{"logs", "--repo", "owner/repo", "--issue", "7"})
 	if exitCode != 1 {
-		t.Fatalf("expected failure exit code, got %d", exitCode)
+		t.Fatalf("expected failure exit code for non-follow missing file, got %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "no log found for") {
+		t.Fatalf("expected 'no log found' error, got %q", stderr.String())
 	}
 }
 
