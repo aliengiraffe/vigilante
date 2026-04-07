@@ -13,6 +13,7 @@
 `vigilante` is a local control plane for autonomous software delivery. It watches repositories, selects eligible work items, prepares isolated git worktrees, launches a supported coding-agent CLI, and keeps the issue tracker updated while the work moves toward a pull request.
 
 It is the orchestration layer around agents such as `codex`, `claude`, and `gemini`, not the model itself. Vigilante owns scheduling, worktree isolation, backend coordination, and recovery so a repository checkout behaves like a controlled worker instead of a loose collection of scripts.
+It also does its best to keep the robots organized, which is harder than herding cats and only slightly less opinionated.
 
 [Docs](DOCS.md) · [Closed Issues](https://github.com/aliengiraffe/vigilante/issues?q=is%3Aissue%20state%3Aclosed) · [Releases](https://github.com/aliengiraffe/vigilante/releases) · [Contributing](CONTRIBUTING.md)
 
