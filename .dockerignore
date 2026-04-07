@@ -1,5 +1,7 @@
 .git
 .github
+!.github/
+!.github/labels.json
 .worktrees
 *.md
 !go.mod

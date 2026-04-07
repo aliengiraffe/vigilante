@@ -36,6 +36,10 @@ func TestCreateBuildsDockerCommand(t *testing.T) {
 		CPUs:        "4",
 		ProxyPort:   9821,
 		EnableDinD:  true,
+		Mounts: []Mount{
+			{Source: "/host/codex", Target: "/root/.codex", ReadOnly: false},
+			{Source: "/host/gitconfig", Target: "/root/.gitconfig", ReadOnly: true},
+		},
 	}
 
 	id, err := Create(context.Background(), r, cfg)
@@ -55,6 +59,8 @@ func TestCreateBuildsDockerCommand(t *testing.T) {
 		"--privileged",
 		"--memory 8g",
 		"--cpus 4",
+		"/host/codex:/root/.codex",
+		"/host/gitconfig:/root/.gitconfig:ro",
 		"/workspace",
 		"vigilante-sandbox:latest",
 	} {

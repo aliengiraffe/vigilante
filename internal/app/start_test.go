@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,6 +16,26 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/state"
 	"github.com/nicobistolfi/vigilante/internal/testutil"
 )
+
+type sandboxCapableRunner struct {
+	testutil.FakeRunner
+}
+
+func (r sandboxCapableRunner) Run(ctx context.Context, dir string, name string, args ...string) (string, error) {
+	if name == "ssh-keygen" {
+		for i, a := range args {
+			if a == "-f" && i+1 < len(args) {
+				keyPath := args[i+1]
+				_ = os.MkdirAll(filepath.Dir(keyPath), 0o700)
+				_ = os.WriteFile(keyPath, []byte("fake-private-key"), 0o600)
+				_ = os.WriteFile(keyPath+".pub", []byte("ssh-ed25519 AAAA...fake test@host\n"), 0o644)
+				break
+			}
+		}
+		return "", nil
+	}
+	return r.FakeRunner.Run(ctx, dir, name, args...)
+}
 
 // repoDiscoverOutputs returns the common git outputs needed for repo.Discover
 // to succeed against a test repository path.
@@ -74,7 +95,7 @@ func TestStartOneOffSessionSuccess(t *testing.T) {
 		t.Fatal("expected no watch targets")
 	}
 
-	err = app.StartOneOffSession(context.Background(), repoPath, 10, "")
+	err = app.StartOneOffSession(context.Background(), repoPath, 10, "", false)
 	// Without a tracked PR the session is incomplete, which StartOneOffSession reports as an error.
 	if err == nil {
 		t.Fatal("expected error for incomplete session without PR")
@@ -161,7 +182,7 @@ func TestStartOneOffSessionDoesNotAddToWatchlist(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := app.StartOneOffSession(context.Background(), repoPath, 5, ""); err == nil {
+	if err := app.StartOneOffSession(context.Background(), repoPath, 5, "", false); err == nil {
 		t.Fatal("expected error for incomplete session without PR")
 	}
 
@@ -191,7 +212,7 @@ func TestStartOneOffSessionInvalidRepoPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := app.StartOneOffSession(context.Background(), filepath.Join(home, "nonexistent"), 1, "")
+	err := app.StartOneOffSession(context.Background(), filepath.Join(home, "nonexistent"), 1, "", false)
 	if err == nil || !strings.Contains(err.Error(), "not a git repository") {
 		t.Fatalf("expected git repo error, got: %v", err)
 	}
@@ -218,7 +239,7 @@ func TestStartOneOffSessionIssueNotOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := app.StartOneOffSession(context.Background(), repoPath, 99, "")
+	err := app.StartOneOffSession(context.Background(), repoPath, 99, "", false)
 	if err == nil || !strings.Contains(err.Error(), "not open") {
 		t.Fatalf("expected not-open error, got: %v", err)
 	}
@@ -246,7 +267,7 @@ func TestStartOneOffSessionIssueResolutionFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := app.StartOneOffSession(context.Background(), repoPath, 404, "")
+	err := app.StartOneOffSession(context.Background(), repoPath, 404, "", false)
 	if err == nil || !strings.Contains(err.Error(), "could not be resolved") {
 		t.Fatalf("expected resolution failure, got: %v", err)
 	}
@@ -313,7 +334,7 @@ func TestStartOneOffSessionReusesExistingSessionOrchestration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := app.StartOneOffSession(context.Background(), repoPath, 7, "")
+	err := app.StartOneOffSession(context.Background(), repoPath, 7, "", false)
 	if err == nil {
 		t.Fatal("expected error for blocked session")
 	}
@@ -449,7 +470,7 @@ func TestStartOneOffSessionWithCustomProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := app.StartOneOffSession(context.Background(), repoPath, 3, "claude")
+	err := app.StartOneOffSession(context.Background(), repoPath, 3, "claude", false)
 	if err == nil {
 		t.Fatal("expected error for incomplete session without PR")
 	}
@@ -491,9 +512,66 @@ func TestStartOneOffSessionRejectsInvalidProvider(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := app.StartOneOffSession(context.Background(), repoPath, 1, "nonexistent-provider")
+	err := app.StartOneOffSession(context.Background(), repoPath, 1, "nonexistent-provider", false)
 	if err == nil {
 		t.Fatal("expected error for invalid provider")
+	}
+}
+
+func TestStartOneOffSessionUsesSandboxWhenConfigEnabled(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-11")
+	branch := "vigilante/issue-11-sandbox-test"
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.clock = func() time.Time { return time.Date(2026, 4, 6, 12, 0, 0, 0, time.UTC) }
+	app.env.Runner = sandboxCapableRunner{FakeRunner: testutil.FakeRunner{
+		LookPaths: map[string]string{"codex": "/usr/bin/codex"},
+		Outputs: mergeStringMaps(
+			repoDiscoverOutputs(repoPath, "owner/repo", "main"),
+			freshBaseBranchOutputs(repoPath, "main"),
+			map[string]string{
+				"git worktree prune":            "ok",
+				"git worktree list --porcelain": "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/main\n",
+				"git worktree add -b " + branch + " " + worktreePath + " origin/main": "ok",
+				"gh api repos/owner/repo/issues/11":                                   `{"title":"sandbox test","body":"","html_url":"https://github.com/owner/repo/issues/11","state":"open","labels":[],"assignees":[]}`,
+				"gh auth status":                                                      "Logged in",
+				"docker ps -a --filter name=vigilante-sandbox- --format {{.Names}}":   "",
+			},
+		),
+		Errors: map[string]error{
+			"git show-ref --verify --quiet refs/heads/" + branch:          errors.New("exit status 1"),
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-11": errors.New("exit status 1"),
+		},
+	}}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	enabled := true
+	if err := app.state.SaveServiceConfig(state.ServiceConfig{SandboxEnabled: &enabled}); err != nil {
+		t.Fatal(err)
+	}
+
+	err := app.StartOneOffSession(context.Background(), repoPath, 11, "", false)
+	if err == nil || !strings.Contains(err.Error(), "sandbox provision") {
+		t.Fatalf("expected sandbox provision failure, got: %v", err)
+	}
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 || !sessions[0].SandboxMode || sessions[0].Status != state.SessionStatusFailed {
+		t.Fatalf("expected one sandbox session, got %#v", sessions)
+	}
+	if !strings.Contains(stdout.String(), "one-off session") {
+		t.Fatalf("expected one-off output, got: %s", stdout.String())
 	}
 }
 

@@ -37,6 +37,7 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/repo"
 	issuerunner "github.com/nicobistolfi/vigilante/internal/runner"
 	"github.com/nicobistolfi/vigilante/internal/sandbox"
+	"github.com/nicobistolfi/vigilante/internal/sandbox/container"
 	"github.com/nicobistolfi/vigilante/internal/service"
 	"github.com/nicobistolfi/vigilante/internal/skill"
 	"github.com/nicobistolfi/vigilante/internal/state"
@@ -1122,7 +1123,7 @@ func (a *App) runCleanupCommand(ctx context.Context, args []string) error {
 func (a *App) runStartCommand(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
 	configureFlagSet(fs, func(w io.Writer) {
-		fmt.Fprintln(w, "usage: vigilante start <repo-folder> --issue <n> [--provider value]")
+		fmt.Fprintln(w, "usage: vigilante start <repo-folder> --issue <n> [--provider value] [--sandbox]")
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Run a one-off issue implementation session against a local repository.")
 		fmt.Fprintln(w, "The repository does not need to be watched.")
@@ -1132,6 +1133,7 @@ func (a *App) runStartCommand(ctx context.Context, args []string) error {
 	})
 	issue := fs.Int("issue", 0, "issue number to implement")
 	selectedProvider := fs.String("provider", "", "coding agent provider")
+	sandboxMode := fs.Bool("sandbox", false, "run this one-off session inside an isolated Docker container")
 	if err := parseFlagSet(fs, args, a.stdout); err != nil {
 		if errors.Is(err, errHelpHandled) {
 			return nil
@@ -1139,18 +1141,18 @@ func (a *App) runStartCommand(ctx context.Context, args []string) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: vigilante start <repo-folder> --issue <n> [--provider value]")
+		return errors.New("usage: vigilante start <repo-folder> --issue <n> [--provider value] [--sandbox]")
 	}
 	if *issue <= 0 {
-		return errors.New("usage: vigilante start <repo-folder> --issue <n> [--provider value]")
+		return errors.New("usage: vigilante start <repo-folder> --issue <n> [--provider value] [--sandbox]")
 	}
-	return a.StartOneOffSession(ctx, fs.Arg(0), *issue, strings.TrimSpace(*selectedProvider))
+	return a.StartOneOffSession(ctx, fs.Arg(0), *issue, strings.TrimSpace(*selectedProvider), *sandboxMode)
 }
 
 // StartOneOffSession runs a one-off issue implementation session for a local
 // repository that is not necessarily in the watchlist. The repository is not
 // added to the watchlist as a side effect.
-func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumber int, providerID string) error {
+func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumber int, providerID string, sandboxRequested bool) error {
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
 	}
@@ -1185,6 +1187,7 @@ func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumbe
 		Classification: info.Classification,
 		Provider:       providerID,
 		MaxParallel:    1,
+		SandboxMode:    sandboxRequested,
 	}
 
 	if err := a.ensureIssueTrackerReady(ctx, target.EffectiveIssueBackend()); err != nil {
@@ -1219,6 +1222,14 @@ func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumbe
 	target, err = a.prepareExecutionTarget(ctx, target)
 	if err != nil {
 		return err
+	}
+
+	enableSandbox := target.SandboxMode || a.isSandboxEnabled()
+	if enableSandbox {
+		if err := a.initSandbox(ctx, true); err != nil {
+			return err
+		}
+		defer a.shutdownSandbox(ctx)
 	}
 
 	a.sessionMu.Lock()
@@ -1265,6 +1276,9 @@ func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumbe
 		LastHeartbeatAt:    now,
 		UpdatedAt:          now,
 	}
+	if enableSandbox {
+		session.SandboxMode = true
+	}
 	sessions = upsertSession(sessions, session)
 	if err := a.state.SaveSessions(sessions); err != nil {
 		return err
@@ -1274,7 +1288,12 @@ func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumbe
 	fmt.Fprintf(a.stdout, "note: this is a one-off session — the repository was not added to watched targets\n")
 
 	// Run the session synchronously so the CLI blocks until completion.
-	result := issuerunner.RunIssueSession(ctx, a.env, a.state, issueTracker, target, ghIssue, session)
+	var result state.Session
+	if session.SandboxMode && a.sandboxManager != nil {
+		result = a.runSandboxSession(ctx, target, ghIssue, session)
+	} else {
+		result = issuerunner.RunIssueSession(ctx, a.env, a.state, issueTracker, target, ghIssue, session)
+	}
 
 	sessions, err = a.state.LoadSessions()
 	if err != nil {
@@ -7160,6 +7179,9 @@ func (a *App) runSandboxSession(ctx context.Context, target state.WatchTarget, i
 		}
 	}
 
+	homeDir, _ := os.UserHomeDir()
+	mounts := sandboxConfigMounts(homeDir, a.state)
+
 	sbxSession, err := a.sandboxManager.Provision(ctx, sandbox.SessionConfig{
 		Repository:   target.Repo,
 		IssueNumber:  issue.Number,
@@ -7170,6 +7192,7 @@ func (a *App) runSandboxSession(ctx context.Context, target state.WatchTarget, i
 		MemoryLimit:  firstNonEmpty(config.SandboxMemoryLimit, sandbox.DefaultMemoryLimit),
 		CPUs:         firstNonEmpty(config.SandboxCPUs, sandbox.DefaultCPUs),
 		EnableDinD:   true,
+		Mounts:       mounts,
 	})
 	if err != nil {
 		session.Status = state.SessionStatusFailed
@@ -7212,6 +7235,33 @@ func (a *App) runSandboxSession(ctx context.Context, target state.WatchTarget, i
 	return result
 }
 
+func sandboxConfigMounts(homeDir string, store *state.Store) []container.Mount {
+	var mounts []container.Mount
+
+	addMount := func(source string, target string, readOnly bool) {
+		if strings.TrimSpace(source) == "" || strings.TrimSpace(target) == "" {
+			return
+		}
+		if _, err := os.Stat(source); err != nil {
+			return
+		}
+		mounts = append(mounts, container.Mount{Source: source, Target: target, ReadOnly: readOnly})
+	}
+
+	addMount(store.CodexHome(), "/root/.codex", false)
+	addMount(store.ClaudeHome(), "/root/.claude", false)
+	addMount(store.GeminiHome(), "/root/.gemini", false)
+
+	if homeDir != "" {
+		addMount(filepath.Join(homeDir, ".gitconfig"), "/root/.gitconfig", true)
+		addMount(filepath.Join(homeDir, ".git-credentials"), "/root/.git-credentials", true)
+		addMount(filepath.Join(homeDir, ".config", "git"), "/root/.config/git", true)
+		addMount(filepath.Join(homeDir, ".ssh", "known_hosts"), "/root/.ssh/known_hosts", true)
+	}
+
+	return mounts
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, v := range values {
 		if strings.TrimSpace(v) != "" {
@@ -7221,15 +7271,18 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-// initSandboxIfEnabled checks whether sandbox mode is enabled in the service
-// config and initializes the sandbox manager, reverse proxy, and stale session
-// reconciler when it is.
-func (a *App) initSandboxIfEnabled(ctx context.Context) error {
+// initSandbox checks whether sandbox mode is enabled in the service config or
+// was explicitly requested, then initializes the sandbox manager, reverse
+// proxy, and stale session reconciler when needed.
+func (a *App) initSandbox(ctx context.Context, force bool) error {
+	if a.sandboxManager != nil {
+		return nil
+	}
 	config, err := a.state.LoadServiceConfig()
 	if err != nil {
 		return fmt.Errorf("load service config for sandbox: %w", err)
 	}
-	if !config.IsSandboxEnabled() {
+	if !force && !config.IsSandboxEnabled() {
 		return nil
 	}
 
@@ -7248,6 +7301,13 @@ func (a *App) initSandboxIfEnabled(ctx context.Context) error {
 		a.logger.Warn("sandbox stale reconciliation failed", "err", err)
 	}
 	return nil
+}
+
+// initSandboxIfEnabled checks whether sandbox mode is enabled in the service
+// config and initializes the sandbox manager, reverse proxy, and stale session
+// reconciler when it is.
+func (a *App) initSandboxIfEnabled(ctx context.Context) error {
+	return a.initSandbox(ctx, false)
 }
 
 // shutdownSandbox tears down all active sandbox sessions and stops the proxy.

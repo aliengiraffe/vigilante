@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# Stage 1: Build the gh-sandbox mirror binary.
+# Stage 1: Build the Vigilante binaries.
 FROM golang:1.25-bookworm AS builder
 
 WORKDIR /src
@@ -9,15 +9,19 @@ RUN go mod download
 COPY . .
 
 RUN CGO_ENABLED=0 go build -o /gh-sandbox ./cmd/gh-sandbox
+RUN CGO_ENABLED=0 go build -o /vigilante ./cmd/vigilante
 
 # Stage 2: Sandbox runtime image.
 FROM debian:bookworm-slim
 
-# Install git, ssh, and Docker CLI for Docker-in-Docker support.
+# Install git, ssh, Docker CLI, Node.js, and npm for coding-agent execution.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         git \
+        gnupg \
+        nodejs \
+        npm \
         openssh-client \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
@@ -27,16 +31,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update && apt-get install -y --no-install-recommends \
         docker-ce-cli \
         docker-compose-plugin \
+    && npm install -g @openai/codex \
     && rm -rf /var/lib/apt/lists/*
 
 # Install the gh-sandbox binary as the gh CLI replacement.
 COPY --from=builder /gh-sandbox /usr/local/bin/gh
+COPY --from=builder /vigilante /usr/local/bin/vigilante
 
 # Create directories for mounted credentials and workspace.
-RUN mkdir -p /etc/vigilante/ssh /workspace
+RUN mkdir -p /etc/vigilante/ssh /workspace /root/.ssh
 
 # Configure git to use the ephemeral SSH key when present.
 RUN git config --system core.sshCommand \
     "ssh -i /etc/vigilante/ssh/id_ed25519 -o StrictHostKeyChecking=no"
 
 WORKDIR /workspace
+
+# Keep the sandbox available for docker exec-based agent sessions.
+CMD ["sleep", "infinity"]

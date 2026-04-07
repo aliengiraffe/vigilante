@@ -17,6 +17,7 @@ import (
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
 	"github.com/nicobistolfi/vigilante/internal/logtime"
 	"github.com/nicobistolfi/vigilante/internal/provider"
+	"github.com/nicobistolfi/vigilante/internal/sandbox/container"
 	"github.com/nicobistolfi/vigilante/internal/state"
 	"github.com/nicobistolfi/vigilante/internal/telemetry"
 )
@@ -140,10 +141,10 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		appendSessionLog(logPath, "issue preflight invocation build failed", session, err.Error())
 		return session
 	}
-	appendSessionLog(logPath, "issue preflight invocation starting", session, formatInvocationDebug(preflightInvocation))
+	appendSessionLog(logPath, "issue preflight invocation starting", session, formatInvocationDebug(providerInvocationForExecution(target, session, preflightInvocation)))
 	writeLifecycleEvent(logWriter, "preflight invocation starting")
 	preflightStart := time.Now()
-	preflightOutput, err := runStreaming(ctx, env.Runner, preflightInvocation.Dir, logWriter, preflightInvocation.Name, preflightInvocation.Args...)
+	preflightOutput, err := runProviderInvocationStreaming(ctx, env.Runner, target, session, preflightInvocation, logWriter)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 			session.Status = state.SessionStatusFailed
@@ -188,10 +189,10 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		appendSessionLog(logPath, "issue invocation build failed", session, err.Error())
 		return session
 	}
-	appendSessionLog(logPath, "issue invocation starting", session, formatInvocationDebug(invocation))
+	appendSessionLog(logPath, "issue invocation starting", session, formatInvocationDebug(providerInvocationForExecution(target, session, invocation)))
 	writeLifecycleEvent(logWriter, "implementation invocation starting")
 	invocationStart := time.Now()
-	output, err := runStreaming(ctx, env.Runner, invocation.Dir, logWriter, invocation.Name, invocation.Args...)
+	output, err := runProviderInvocationStreaming(ctx, env.Runner, target, session, invocation, logWriter)
 	session.EndedAt = time.Now().UTC().Format(time.RFC3339)
 	session.LastHeartbeatAt = session.EndedAt
 	session.UpdatedAt = session.EndedAt
@@ -260,6 +261,39 @@ func fallbackSessionText(value string, fallback string) string {
 	return value
 }
 
+func runProviderInvocation(ctx context.Context, runner environment.Runner, target state.WatchTarget, session state.Session, invocation provider.Invocation) (string, error) {
+	effective := providerInvocationForExecution(target, session, invocation)
+	return runner.Run(ctx, effective.Dir, effective.Name, effective.Args...)
+}
+
+func runProviderInvocationStreaming(ctx context.Context, runner environment.Runner, target state.WatchTarget, session state.Session, invocation provider.Invocation, w io.Writer) (string, error) {
+	effective := providerInvocationForExecution(target, session, invocation)
+	return runStreaming(ctx, runner, effective.Dir, w, effective.Name, effective.Args...)
+}
+
+func providerInvocationForExecution(target state.WatchTarget, session state.Session, invocation provider.Invocation) provider.Invocation {
+	if session.SandboxMode && strings.TrimSpace(session.SandboxContainerName) != "" {
+		return sandboxInvocation(target, session, invocation)
+	}
+	return invocation
+}
+
+func sandboxInvocation(target state.WatchTarget, session state.Session, invocation provider.Invocation) provider.Invocation {
+	containerPath := container.ContainerRepoPathDefault
+	args := make([]string, 0, len(invocation.Args))
+	for _, arg := range invocation.Args {
+		updated := strings.ReplaceAll(arg, session.WorktreePath, containerPath)
+		updated = strings.ReplaceAll(updated, target.Path, containerPath)
+		args = append(args, updated)
+	}
+	execArgs := []string{"exec", "-w", containerPath, session.SandboxContainerName, invocation.Name}
+	execArgs = append(execArgs, args...)
+	return provider.Invocation{
+		Name: "docker",
+		Args: execArgs,
+	}
+}
+
 func RunConflictResolutionSession(ctx context.Context, env *environment.Environment, store *state.Store, issueTracker backend.IssueTracker, target state.WatchTarget, session state.Session, pr ghcli.PullRequest) error {
 	repoSlug := session.Repo
 	if repoSlug == "" {
@@ -295,8 +329,9 @@ func RunConflictResolutionSession(ctx context.Context, env *environment.Environm
 		appendSessionLog(logPath, "conflict resolution invocation build failed", session, err.Error())
 		return err
 	}
+	appendSessionLog(logPath, "conflict resolution invocation starting", session, formatInvocationDebug(providerInvocationForExecution(target, session, invocation)))
 	writeLifecycleEvent(logWriter, "conflict resolution invocation starting")
-	output, err := runStreaming(ctx, env.Runner, invocation.Dir, logWriter, invocation.Name, invocation.Args...)
+	output, err := runProviderInvocationStreaming(ctx, env.Runner, target, session, invocation, logWriter)
 	if err != nil {
 		writeLifecycleEvent(logWriter, fmt.Sprintf("conflict resolution failed reason=%s", describeExitError(err)))
 		appendSessionLog(logPath, "conflict resolution failed", session, combineLogDetails(output, err.Error()))
@@ -357,8 +392,9 @@ func RunCIRemediationSession(ctx context.Context, env *environment.Environment, 
 		appendSessionLog(logPath, "ci remediation invocation build failed", session, err.Error())
 		return err
 	}
+	appendSessionLog(logPath, "ci remediation invocation starting", session, formatInvocationDebug(providerInvocationForExecution(target, session, invocation)))
 	writeLifecycleEvent(logWriter, "ci remediation invocation starting")
-	output, err := runStreaming(ctx, env.Runner, invocation.Dir, logWriter, invocation.Name, invocation.Args...)
+	output, err := runProviderInvocationStreaming(ctx, env.Runner, target, session, invocation, logWriter)
 	if err != nil {
 		writeLifecycleEvent(logWriter, fmt.Sprintf("ci remediation failed reason=%s", describeExitError(err)))
 		appendSessionLog(logPath, "ci remediation failed", session, combineLogDetails(output, err.Error()))

@@ -44,6 +44,16 @@ type Config struct {
 
 	// EnableDinD enables Docker-in-Docker capability via --privileged.
 	EnableDinD bool
+
+	// Mounts are additional bind mounts to add to the container.
+	Mounts []Mount
+}
+
+// Mount describes an additional bind mount for the sandbox container.
+type Mount struct {
+	Source   string
+	Target   string
+	ReadOnly bool
 }
 
 // ContainerRepoPathDefault is the default mount point for the repo inside the container.
@@ -65,6 +75,17 @@ func Create(ctx context.Context, runner environment.Runner, cfg Config) (string,
 
 	if cfg.SSHKeyPath != "" {
 		args = append(args, "-v", cfg.SSHKeyPath+":/etc/vigilante/ssh/id_ed25519:ro")
+	}
+
+	for _, mount := range cfg.Mounts {
+		if strings.TrimSpace(mount.Source) == "" || strings.TrimSpace(mount.Target) == "" {
+			continue
+		}
+		spec := mount.Source + ":" + mount.Target
+		if mount.ReadOnly {
+			spec += ":ro"
+		}
+		args = append(args, "-v", spec)
 	}
 
 	for k, v := range cfg.EnvVars {

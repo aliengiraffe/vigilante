@@ -46,6 +46,7 @@ type SessionConfig struct {
 	MemoryLimit  string
 	CPUs         string
 	EnableDinD   bool
+	Mounts       []container.Mount
 }
 
 // Session represents an active sandbox session.
@@ -187,6 +188,7 @@ func (m *Manager) Provision(ctx context.Context, cfg SessionConfig) (*Session, e
 		MemoryLimit: memLimit,
 		CPUs:        cpus,
 		EnableDinD:  cfg.EnableDinD,
+		Mounts:      cfg.Mounts,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create sandbox container: %w", err)

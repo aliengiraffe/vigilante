@@ -138,6 +138,77 @@ func TestRunIssueSessionSuccessWithPR(t *testing.T) {
 	}
 }
 
+func TestRunIssueSessionSuccessInSandboxUsesDockerExec(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	baseRunner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"codex --version": "codex 0.114.0",
+			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Vigilante Session Start",
+				Emoji:      "🧢",
+				Percent:    20,
+				ETAMinutes: 25,
+				Items: []string{
+					"Vigilante launched this implementation session in `/tmp/worktree`.",
+					"Branch: `vigilante/issue-7`.",
+					"Current stage: handing the issue off to the configured coding agent (`Codex`) for investigation and implementation.",
+					"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
+				},
+				Tagline: "Make it simple, but significant.",
+			}): "ok",
+			testutil.Key("docker", "exec", "-w", "/workspace", "vigilante-sandbox-sbx_test", "codex", "exec", "--cd", "/workspace", "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePreflightPrompt(
+				state.WatchTarget{Path: "/workspace", Repo: "owner/repo"},
+				ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
+				state.Session{WorktreePath: "/workspace", Branch: "vigilante/issue-7", Provider: "codex", SandboxMode: true, SandboxContainerName: "vigilante-sandbox-sbx_test"},
+			)): "baseline ok",
+			testutil.Key("docker", "exec", "-w", "/workspace", "vigilante-sandbox-sbx_test", "codex", "exec", "--cd", "/workspace", "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePrompt(
+				state.WatchTarget{Path: "/workspace", Repo: "owner/repo"},
+				ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
+				state.Session{WorktreePath: "/workspace", Branch: "vigilante/issue-7", Provider: "codex", SandboxMode: true, SandboxContainerName: "vigilante-sandbox-sbx_test"},
+			)): "done",
+		},
+	}
+	store := state.NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	env := &environment.Environment{
+		OS: "darwin",
+		Runner: environment.LoggingRunner{
+			Base:      baseRunner,
+			AccessLog: store.AppendAccessLogEntry,
+		},
+	}
+	session := state.Session{
+		RepoPath:             "/tmp/repo",
+		IssueNumber:          7,
+		WorktreePath:         "/tmp/worktree",
+		Branch:               "vigilante/issue-7",
+		Status:               state.SessionStatusRunning,
+		SandboxMode:          true,
+		SandboxContainerName: "vigilante-sandbox-sbx_test",
+	}
+	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	if got.Status != state.SessionStatusSuccess {
+		t.Fatalf("unexpected status: %#v", got)
+	}
+	data, err := os.ReadFile(store.SessionLogPath("owner/repo", 7))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, "cmd=docker") {
+		t.Fatalf("expected sandbox session log to record docker exec command, got %s", text)
+	}
+	if !strings.Contains(text, "arg[0]=exec") || !strings.Contains(text, "arg[4]=codex") {
+		t.Fatalf("expected sandbox docker exec args in session log, got %s", text)
+	}
+	if !strings.Contains(text, "baseline ok") || !strings.Contains(text, "done") {
+		t.Fatalf("expected sandbox command output in session log, got %s", text)
+	}
+}
+
 func TestRunIssueSessionStartCommentIncludesReusedRemoteBranchContext(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
