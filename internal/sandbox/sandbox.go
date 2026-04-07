@@ -8,8 +8,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -62,6 +64,22 @@ type Session struct {
 	Status        string
 	CreatedAt     time.Time
 	ExpiresAt     time.Time
+}
+
+// proxyPort extracts the port number from an address string like "127.0.0.1:9821".
+func proxyPort(addr string) int {
+	if addr == "" {
+		return 0
+	}
+	_, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 0
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return 0
+	}
+	return port
 }
 
 // Manager orchestrates sandbox session lifecycle.
@@ -189,6 +207,7 @@ func (m *Manager) Provision(ctx context.Context, cfg SessionConfig) (*Session, e
 		ContainerName: containerName,
 		ContainerID:   containerID,
 		SandboxToken:  sandboxToken,
+		ProxyPort:     proxyPort(proxyAddr),
 		SSHKeyDir:     sshDir,
 		SSHPublicKey:  pubKeyStr,
 		Status:        "provisioned",

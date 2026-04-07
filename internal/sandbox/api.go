@@ -105,6 +105,7 @@ func (m *Manager) handleProvision(w http.ResponseWriter, r *http.Request) {
 		SessionID:    sess.ID,
 		ContainerID:  sess.ContainerID,
 		SandboxToken: sess.SandboxToken,
+		ProxyPort:    sess.ProxyPort,
 		SSHPublicKey: sess.SSHPublicKey,
 		DeployKeyID:  sess.DeployKeyID,
 		ExpiresAt:    sess.ExpiresAt.Format(time.RFC3339),

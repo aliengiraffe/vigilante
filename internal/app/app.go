@@ -152,6 +152,12 @@ type watchIssueOptions struct {
 	issueStage   string
 }
 
+type watchSandboxOptions struct {
+	sandboxFlagSet bool
+	sandboxMode    bool
+	sandboxImage   string
+}
+
 func (f *stringListFlag) String() string {
 	return strings.Join(*f, ",")
 }
@@ -635,7 +641,7 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 	case "watch":
 		fs := flag.NewFlagSet("watch", flag.ContinueOnError)
 		configureFlagSet(fs, func(w io.Writer) {
-			fmt.Fprintln(w, "usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] [--fork [--fork-owner value]] <path>")
+			fmt.Fprintln(w, "usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] [--fork [--fork-owner value]] [--sandbox [--sandbox-image value]] <path>")
 			fmt.Fprintln(w)
 			fmt.Fprintln(w, "Register a local repository for issue monitoring.")
 			fmt.Fprintln(w)
@@ -653,6 +659,8 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		trackDefaultBranch := fs.Bool("track-default-branch", false, "track the repository default branch automatically")
 		forkMode := fs.Bool("fork", false, "push implementation branches to a GitHub fork and open PRs back to the watched repository")
 		forkOwner := fs.String("fork-owner", "", "GitHub owner that should host the fork (defaults to the authenticated gh user)")
+		sandboxMode := fs.Bool("sandbox", false, "run coding-agent sessions inside isolated Docker containers")
+		sandboxImage := fs.String("sandbox-image", "", "Docker image for sandbox containers (defaults to vigilante-sandbox:latest)")
 		if err := parseFlagSet(fs, args[1:], a.stdout); err != nil {
 			if errors.Is(err, errHelpHandled) {
 				return nil
@@ -660,10 +668,11 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 			return err
 		}
 		if fs.NArg() != 1 {
-			return errors.New("usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] [--fork [--fork-owner value]] <path>")
+			return errors.New("usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] [--fork [--fork-owner value]] [--sandbox [--sandbox-image value]] <path>")
 		}
 		parsedMaxParallel := unsetMaxParallel
 		branchOptions := watchBranchOptions{}
+		sbxOptions := watchSandboxOptions{sandboxImage: strings.TrimSpace(*sandboxImage)}
 		fs.Visit(func(f *flag.Flag) {
 			switch f.Name {
 			case "max-parallel":
@@ -676,6 +685,9 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 				branchOptions.forkFlagSet = true
 			case "fork-owner":
 				branchOptions.forkFlagSet = true
+			case "sandbox":
+				sbxOptions.sandboxFlagSet = true
+				sbxOptions.sandboxMode = *sandboxMode
 			}
 		})
 		branchOptions.pinnedBranch = strings.TrimSpace(*branch)
@@ -691,7 +703,7 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		return a.watchWithOptions(ctx, fs.Arg(0), labels, *assignee, parsedMaxParallel, *selectedProvider, watchIssueOptions{
 			issueBackend: *issueBackend,
 			issueStage:   *issueStage,
-		}, branchOptions)
+		}, branchOptions, sbxOptions)
 	case "unwatch":
 		if len(args) != 2 {
 			return errors.New("usage: vigilante unwatch <path>")
@@ -858,7 +870,7 @@ func (a *App) runCloneCommand(ctx context.Context, args []string) error {
 		return fmt.Errorf("clone succeeded but automatic watch-target registration failed for %s: load watch targets: %w", clonePath, err)
 	}
 	alreadyWatched := findWatchTargetByPath(targets, clonePath).Path != ""
-	if err := a.watchWithOptions(ctx, clonePath, nil, "", unsetMaxParallel, "", watchIssueOptions{}, watchBranchOptions{}); err != nil {
+	if err := a.watchWithOptions(ctx, clonePath, nil, "", unsetMaxParallel, "", watchIssueOptions{}, watchBranchOptions{}, watchSandboxOptions{}); err != nil {
 		return fmt.Errorf("clone succeeded but automatic watch-target registration failed for %s: %w", clonePath, err)
 	}
 	if alreadyWatched {
@@ -936,7 +948,7 @@ func (a *App) runCloneFork(ctx context.Context, args []string) error {
 		return fmt.Errorf("clone succeeded but automatic watch-target registration failed for %s: load watch targets: %w", clonePath, err)
 	}
 	alreadyWatched := findWatchTargetByPath(targets, clonePath).Path != ""
-	if err := a.watchWithOptions(ctx, clonePath, nil, "", unsetMaxParallel, "", watchIssueOptions{}, branchOptions); err != nil {
+	if err := a.watchWithOptions(ctx, clonePath, nil, "", unsetMaxParallel, "", watchIssueOptions{}, branchOptions, watchSandboxOptions{}); err != nil {
 		return fmt.Errorf("clone succeeded but automatic watch-target registration failed for %s: %w", clonePath, err)
 	}
 
@@ -1585,10 +1597,10 @@ func (a *App) Watch(ctx context.Context, rawPath string, labels []string, assign
 }
 
 func (a *App) WatchWithProvider(ctx context.Context, rawPath string, labels []string, assignee string, maxParallel int, providerID string) error {
-	return a.watchWithOptions(ctx, rawPath, labels, assignee, maxParallel, providerID, watchIssueOptions{}, watchBranchOptions{})
+	return a.watchWithOptions(ctx, rawPath, labels, assignee, maxParallel, providerID, watchIssueOptions{}, watchBranchOptions{}, watchSandboxOptions{})
 }
 
-func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []string, assignee string, maxParallel int, providerID string, issueOptions watchIssueOptions, branchOptions watchBranchOptions) error {
+func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []string, assignee string, maxParallel int, providerID string, issueOptions watchIssueOptions, branchOptions watchBranchOptions, sandboxOptions watchSandboxOptions) error {
 	a.logger.Info("watch start", "raw_path", rawPath, "assignee", assignee, "max_parallel", maxParallel)
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
@@ -1712,6 +1724,12 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []str
 				}
 				targets[i].Branch = resolvedBranch
 			}
+			if sandboxOptions.sandboxFlagSet {
+				targets[i].SandboxMode = sandboxOptions.sandboxMode
+			}
+			if sandboxOptions.sandboxImage != "" {
+				targets[i].SandboxImage = sandboxOptions.sandboxImage
+			}
 			updated = true
 			break
 		}
@@ -1733,6 +1751,8 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []str
 			AddedAt:        a.clock().Format(time.RFC3339),
 			IssueBackend:   effectiveIssueBackend,
 			IssueStage:     effectiveIssueStage,
+			SandboxMode:    sandboxOptions.sandboxMode,
+			SandboxImage:   sandboxOptions.sandboxImage,
 		}
 		if providerID != "" {
 			target.Provider = providerID
@@ -7133,11 +7153,19 @@ func (a *App) dispatchPackageRemediation(ctx context.Context, target state.Watch
 func (a *App) runSandboxSession(ctx context.Context, target state.WatchTarget, issue ghcli.Issue, session state.Session) state.Session {
 	config, _ := a.state.LoadServiceConfig()
 
+	var ttl time.Duration
+	if raw := strings.TrimSpace(config.SandboxDefaultTTL); raw != "" {
+		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
+			ttl = parsed
+		}
+	}
+
 	sbxSession, err := a.sandboxManager.Provision(ctx, sandbox.SessionConfig{
 		Repository:   target.Repo,
 		IssueNumber:  issue.Number,
 		Provider:     session.Provider,
 		WorktreePath: session.WorktreePath,
+		TTL:          ttl,
 		Image:        firstNonEmpty(target.SandboxImage, config.SandboxImage, sandbox.DefaultImage),
 		MemoryLimit:  firstNonEmpty(config.SandboxMemoryLimit, sandbox.DefaultMemoryLimit),
 		CPUs:         firstNonEmpty(config.SandboxCPUs, sandbox.DefaultCPUs),
