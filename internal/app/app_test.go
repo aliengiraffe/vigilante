@@ -1008,14 +1008,26 @@ func TestDesiredSessionLabels(t *testing.T) {
 			wantIntervention: labelNeedsHumanInput,
 		},
 		{
-			name:             "success ready for review",
+			name:             "success without PR blocked",
 			session:          state.Session{Status: state.SessionStatusSuccess},
+			wantState:        labelBlocked,
+			wantIntervention: "",
+		},
+		{
+			name:             "success with PR ready for review",
+			session:          state.Session{Status: state.SessionStatusSuccess, PullRequestNumber: 10},
 			wantState:        labelReadyForReview,
 			wantIntervention: "",
 		},
 		{
+			name:             "incomplete blocked",
+			session:          state.Session{Status: state.SessionStatusIncomplete, IncompleteReason: "commits_without_pr"},
+			wantState:        labelBlocked,
+			wantIntervention: "",
+		},
+		{
 			name:    "success awaiting validation",
-			session: state.Session{Status: state.SessionStatusSuccess},
+			session: state.Session{Status: state.SessionStatusSuccess, PullRequestNumber: 17},
 			pr: &ghcli.PullRequest{
 				Number:           17,
 				ReviewDecision:   "APPROVED",
@@ -3336,8 +3348,8 @@ func TestRedispatchSessionRunningIssue(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("unexpected sessions: %#v", sessions)
 	}
-	if sessions[0].Status != state.SessionStatusSuccess || sessions[0].Branch != branch {
-		t.Fatalf("expected fresh redispatched session, got: %#v", sessions[0])
+	if sessions[0].Status != state.SessionStatusIncomplete || sessions[0].Branch != branch {
+		t.Fatalf("expected fresh redispatched session (incomplete without PR), got: %#v", sessions[0])
 	}
 	if got := stdout.String(); !strings.Contains(got, "redispatched owner/repo issue #44 in "+worktreePath) {
 		t.Fatalf("unexpected output: %s", got)
@@ -3582,8 +3594,8 @@ func TestScanOnceProcessesGitHubCommentResumeRequest(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("unexpected sessions: %#v", sessions)
 	}
-	if sessions[0].Status != state.SessionStatusSuccess {
-		t.Fatalf("expected resumed session to be successful: %#v", sessions[0])
+	if sessions[0].Status != state.SessionStatusIncomplete {
+		t.Fatalf("expected resumed session to complete (incomplete without PR): %#v", sessions[0])
 	}
 	if sessions[0].LastResumeCommentID != 101 || sessions[0].LastResumeSource != "comment" {
 		t.Fatalf("expected claimed comment metadata to be persisted: %#v", sessions[0])
@@ -5125,7 +5137,7 @@ func TestScanOnceAutoRecoversStaleBlockedMaintenanceSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	if sessions[0].Status != state.SessionStatusSuccess {
-		t.Fatalf("expected session to recover successfully: %#v", sessions[0])
+		t.Fatalf("expected session to recover to success with tracked PR: %#v", sessions[0])
 	}
 	if sessions[0].RecoveredAt == "" || sessions[0].BlockedStage != "" || sessions[0].BlockedReason.Kind != "" {
 		t.Fatalf("expected blocked state to be cleared after auto recovery: %#v", sessions[0])
@@ -5194,8 +5206,8 @@ func TestScanOnceSelectsEligibleIssueAndPersistsSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sessions) != 1 || sessions[0].Status != state.SessionStatusSuccess {
-		t.Fatalf("unexpected sessions: %#v", sessions)
+	if len(sessions) != 1 || sessions[0].Status != state.SessionStatusIncomplete {
+		t.Fatalf("unexpected sessions (expected incomplete without PR): %#v", sessions)
 	}
 }
 
@@ -5789,8 +5801,8 @@ func TestScanOnceMaintainedIssueDoesNotConsumeOnlyDispatchSlot(t *testing.T) {
 	if sessions[0].IssueNumber != 1 || sessions[0].PullRequestState != "OPEN" {
 		t.Fatalf("expected issue #1 to stay under maintenance: %#v", sessions[0])
 	}
-	if sessions[1].IssueNumber != 2 || sessions[1].Status != state.SessionStatusSuccess {
-		t.Fatalf("expected issue #2 to complete a new session: %#v", sessions[1])
+	if sessions[1].IssueNumber != 2 || sessions[1].Status != state.SessionStatusIncomplete {
+		t.Fatalf("expected issue #2 to complete a new session (incomplete without PR): %#v", sessions[1])
 	}
 }
 
@@ -5975,8 +5987,8 @@ func TestScanOnceWithMaxParallelOnePreservesSerialBehavior(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sessions) != 1 || sessions[0].IssueNumber != 1 || sessions[0].Status != state.SessionStatusSuccess {
-		t.Fatalf("unexpected sessions: %#v", sessions)
+	if len(sessions) != 1 || sessions[0].IssueNumber != 1 || sessions[0].Status != state.SessionStatusIncomplete {
+		t.Fatalf("unexpected sessions (expected incomplete without PR): %#v", sessions)
 	}
 }
 
@@ -6038,8 +6050,8 @@ func TestScanOnceWithUnlimitedMaxParallelStartsAllEligibleIssues(t *testing.T) {
 		t.Fatalf("unexpected sessions: %#v", sessions)
 	}
 	for _, session := range sessions {
-		if session.Status != state.SessionStatusSuccess {
-			t.Fatalf("expected successful sessions: %#v", sessions)
+		if session.Status != state.SessionStatusIncomplete {
+			t.Fatalf("expected completed sessions (incomplete without PR): %#v", sessions)
 		}
 	}
 }
@@ -6097,8 +6109,8 @@ func TestScanOnceStartsMultipleIssuesUpToConfiguredLimit(t *testing.T) {
 		t.Fatalf("unexpected sessions: %#v", sessions)
 	}
 	for _, session := range sessions {
-		if session.Status != state.SessionStatusSuccess {
-			t.Fatalf("expected successful sessions: %#v", sessions)
+		if session.Status != state.SessionStatusIncomplete {
+			t.Fatalf("expected completed sessions (incomplete without PR): %#v", sessions)
 		}
 	}
 }
@@ -6241,8 +6253,8 @@ func TestScanOnceBlocksFailedIssueDispatchAndContinuesToNextIssue(t *testing.T) 
 	if sessions[0].LastDispatchFailureFingerprint == "" || sessions[0].LastDispatchFailureCommentedAt == "" {
 		t.Fatalf("expected dispatch failure comment tracking: %#v", sessions[0])
 	}
-	if sessions[1].IssueNumber != 2 || sessions[1].Status != state.SessionStatusSuccess {
-		t.Fatalf("expected second issue to succeed, got: %#v", sessions[1])
+	if sessions[1].IssueNumber != 2 || sessions[1].Status != state.SessionStatusIncomplete {
+		t.Fatalf("expected second issue to complete (incomplete without PR), got: %#v", sessions[1])
 	}
 }
 
@@ -6544,8 +6556,8 @@ func TestScanOnceContinuesWhenOneRepositoryScanFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sessions) != 1 || sessions[0].Repo != "owner/repo-b" || sessions[0].Status != state.SessionStatusSuccess {
-		t.Fatalf("unexpected sessions: %#v", sessions)
+	if len(sessions) != 1 || sessions[0].Repo != "owner/repo-b" || sessions[0].Status != state.SessionStatusIncomplete {
+		t.Fatalf("unexpected sessions (expected incomplete without PR): %#v", sessions)
 	}
 }
 
@@ -8375,8 +8387,8 @@ func TestScanOnceAutoRestartsStaleSessionAfterDelay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sessions) != 1 || sessions[0].Status != state.SessionStatusSuccess {
-		t.Fatalf("unexpected sessions: %#v", sessions)
+	if len(sessions) != 1 || sessions[0].Status != state.SessionStatusIncomplete {
+		t.Fatalf("unexpected sessions (expected incomplete without PR): %#v", sessions)
 	}
 	if sessions[0].StaleAutoRestartAttempts != 1 {
 		t.Fatalf("expected one persisted auto-restart attempt, got: %#v", sessions[0])
@@ -8552,7 +8564,7 @@ func TestScanOnceRecoversStalledSessionIntoPRMaintenance(t *testing.T) {
 		t.Fatalf("unexpected sessions: %#v", sessions)
 	}
 	if sessions[0].Status != state.SessionStatusSuccess {
-		t.Fatalf("expected success session after recovery: %#v", sessions[0])
+		t.Fatalf("expected success session after recovery with tracked PR: %#v", sessions[0])
 	}
 	if sessions[0].PullRequestNumber != 31 || sessions[0].LastMaintainedAt == "" {
 		t.Fatalf("expected PR maintenance tracking after recovery: %#v", sessions[0])

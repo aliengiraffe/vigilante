@@ -467,6 +467,8 @@ func (a *App) emitSessionTransition(previous state.SessionStatus, session state.
 		properties["transition"] = "resuming"
 	case state.SessionStatusSuccess:
 		properties["transition"] = "succeeded"
+	case state.SessionStatusIncomplete:
+		properties["transition"] = "incomplete"
 	case state.SessionStatusFailed:
 		properties["transition"] = "failed"
 	case state.SessionStatusClosed:
@@ -1276,6 +1278,9 @@ func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumbe
 	case state.SessionStatusSuccess:
 		fmt.Fprintf(a.stdout, "session completed successfully for %s issue #%d\n", info.Repo, issueNumber)
 		return nil
+	case state.SessionStatusIncomplete:
+		fmt.Fprintf(a.stdout, "session incomplete for %s issue #%d: %s (no PR created)\n", info.Repo, issueNumber, result.IncompleteReason)
+		return fmt.Errorf("session incomplete: %s", result.IncompleteReason)
 	case state.SessionStatusBlocked:
 		fmt.Fprintf(a.stdout, "session blocked for %s issue #%d: %s\n", info.Repo, issueNumber, result.ResumeHint)
 		return fmt.Errorf("session blocked: %s", result.BlockedReason.Summary)
@@ -1964,6 +1969,10 @@ func (a *App) ScanOnce(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		sessions, err = a.rerunIncompleteSessions(ctx, sessions, issueDetailsCache)
+		if err != nil {
+			return err
+		}
 		sessions, err = a.processGitHubResumeRequests(ctx, sessions, issueDetailsCache)
 		if err != nil {
 			return err
@@ -2529,13 +2538,13 @@ func (a *App) cleanupClosedIssueSessions(ctx context.Context, sessions []state.S
 	for i := range sessions {
 		session := &sessions[i]
 		sessionCtx := withSessionAccessLogContext(ctx, "maintenance", *session)
-		if session.Status != state.SessionStatusSuccess || session.CleanupCompletedAt != "" || session.MonitoringStoppedAt != "" {
+		if (session.Status != state.SessionStatusSuccess && session.Status != state.SessionStatusIncomplete) || session.CleanupCompletedAt != "" || session.MonitoringStoppedAt != "" {
 			continue
 		}
 		if session.PullRequestMaintenanceInFlight {
 			continue
 		}
-		if shouldDelaySuccessfulSessionPoll(*session, a.clock()) {
+		if session.Status == state.SessionStatusSuccess && shouldDelaySuccessfulSessionPoll(*session, a.clock()) {
 			continue
 		}
 
@@ -3683,6 +3692,57 @@ func (a *App) CleanupSession(ctx context.Context, repo string, issue int, source
 	return nil
 }
 
+func (a *App) rerunIncompleteSessions(ctx context.Context, sessions []state.Session, issueCache scanIssueDetailsCache) ([]state.Session, error) {
+	for i := range sessions {
+		session := &sessions[i]
+		if session.Status != state.SessionStatusIncomplete {
+			continue
+		}
+		if session.CleanupCompletedAt != "" || session.MonitoringStoppedAt != "" {
+			continue
+		}
+		if !issuerunner.IsRerunEligible(*session) {
+			continue
+		}
+		if strings.TrimSpace(session.WorktreePath) == "" || strings.TrimSpace(session.Branch) == "" {
+			continue
+		}
+		if _, err := os.Stat(session.WorktreePath); err != nil {
+			a.logger.Info("incomplete session worktree missing, skipping rerun", "repo", session.Repo, "issue", session.IssueNumber, "worktree", session.WorktreePath)
+			continue
+		}
+		target, ok := a.watchTargetByRepo(session.Repo)
+		if !ok {
+			continue
+		}
+		a.logger.Info("rerunning incomplete session", "repo", session.Repo, "issue", session.IssueNumber, "reason", session.IncompleteReason)
+
+		previousStatus := session.Status
+		now := a.clock().Format(time.RFC3339)
+		session.Status = state.SessionStatusRunning
+		session.StartedAt = now
+		session.EndedAt = ""
+		session.LastHeartbeatAt = now
+		session.UpdatedAt = now
+		session.ProcessID = os.Getpid()
+		session.LastError = ""
+
+		diffSummary, _ := summarizeIssueBranchDiff(ctx, a.env.Runner, session.RepoPath, effectiveSessionBaseBranch(*session, target), session.Branch)
+		session.BranchDiffSummary = diffSummary
+		session.ReusedRemoteBranch = session.Branch
+
+		a.emitSessionTransition(previousStatus, *session, "incomplete_rerun")
+
+		ghIssue := ghcli.Issue{
+			Number: session.IssueNumber,
+			Title:  session.IssueTitle,
+			URL:    session.IssueURL,
+		}
+		a.launchIssueSession(ctx, target, ghIssue, *session)
+	}
+	return sessions, nil
+}
+
 func (a *App) ResumeSession(ctx context.Context, repo string, issue int, source string) error {
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
@@ -4317,9 +4377,16 @@ func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Se
 		a.logger.Error("resume issue execution failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err, "output", summarizeText(output))
 		return err
 	}
-	session.Status = state.SessionStatusSuccess
+	signal := issuerunner.EvaluateSessionProgress(ctx, a.env.Runner, *session)
+	if signal.HasPullRequest {
+		session.Status = state.SessionStatusSuccess
+		session.IncompleteReason = ""
+	} else {
+		session.Status = state.SessionStatusIncomplete
+		session.IncompleteReason = issuerunner.ClassifyIncompleteReason(signal)
+	}
 	session.LastError = ""
-	a.logger.Info("resume issue execution succeeded", "repo", session.Repo, "issue", session.IssueNumber, "output", summarizeText(output))
+	a.logger.Info("resume issue execution completed", "repo", session.Repo, "issue", session.IssueNumber, "status", session.Status, "output", summarizeText(output))
 	return nil
 }
 
@@ -5083,7 +5150,9 @@ func markSessionBlocked(session *state.Session, stage string, blocked state.Bloc
 }
 
 func clearBlockedState(session *state.Session, now time.Time, source string) {
-	session.Status = state.SessionStatusSuccess
+	if session.Status != state.SessionStatusIncomplete {
+		session.Status = state.SessionStatusSuccess
+	}
 	session.BlockedAt = ""
 	session.BlockedReason = state.BlockedReason{}
 	session.BlockedStage = ""
@@ -5221,7 +5290,7 @@ func sessionSupportsIteration(session state.Session) bool {
 	switch session.Status {
 	case state.SessionStatusRunning, state.SessionStatusResuming:
 		return false
-	case state.SessionStatusBlocked, state.SessionStatusSuccess, state.SessionStatusFailed:
+	case state.SessionStatusBlocked, state.SessionStatusSuccess, state.SessionStatusIncomplete, state.SessionStatusFailed:
 		return true
 	case state.SessionStatusClosed:
 		return false
@@ -5545,10 +5614,15 @@ func desiredSessionLabels(session state.Session, pr *ghcli.PullRequest) (string,
 		if strings.TrimSpace(session.PullRequestMergedAt) != "" {
 			return labelDone, ""
 		}
+		if session.PullRequestNumber <= 0 {
+			return labelBlocked, ""
+		}
 		if pr != nil && shouldAwaitUserValidation(*pr) {
 			return labelAwaitingUserValidation, ""
 		}
 		return labelReadyForReview, ""
+	case state.SessionStatusIncomplete:
+		return labelBlocked, ""
 	default:
 		return "", ""
 	}

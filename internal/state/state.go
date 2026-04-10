@@ -137,12 +137,13 @@ func (c ServiceConfig) IsPackageHardeningEnabled() bool {
 type SessionStatus string
 
 const (
-	SessionStatusRunning  SessionStatus = "running"
-	SessionStatusBlocked  SessionStatus = "blocked"
-	SessionStatusResuming SessionStatus = "resuming"
-	SessionStatusSuccess  SessionStatus = "success"
-	SessionStatusFailed   SessionStatus = "failed"
-	SessionStatusClosed   SessionStatus = "closed"
+	SessionStatusRunning    SessionStatus = "running"
+	SessionStatusBlocked    SessionStatus = "blocked"
+	SessionStatusResuming   SessionStatus = "resuming"
+	SessionStatusSuccess    SessionStatus = "success"
+	SessionStatusIncomplete SessionStatus = "incomplete"
+	SessionStatusFailed     SessionStatus = "failed"
+	SessionStatusClosed     SessionStatus = "closed"
 )
 
 type BlockedReason struct {
@@ -227,6 +228,7 @@ type Session struct {
 	LastRecreateSource             string              `json:"last_recreate_source,omitempty"`
 	LastRecreateCommentID          int64               `json:"last_recreate_comment_id,omitempty"`
 	LastRecreateCommentAt          string              `json:"last_recreate_comment_at,omitempty"`
+	IncompleteReason               string              `json:"incomplete_reason,omitempty"`
 	RecreatedAsIssue               int                 `json:"recreated_as_issue,omitempty"`
 	RecreatedAsIssueURL            string              `json:"recreated_as_issue_url,omitempty"`
 	StaleAutoRestartAttempts       int                 `json:"stale_auto_restart_attempts,omitempty"`

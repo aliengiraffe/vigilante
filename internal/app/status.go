@@ -31,7 +31,7 @@ type watchedRepoStatus struct {
 }
 
 func groupSessions(sessions []state.Session, now time.Time, inactivityTimeout time.Duration) []sessionGroup {
-	var active, prTracking, issueTracking, stale, completed, failed []state.Session
+	var active, prTracking, issueTracking, incomplete, stale, completed, failed []state.Session
 
 	staleBlockedThreshold := time.Duration(staleBlockedMultiplier) * inactivityTimeout
 
@@ -54,6 +54,8 @@ func groupSessions(sessions []state.Session, now time.Time, inactivityTimeout ti
 			}
 		case state.SessionStatusSuccess:
 			completed = append(completed, s)
+		case state.SessionStatusIncomplete:
+			incomplete = append(incomplete, s)
 		case state.SessionStatusFailed:
 			failed = append(failed, s)
 		}
@@ -68,6 +70,9 @@ func groupSessions(sessions []state.Session, now time.Time, inactivityTimeout ti
 	}
 	if len(issueTracking) > 0 {
 		groups = append(groups, sessionGroup{Label: "Paused, tracking issues", Sessions: issueTracking})
+	}
+	if len(incomplete) > 0 {
+		groups = append(groups, sessionGroup{Label: "Incomplete, pending rerun", Sessions: incomplete})
 	}
 	if len(stale) > 0 {
 		groups = append(groups, sessionGroup{Label: "Stale sessions", Sessions: stale})
@@ -154,6 +159,9 @@ func formatSessionRow(s state.Session) string {
 	}
 	if s.BlockedStage != "" {
 		fmt.Fprintf(&b, ", stage %s", s.BlockedStage)
+	}
+	if s.IncompleteReason != "" {
+		fmt.Fprintf(&b, ", reason %s", s.IncompleteReason)
 	}
 	return b.String()
 }

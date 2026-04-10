@@ -75,8 +75,12 @@ func TestStartOneOffSessionSuccess(t *testing.T) {
 	}
 
 	err = app.StartOneOffSession(context.Background(), repoPath, 10, "")
-	if err != nil {
-		t.Fatal(err)
+	// Without a tracked PR the session is incomplete, which StartOneOffSession reports as an error.
+	if err == nil {
+		t.Fatal("expected error for incomplete session without PR")
+	}
+	if !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("expected incomplete error, got: %s", err)
 	}
 
 	// Verify session was saved.
@@ -87,8 +91,8 @@ func TestStartOneOffSessionSuccess(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("expected 1 session, got %d", len(sessions))
 	}
-	if sessions[0].Status != state.SessionStatusSuccess {
-		t.Fatalf("expected success, got %s", sessions[0].Status)
+	if sessions[0].Status != state.SessionStatusIncomplete {
+		t.Fatalf("expected incomplete, got %s", sessions[0].Status)
 	}
 	if sessions[0].Repo != "owner/repo" || sessions[0].IssueNumber != 10 {
 		t.Fatalf("unexpected session: %#v", sessions[0])
@@ -107,8 +111,8 @@ func TestStartOneOffSessionSuccess(t *testing.T) {
 	if !strings.Contains(output, "one-off session") {
 		t.Fatalf("expected one-off note in output, got: %s", output)
 	}
-	if !strings.Contains(output, "completed successfully") {
-		t.Fatalf("expected success message, got: %s", output)
+	if !strings.Contains(output, "incomplete") {
+		t.Fatalf("expected incomplete message, got: %s", output)
 	}
 }
 
@@ -157,8 +161,8 @@ func TestStartOneOffSessionDoesNotAddToWatchlist(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := app.StartOneOffSession(context.Background(), repoPath, 5, ""); err != nil {
-		t.Fatal(err)
+	if err := app.StartOneOffSession(context.Background(), repoPath, 5, ""); err == nil {
+		t.Fatal("expected error for incomplete session without PR")
 	}
 
 	targets, err := app.state.LoadWatchTargets()
@@ -446,8 +450,8 @@ func TestStartOneOffSessionWithCustomProvider(t *testing.T) {
 	}
 
 	err := app.StartOneOffSession(context.Background(), repoPath, 3, "claude")
-	if err != nil {
-		t.Fatal(err)
+	if err == nil {
+		t.Fatal("expected error for incomplete session without PR")
 	}
 
 	sessions, err := app.state.LoadSessions()

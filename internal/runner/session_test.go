@@ -59,14 +59,18 @@ func TestRunIssueSessionSuccess(t *testing.T) {
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
 	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
-	if got.Status != state.SessionStatusSuccess {
-		t.Fatalf("unexpected status: %#v", got)
+	// No PR was tracked, so the session is incomplete rather than success.
+	if got.Status != state.SessionStatusIncomplete {
+		t.Fatalf("unexpected status: %s (expected incomplete without PR)", got.Status)
+	}
+	if got.IncompleteReason == "" {
+		t.Fatal("expected IncompleteReason to be set")
 	}
 	data, err := os.ReadFile(store.SessionLogPath("owner/repo", 7))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), "session succeeded") || !strings.Contains(string(data), "done") {
+	if !strings.Contains(string(data), "session incomplete") || !strings.Contains(string(data), "done") {
 		t.Fatalf("unexpected log: %s", string(data))
 	}
 	accessLog, err := os.ReadFile(store.AccessLogPath())
@@ -79,6 +83,58 @@ func TestRunIssueSessionSuccess(t *testing.T) {
 	}
 	if !strings.Contains(text, `"repo":"owner/repo"`) || !strings.Contains(text, `"issue_number":7`) {
 		t.Fatalf("expected repo and issue metadata in access log, got %s", text)
+	}
+}
+
+func TestRunIssueSessionSuccessWithPR(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	baseRunner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"codex --version": "codex 0.114.0",
+			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Vigilante Session Start",
+				Emoji:      "🧢",
+				Percent:    20,
+				ETAMinutes: 25,
+				Items: []string{
+					"Vigilante launched this implementation session in `/tmp/worktree`.",
+					"Branch: `vigilante/issue-7`.",
+					"Current stage: handing the issue off to the configured coding agent (`Codex`) for investigation and implementation.",
+					"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
+				},
+				Tagline: "Make it simple, but significant.",
+			}): "ok",
+			preflightPromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", "vigilante/issue-7"): "baseline ok",
+			issuePromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", "vigilante/issue-7"):     "done",
+		},
+	}
+	store := state.NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	env := &environment.Environment{
+		OS: "darwin",
+		Runner: environment.LoggingRunner{
+			Base:      baseRunner,
+			AccessLog: store.AppendAccessLogEntry,
+		},
+	}
+	// Session already has a tracked PR, so progress evaluation should classify it as success.
+	session := state.Session{
+		RepoPath:          "/tmp/repo",
+		IssueNumber:       7,
+		WorktreePath:      "/tmp/worktree",
+		Branch:            "vigilante/issue-7",
+		Status:            state.SessionStatusRunning,
+		PullRequestNumber: 42,
+	}
+	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	if got.Status != state.SessionStatusSuccess {
+		t.Fatalf("unexpected status: %s (expected success with tracked PR)", got.Status)
+	}
+	if got.IncompleteReason != "" {
+		t.Fatalf("expected empty IncompleteReason, got %q", got.IncompleteReason)
 	}
 }
 
@@ -121,8 +177,8 @@ func TestRunIssueSessionStartCommentIncludesReusedRemoteBranchContext(t *testing
 		Status:             state.SessionStatusRunning,
 	}
 	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
-	if got.Status != state.SessionStatusSuccess {
-		t.Fatalf("unexpected status: %#v", got)
+	if got.Status != state.SessionStatusIncomplete {
+		t.Fatalf("unexpected status (expected incomplete without PR): %s", got.Status)
 	}
 }
 
@@ -315,8 +371,8 @@ func TestRunIssueSessionSuccessWithClaudeProvider(t *testing.T) {
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: "claude", Status: state.SessionStatusRunning}
 	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
-	if got.Status != state.SessionStatusSuccess {
-		t.Fatalf("unexpected status: %#v", got)
+	if got.Status != state.SessionStatusIncomplete {
+		t.Fatalf("unexpected status (expected incomplete without PR): %s", got.Status)
 	}
 }
 
@@ -359,8 +415,8 @@ func TestRunIssueSessionSuccessWithGeminiProvider(t *testing.T) {
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: "gemini", Status: state.SessionStatusRunning}
 	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
-	if got.Status != state.SessionStatusSuccess {
-		t.Fatalf("unexpected status: %#v", got)
+	if got.Status != state.SessionStatusIncomplete {
+		t.Fatalf("unexpected status (expected incomplete without PR): %s", got.Status)
 	}
 }
 
@@ -412,8 +468,8 @@ func TestRunIssueSessionUsesMonorepoSkillWhenClassified(t *testing.T) {
 
 	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), target, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 
-	if got.Status != state.SessionStatusSuccess {
-		t.Fatalf("unexpected status: %#v", got)
+	if got.Status != state.SessionStatusIncomplete {
+		t.Fatalf("unexpected status (expected incomplete without PR): %s", got.Status)
 	}
 }
 
@@ -465,8 +521,8 @@ func TestRunIssueSessionUsesNxSkillWhenClassified(t *testing.T) {
 
 	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), target, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 
-	if got.Status != state.SessionStatusSuccess {
-		t.Fatalf("unexpected status: %#v", got)
+	if got.Status != state.SessionStatusIncomplete {
+		t.Fatalf("unexpected status (expected incomplete without PR): %s", got.Status)
 	}
 }
 
@@ -518,8 +574,8 @@ func TestRunIssueSessionUsesRushMonorepoSkillWhenClassified(t *testing.T) {
 
 	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), target, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 
-	if got.Status != state.SessionStatusSuccess {
-		t.Fatalf("unexpected status: %#v", got)
+	if got.Status != state.SessionStatusIncomplete {
+		t.Fatalf("unexpected status (expected incomplete without PR): %s", got.Status)
 	}
 }
 
@@ -824,8 +880,8 @@ func TestRunIssueSessionWritesLifecycleEvents(t *testing.T) {
 	}
 	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
 	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
-	if got.Status != state.SessionStatusSuccess {
-		t.Fatalf("unexpected status: %#v", got)
+	if got.Status != state.SessionStatusIncomplete {
+		t.Fatalf("unexpected status (expected incomplete without PR): %s", got.Status)
 	}
 	data, err := os.ReadFile(store.SessionLogPath("owner/repo", 7))
 	if err != nil {
@@ -838,7 +894,7 @@ func TestRunIssueSessionWritesLifecycleEvents(t *testing.T) {
 		"preflight invocation starting",
 		"preflight succeeded",
 		"implementation invocation starting",
-		"session completed status=success",
+		"session completed status=incomplete",
 	} {
 		if !strings.Contains(logContent, want) {
 			t.Errorf("expected session log to contain %q, got:\n%s", want, logContent)
