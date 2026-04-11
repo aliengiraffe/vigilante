@@ -41,12 +41,20 @@ type SessionConfig struct {
 	IssueNumber  int
 	Provider     string
 	WorktreePath string
-	TTL          time.Duration
-	Image        string
-	MemoryLimit  string
-	CPUs         string
-	EnableDinD   bool
-	Mounts       []container.Mount
+	// RepoPath is the host path to the parent repository checkout. When the
+	// worktree is a separate git worktree (WorktreePath != RepoPath), the
+	// worktree's `.git` file contains an absolute `gitdir:` pointer back into
+	// `<RepoPath>/.git/worktrees/<name>`. We bind-mount that parent `.git`
+	// directory at the same absolute host path inside the container so the
+	// indirection resolves; otherwise git inside the sandbox sees a dangling
+	// gitdir reference and refuses to operate.
+	RepoPath    string
+	TTL         time.Duration
+	Image       string
+	MemoryLimit string
+	CPUs        string
+	EnableDinD  bool
+	Mounts      []container.Mount
 }
 
 // Session represents an active sandbox session.
@@ -182,6 +190,11 @@ func (m *Manager) Provision(ctx context.Context, cfg SessionConfig) (*Session, e
 		containerProxyURL = fmt.Sprintf("http://host.docker.internal:%d", port)
 	}
 
+	mounts := append([]container.Mount(nil), cfg.Mounts...)
+	if mount, ok := worktreeGitdirMount(cfg.RepoPath, cfg.WorktreePath); ok {
+		mounts = append(mounts, mount)
+	}
+
 	// Create the container.
 	containerID, err := container.Create(ctx, m.runner, container.Config{
 		Image:        image,
@@ -197,7 +210,7 @@ func (m *Manager) Provision(ctx context.Context, cfg SessionConfig) (*Session, e
 		MemoryLimit: memLimit,
 		CPUs:        cpus,
 		EnableDinD:  cfg.EnableDinD,
-		Mounts:      cfg.Mounts,
+		Mounts:      mounts,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create sandbox container: %w", err)
@@ -369,6 +382,27 @@ func (m *Manager) ActiveSessions() []string {
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+// worktreeGitdirMount returns a bind mount that exposes the parent
+// repository's `.git` directory inside the container at the same absolute
+// host path. Git worktrees use a `.git` *file* whose `gitdir:` line is an
+// absolute pointer back into `<repoPath>/.git/worktrees/<name>`; without
+// this mount the indirection dangles inside the sandbox and every git
+// operation fails. Returns ok=false when no separate worktree is in use or
+// when the parent `.git` directory is missing on disk.
+func worktreeGitdirMount(repoPath, worktreePath string) (container.Mount, bool) {
+	repoPath = strings.TrimSpace(repoPath)
+	worktreePath = strings.TrimSpace(worktreePath)
+	if repoPath == "" || worktreePath == "" || repoPath == worktreePath {
+		return container.Mount{}, false
+	}
+	gitDir := filepath.Join(repoPath, ".git")
+	info, err := os.Stat(gitDir)
+	if err != nil || !info.IsDir() {
+		return container.Mount{}, false
+	}
+	return container.Mount{Source: gitDir, Target: gitDir}, true
 }
 
 // generateSSHKeyPair shells out to ssh-keygen to create an Ed25519 keypair

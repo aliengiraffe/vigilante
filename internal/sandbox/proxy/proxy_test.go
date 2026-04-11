@@ -15,13 +15,20 @@ import (
 )
 
 type fakeRunner struct {
-	lastArgs []string
-	out      string
-	err      error
+	lastArgs  []string
+	lastStdin string
+	out       string
+	err       error
 }
 
 func (f *fakeRunner) Run(_ context.Context, _ string, name string, args ...string) (string, error) {
 	f.lastArgs = append([]string{name}, args...)
+	return f.out, f.err
+}
+
+func (f *fakeRunner) RunWithStdin(_ context.Context, stdin string, _ string, name string, args ...string) (string, error) {
+	f.lastArgs = append([]string{name}, args...)
+	f.lastStdin = stdin
 	return f.out, f.err
 }
 
@@ -74,6 +81,49 @@ func TestGHEndpoint(t *testing.T) {
 	joined := strings.Join(runner.lastArgs, " ")
 	if !strings.Contains(joined, "--repo owner/repo") {
 		t.Errorf("expected --repo injection, got: %s", joined)
+	}
+}
+
+func TestGHEndpointForwardsStdin(t *testing.T) {
+	key, _ := token.GenerateSigningKey()
+	runner := &fakeRunner{out: "ok\n"}
+	logger := slog.Default()
+
+	p := New(key, runner, logger)
+	p.RegisterSession(SessionEntry{
+		SessionID:  "sbx_test",
+		Repository: "owner/repo",
+		ExpiresAt:  time.Now().Add(time.Hour),
+	})
+
+	tok, _ := token.Issue(key, token.Claims{
+		SessionID:  "sbx_test",
+		Repository: "owner/repo",
+		ExpiresAt:  time.Now().Add(time.Hour).Unix(),
+	})
+
+	body, _ := json.Marshal(GHRequest{
+		Command: "issue comment 42 --body-file -",
+		Token:   tok,
+		Stdin:   "the funny sentence body",
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/api/sandbox/gh", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/sandbox/gh", p.handleGH)
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if runner.lastStdin != "the funny sentence body" {
+		t.Errorf("expected stdin forwarded to runner, got: %q", runner.lastStdin)
+	}
+	joined := strings.Join(runner.lastArgs, " ")
+	if !strings.Contains(joined, "--body-file -") {
+		t.Errorf("expected --body-file - in args, got: %s", joined)
 	}
 }
 

@@ -7205,6 +7205,7 @@ func (a *App) runSandboxSession(ctx context.Context, target state.WatchTarget, i
 		IssueNumber:  issue.Number,
 		Provider:     session.Provider,
 		WorktreePath: session.WorktreePath,
+		RepoPath:     session.RepoPath,
 		TTL:          ttl,
 		Image:        firstNonEmpty(target.SandboxImage, config.SandboxImage, sandbox.DefaultImage),
 		MemoryLimit:  firstNonEmpty(config.SandboxMemoryLimit, sandbox.DefaultMemoryLimit),

@@ -2,6 +2,8 @@ package sandbox
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -39,5 +41,46 @@ func TestGenerateSSHKeyPairCallsSSHKeygen(t *testing.T) {
 	}
 	if !strings.Contains(r.calls[0], "ed25519") {
 		t.Errorf("expected ed25519 key type, got: %s", r.calls[0])
+	}
+}
+
+func TestWorktreeGitdirMountReturnsParentGitForSeparateWorktree(t *testing.T) {
+	repoPath := t.TempDir()
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitDir := filepath.Join(repoPath, ".git")
+	if err := os.MkdirAll(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	mount, ok := worktreeGitdirMount(repoPath, worktreePath)
+	if !ok {
+		t.Fatal("expected mount when worktree is a separate path")
+	}
+	if mount.Source != gitDir || mount.Target != gitDir {
+		t.Errorf("expected mount source/target = %s, got src=%s tgt=%s", gitDir, mount.Source, mount.Target)
+	}
+}
+
+func TestWorktreeGitdirMountSkipsWhenRepoEqualsWorktree(t *testing.T) {
+	repoPath := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repoPath, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := worktreeGitdirMount(repoPath, repoPath); ok {
+		t.Error("expected no mount when worktree is the repo itself")
+	}
+}
+
+func TestWorktreeGitdirMountSkipsWhenGitDirMissing(t *testing.T) {
+	repoPath := t.TempDir()
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := worktreeGitdirMount(repoPath, worktreePath); ok {
+		t.Error("expected no mount when parent .git directory is missing")
 	}
 }

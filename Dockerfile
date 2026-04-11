@@ -37,9 +37,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && npm install -g @openai/codex \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Go toolchain from the builder stage.
+# Install Go toolchain from the builder stage. Symlink the binaries into
+# /usr/local/bin so login shells (`bash -l`) — which reset PATH from
+# /etc/profile and ignore the container's ENV PATH — can still find them.
 COPY --from=builder /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:${PATH}"
+RUN ln -s /usr/local/go/bin/go /usr/local/bin/go \
+    && ln -s /usr/local/go/bin/gofmt /usr/local/bin/gofmt
 
 # Install the gh-sandbox binary as the gh CLI replacement.
 COPY --from=builder /gh-sandbox /usr/local/bin/gh

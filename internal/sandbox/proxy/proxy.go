@@ -25,6 +25,18 @@ import (
 type GHRequest struct {
 	Command string `json:"command"`
 	Token   string `json:"token"`
+	// Stdin is the bytes the agent piped into `gh` inside the container.
+	// Required for flags like `--body-file -` where gh reads the body from
+	// stdin; without this the host gh sees an empty stdin and the GitHub
+	// API rejects the call (e.g. "Body cannot be blank").
+	Stdin string `json:"stdin,omitempty"`
+}
+
+// stdinRunner is an optional capability that lets the proxy execute the host
+// gh CLI with bytes piped on stdin. ExecRunner satisfies it; the test fakes
+// don't, and stdin is simply ignored when the runner can't accept it.
+type stdinRunner interface {
+	RunWithStdin(ctx context.Context, stdin string, dir string, name string, args ...string) (string, error)
 }
 
 // GHResponse is the response returned to the gh mirror binary.
@@ -159,7 +171,17 @@ func (p *Proxy) handleGH(w http.ResponseWriter, r *http.Request) {
 
 	// Execute the gh command on the host, scoped to the allowed repository.
 	ghArgs := buildGHArgs(req.Command, session.Repository)
-	out, execErr := p.runner.Run(r.Context(), "", "gh", ghArgs...)
+	var out string
+	var execErr error
+	if req.Stdin != "" {
+		if sr, ok := p.runner.(stdinRunner); ok {
+			out, execErr = sr.RunWithStdin(r.Context(), req.Stdin, "", "gh", ghArgs...)
+		} else {
+			out, execErr = p.runner.Run(r.Context(), "", "gh", ghArgs...)
+		}
+	} else {
+		out, execErr = p.runner.Run(r.Context(), "", "gh", ghArgs...)
+	}
 
 	resp := GHResponse{Stdout: out}
 	if execErr != nil {

@@ -22,6 +22,7 @@ import (
 type ghRequest struct {
 	Command string `json:"command"`
 	Token   string `json:"token"`
+	Stdin   string `json:"stdin,omitempty"`
 }
 
 type ghResponse struct {
@@ -52,9 +53,22 @@ func run() int {
 		return 1
 	}
 
+	// Forward stdin only when it's a pipe/file (not a TTY), so interactive
+	// invocations don't block waiting for input. Required so flags like
+	// `--body-file -` see the bytes the agent piped in.
+	var stdinBytes []byte
+	if stat, err := os.Stdin.Stat(); err == nil && (stat.Mode()&os.ModeCharDevice) == 0 {
+		stdinBytes, err = io.ReadAll(os.Stdin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "gh-sandbox: read stdin: %s\n", err)
+			return 1
+		}
+	}
+
 	body, err := json.Marshal(ghRequest{
 		Command: command,
 		Token:   token,
+		Stdin:   string(stdinBytes),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "gh-sandbox: marshal request: %s\n", err)
