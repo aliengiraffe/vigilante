@@ -30,7 +30,14 @@ func CreateIssueWorktree(ctx context.Context, runner environment.Runner, target 
 		return Worktree{}, err
 	}
 	if _, err := os.Stat(path); err == nil {
-		return Worktree{}, fmt.Errorf("worktree already exists for issue #%d at %s", issueNumber, path)
+		// Clean up stale worktree from a previous session so we can
+		// re-create it with the latest branch state.
+		if err := Remove(ctx, runner, target.Path, path); err != nil {
+			return Worktree{}, fmt.Errorf("remove stale worktree for issue #%d: %w", issueNumber, err)
+		}
+		if _, err := runner.Run(ctx, target.Path, "git", "worktree", "prune"); err != nil {
+			return Worktree{}, err
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return Worktree{}, err

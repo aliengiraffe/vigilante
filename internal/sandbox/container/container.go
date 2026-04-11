@@ -100,10 +100,10 @@ func Create(ctx context.Context, runner environment.Runner, cfg Config) (string,
 	}
 
 	if cfg.ProxyPort > 0 {
-		// Map the proxy port from host to container so the gh mirror
-		// binary can reach the reverse proxy.
-		mapping := fmt.Sprintf("127.0.0.1:%d:%d", cfg.ProxyPort, cfg.ProxyPort)
-		args = append(args, "-p", mapping)
+		// Allow the container to reach the host proxy via host.docker.internal.
+		// We cannot use -p port mapping because the proxy already binds
+		// the port on the host; a second bind would fail with EADDRINUSE.
+		args = append(args, "--add-host=host.docker.internal:host-gateway")
 	}
 
 	if cfg.EnableDinD {

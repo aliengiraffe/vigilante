@@ -7238,6 +7238,11 @@ func (a *App) runSandboxSession(ctx context.Context, target state.WatchTarget, i
 			a.logger.Warn("sandbox teardown after session failed", "session_id", sbxSession.ID, "err", err)
 		}
 	} else {
+		// Stop the container to release the port mapping but keep it for
+		// inspection via docker logs / docker cp / docker start.
+		if err := a.sandboxManager.StopContainer(ctx, sbxSession.ID); err != nil {
+			a.logger.Warn("sandbox stop after unsuccessful session failed", "session_id", sbxSession.ID, "err", err)
+		}
 		notice := fmt.Sprintf(
 			"sandbox preserved for inspection: container=%s session_id=%s\ncheck session logs with: vigilante logs --repo %s --issue %d\n",
 			sbxSession.ContainerName,

@@ -173,6 +173,14 @@ func (m *Manager) Provision(ctx context.Context, cfg SessionConfig) (*Session, e
 
 	containerName := "vigilante-sandbox-" + sessionID
 	proxyAddr := m.proxy.Addr()
+	port := proxyPort(proxyAddr)
+
+	// Build the proxy URL the container will use. Inside Docker the
+	// host loopback is not reachable, so we route via host.docker.internal.
+	containerProxyURL := "http://" + proxyAddr
+	if port > 0 {
+		containerProxyURL = fmt.Sprintf("http://host.docker.internal:%d", port)
+	}
 
 	// Create the container.
 	containerID, err := container.Create(ctx, m.runner, container.Config{
@@ -180,10 +188,11 @@ func (m *Manager) Provision(ctx context.Context, cfg SessionConfig) (*Session, e
 		Name:         containerName,
 		WorktreePath: cfg.WorktreePath,
 		SSHKeyPath:   filepath.Join(sshDir, "id_ed25519"),
+		ProxyPort:    port,
 		EnvVars: map[string]string{
 			"VIGILANTE_SESSION_ID":    sessionID,
 			"VIGILANTE_SANDBOX_TOKEN": sandboxToken,
-			"VIGILANTE_PROXY_URL":     "http://" + proxyAddr,
+			"VIGILANTE_PROXY_URL":     containerProxyURL,
 		},
 		MemoryLimit: memLimit,
 		CPUs:        cpus,
@@ -259,6 +268,20 @@ func (m *Manager) GetSession(sessionID string) (*Session, bool) {
 	defer m.mu.Unlock()
 	sess, ok := m.sessions[sessionID]
 	return sess, ok
+}
+
+// StopContainer stops the container for the given session without removing it.
+// This releases resources like port mappings while keeping the container
+// available for inspection via docker logs/cp/start.
+func (m *Manager) StopContainer(ctx context.Context, sessionID string) error {
+	m.mu.Lock()
+	sess, ok := m.sessions[sessionID]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("sandbox session %s not found", sessionID)
+	}
+	m.proxy.DeregisterSession(sessionID)
+	return container.Stop(ctx, m.runner, sess.ContainerName, 10)
 }
 
 // Teardown performs the full teardown sequence: extract artifacts, revoke
