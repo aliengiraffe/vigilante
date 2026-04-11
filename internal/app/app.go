@@ -7295,13 +7295,79 @@ func sandboxConfigMounts(homeDir string, store *state.Store) []container.Mount {
 	addMount(store.GeminiHome(), "/root/.gemini", false)
 
 	if homeDir != "" {
-		addMount(filepath.Join(homeDir, ".gitconfig"), "/root/.gitconfig", true)
+		// Do not mount the operator's raw ~/.gitconfig: on macOS it commonly
+		// declares `gpg.ssh.program = /Applications/1Password.app/...` and
+		// `commit.gpgsign = true`, which break every git commit inside the
+		// Linux sandbox ("fatal: cannot run /Applications/1Password.app/...").
+		// Generate a sanitized copy that keeps the operator identity but
+		// strips the host-only signing/ssh sections.
+		hostGitconfig := filepath.Join(homeDir, ".gitconfig")
+		if sanitized, err := writeSandboxGitconfig(hostGitconfig, store.Root()); err == nil && sanitized != "" {
+			addMount(sanitized, "/root/.gitconfig", true)
+		} else {
+			addMount(hostGitconfig, "/root/.gitconfig", true)
+		}
 		addMount(filepath.Join(homeDir, ".git-credentials"), "/root/.git-credentials", true)
 		addMount(filepath.Join(homeDir, ".config", "git"), "/root/.config/git", true)
 		addMount(filepath.Join(homeDir, ".ssh", "known_hosts"), "/root/.ssh/known_hosts", true)
 	}
 
 	return mounts
+}
+
+// writeSandboxGitconfig reads the operator's gitconfig and writes a sanitized
+// copy with the [gpg], [gpg "*"], [commit], [tag], and [core] sshCommand-style
+// sections removed. The sanitized file lives under <stateRoot>/sandbox so it
+// is regenerated whenever the operator changes their host gitconfig.
+//
+// Returns the path to the sanitized file, or "" if the source doesn't exist
+// (the caller should fall back to mounting the original).
+func writeSandboxGitconfig(srcPath string, stateRoot string) (string, error) {
+	data, err := os.ReadFile(srcPath)
+	if err != nil {
+		return "", err
+	}
+	dstDir := filepath.Join(stateRoot, "sandbox")
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		return "", err
+	}
+	dstPath := filepath.Join(dstDir, "gitconfig")
+	if err := os.WriteFile(dstPath, []byte(sanitizeGitconfig(string(data))), 0o644); err != nil {
+		return "", err
+	}
+	return dstPath, nil
+}
+
+// sanitizeGitconfig drops sections that bind to host-only binaries or signing
+// state: [gpg], any [gpg "<format>"] subsection, [commit], and [tag]. Lines
+// inside those sections (until the next section header) are dropped, and the
+// section header itself is dropped. All other sections are preserved verbatim.
+func sanitizeGitconfig(content string) string {
+	blocked := map[string]bool{
+		"gpg":    true,
+		"commit": true,
+		"tag":    true,
+	}
+	var out strings.Builder
+	skip := false
+	for line := range strings.SplitSeq(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			inside := strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]")
+			name := strings.ToLower(strings.TrimSpace(strings.SplitN(inside, " ", 2)[0]))
+			name = strings.TrimSuffix(name, "\"")
+			skip = blocked[name]
+			if skip {
+				continue
+			}
+		}
+		if skip {
+			continue
+		}
+		out.WriteString(line)
+		out.WriteByte('\n')
+	}
+	return strings.TrimRight(out.String(), "\n") + "\n"
 }
 
 func firstNonEmpty(values ...string) string {

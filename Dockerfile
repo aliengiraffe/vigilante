@@ -52,13 +52,16 @@ COPY --from=builder /vigilante /usr/local/bin/vigilante
 # Create directories for mounted credentials and workspace.
 RUN mkdir -p /etc/vigilante/ssh /workspace /root/.ssh
 
-# Configure git for the sandbox environment.
+# Configure git for the sandbox environment. Do NOT set gpg.format or
+# gpg.ssh.program here: git rejects an empty string as `invalid value for
+# 'gpg.format': ''` and aborts every commit. Signing is disabled instead via
+# commit.gpgsign / tag.gpgsign, which is enough as long as the operator's
+# global gitconfig is sanitized before being mounted into the container
+# (see app.sandboxConfigMounts).
 RUN git config --system core.sshCommand \
     "ssh -i /etc/vigilante/ssh/id_ed25519 -o StrictHostKeyChecking=no" \
     && git config --system commit.gpgsign false \
-    && git config --system tag.gpgsign false \
-    && git config --system gpg.format "" \
-    && git config --system gpg.ssh.program ""
+    && git config --system tag.gpgsign false
 
 WORKDIR /workspace
 

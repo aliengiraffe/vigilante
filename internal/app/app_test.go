@@ -9579,3 +9579,72 @@ func TestCollectSessionCommentsDeduplicatesAcrossSurfaces(t *testing.T) {
 		t.Fatalf("expected 2 deduplicated comments, got %d: %#v", len(comments), comments)
 	}
 }
+
+func TestSanitizeGitconfigStripsSigningSections(t *testing.T) {
+	src := `[user]
+	name = Nico Bistolfi
+	email = git@bistol.fi
+[gpg]
+	format = ssh
+[gpg "ssh"]
+	program = /Applications/1Password.app/Contents/MacOS/op-ssh-sign
+[commit]
+	gpgsign = true
+[tag]
+	gpgsign = true
+[core]
+	editor = vim
+[alias]
+	st = status
+`
+	got := sanitizeGitconfig(src)
+
+	mustContain := []string{"[user]", "name = Nico Bistolfi", "git@bistol.fi", "[core]", "editor = vim", "[alias]", "st = status"}
+	for _, want := range mustContain {
+		if !strings.Contains(got, want) {
+			t.Errorf("sanitized config missing %q\nfull output:\n%s", want, got)
+		}
+	}
+
+	mustNotContain := []string{"[gpg]", "[gpg \"ssh\"]", "op-ssh-sign", "[commit]", "gpgsign = true", "[tag]"}
+	for _, banned := range mustNotContain {
+		if strings.Contains(got, banned) {
+			t.Errorf("sanitized config still contains %q\nfull output:\n%s", banned, got)
+		}
+	}
+}
+
+func TestSanitizeGitconfigPreservesContentWithoutBlockedSections(t *testing.T) {
+	src := "[user]\n\tname = Test\n\temail = test@example.com\n"
+	got := sanitizeGitconfig(src)
+	if !strings.Contains(got, "name = Test") || !strings.Contains(got, "test@example.com") {
+		t.Errorf("expected user section preserved, got: %s", got)
+	}
+}
+
+func TestWriteSandboxGitconfigWritesSanitizedFile(t *testing.T) {
+	tmp := t.TempDir()
+	srcPath := filepath.Join(tmp, "source.gitconfig")
+	if err := os.WriteFile(srcPath, []byte("[user]\n\tname = Test\n[gpg]\n\tformat = ssh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stateRoot := filepath.Join(tmp, "state")
+
+	dst, err := writeSandboxGitconfig(srcPath, stateRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dst != filepath.Join(stateRoot, "sandbox", "gitconfig") {
+		t.Errorf("unexpected dst path: %s", dst)
+	}
+	data, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "name = Test") {
+		t.Errorf("expected user.name preserved, got: %s", string(data))
+	}
+	if strings.Contains(string(data), "[gpg]") {
+		t.Errorf("expected [gpg] stripped, got: %s", string(data))
+	}
+}
