@@ -8946,7 +8946,40 @@ func TestRecreateSessionSuccess(t *testing.T) {
 	}
 }
 
-func TestRecreateSessionFailsWhenRepoIsUnwatched(t *testing.T) {
+func TestRecreateSessionFallsBackToUserRepoLookup(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			testutil.Key("gh", "api", "--paginate", "-H", "Accept: application/vnd.github+json", "user/repos?per_page=100&affiliation=owner,collaborator,organization_member", "-q", ".[].full_name"): "other/repo\nowner/repo\nthird/repo\n",
+			"gh api repos/owner/repo/issues/80": `{"title":"adopted","body":"body","html_url":"https://github.com/owner/repo/issues/80","state":"open","labels":[],"assignees":[]}`,
+			testutil.Key("gh", "api", "--method", "POST", "-H", "Accept: application/vnd.github+json", "repos/owner/repo/issues", "-f", "title=adopted", "-f", "body=body\n\n---\n_Recreated from #80 by Vigilante._"):                  `{"number":81,"html_url":"https://github.com/owner/repo/issues/81"}`,
+			"gh issue comment --repo owner/repo 80 --body ## ♻️ Issue Recreated\n\nThis issue has been recreated as #81.\n\nThe original issue is being closed as `not planned` and stale artifacts are being cleaned up.\n\nSource: `cli`.": "ok",
+			testutil.Key("gh", "api", "--method", "PATCH", "-H", "Accept: application/vnd.github+json", "repos/owner/repo/issues/80", "-f", "state=closed", "-f", "state_reason=not_planned"):                                                "ok",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.RecreateSession(context.Background(), "owner/repo", 80, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "recreated owner/repo issue #80 as #81") {
+		t.Fatalf("unexpected output: %s", stdout.String())
+	}
+}
+
+func TestRecreateSessionFailsWhenRepoIsUnknown(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 	t.Setenv("HOME", home)
@@ -8954,7 +8987,11 @@ func TestRecreateSessionFailsWhenRepoIsUnwatched(t *testing.T) {
 	app := New()
 	app.stdout = &bytes.Buffer{}
 	app.stderr = testutil.IODiscard{}
-	app.env.Runner = testutil.FakeRunner{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			testutil.Key("gh", "api", "--paginate", "-H", "Accept: application/vnd.github+json", "user/repos?per_page=100&affiliation=owner,collaborator,organization_member", "-q", ".[].full_name"): "other/repo\nthird/repo\n",
+		},
+	}
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
@@ -8963,8 +9000,8 @@ func TestRecreateSessionFailsWhenRepoIsUnwatched(t *testing.T) {
 	}
 
 	err := app.RecreateSession(context.Background(), "owner/repo", 50, "cli")
-	if err == nil || !strings.Contains(err.Error(), "watch target not found") {
-		t.Fatalf("expected watch target error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "not in watch targets") {
+		t.Fatalf("expected unknown repo error, got: %v", err)
 	}
 }
 

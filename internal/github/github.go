@@ -189,6 +189,45 @@ func CommentOnIssue(ctx context.Context, runner environment.Runner, repo string,
 	return err
 }
 
+// FindAuthenticatedUserRepository looks for repoSlug in the authenticated
+// user's GitHub repository list (owned, collaborator, and organization
+// memberships). It returns the canonical full_name on a case-insensitive
+// match, an empty string if no repo matches, or an error if the gh call
+// fails.
+func FindAuthenticatedUserRepository(ctx context.Context, runner environment.Runner, repoSlug string) (string, error) {
+	target := strings.TrimSpace(repoSlug)
+	if target == "" {
+		return "", nil
+	}
+	output, err := runner.Run(
+		ctx,
+		"",
+		"gh",
+		"api",
+		"--paginate",
+		"-H", "Accept: application/vnd.github+json",
+		"user/repos?per_page=100&affiliation=owner,collaborator,organization_member",
+		"-q", ".[].full_name",
+	)
+	if err != nil {
+		trimmed := strings.TrimSpace(output)
+		if trimmed != "" {
+			return "", fmt.Errorf("%w: %s", err, trimmed)
+		}
+		return "", err
+	}
+	for line := range strings.SplitSeq(output, "\n") {
+		name := strings.TrimSpace(line)
+		if name == "" {
+			continue
+		}
+		if strings.EqualFold(name, target) {
+			return name, nil
+		}
+	}
+	return "", nil
+}
+
 func GetRateLimitSnapshot(ctx context.Context, runner environment.Runner) (RateLimitSnapshot, error) {
 	output, err := runner.Run(ctx, "", "gh", "api", "/rate_limit")
 	if err != nil {

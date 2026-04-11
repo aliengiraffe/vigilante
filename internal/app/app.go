@@ -3991,7 +3991,15 @@ func (a *App) RecreateSession(ctx context.Context, repoSlug string, issue int, s
 	}
 	target, ok := findWatchTargetByRepo(targets, repoSlug)
 	if !ok {
-		return fmt.Errorf("watch target not found for %s", repoSlug)
+		resolved, lookupErr := ghcli.FindAuthenticatedUserRepository(ctx, a.env.Runner, repoSlug)
+		if lookupErr != nil {
+			return fmt.Errorf("watch target not found for %s and user repo lookup failed: %w", repoSlug, lookupErr)
+		}
+		if resolved == "" {
+			return fmt.Errorf("repo %s is not in watch targets and was not found in the authenticated user's GitHub repositories", repoSlug)
+		}
+		repoSlug = resolved
+		target = state.WatchTarget{Repo: resolved}
 	}
 
 	details, err := a.issueTrackerForTarget(target).GetWorkItemDetails(ctx, a.issueProjectForTarget(target), issue)
