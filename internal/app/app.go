@@ -1284,6 +1284,8 @@ func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumbe
 		return err
 	}
 
+	a.syncSessionIssueLabelsBestEffort(ctx, &session, nil, nil, nil)
+
 	fmt.Fprintf(a.stdout, "starting one-off session for %s issue #%d in %s\n", info.Repo, issueNumber, wt.Path)
 	fmt.Fprintf(a.stdout, "note: this is a one-off session — the repository was not added to watched targets\n")
 
@@ -7200,6 +7202,14 @@ func (a *App) runSandboxSession(ctx context.Context, target state.WatchTarget, i
 	homeDir, _ := os.UserHomeDir()
 	mounts := sandboxConfigMounts(homeDir, a.state)
 
+	extraEnv := map[string]string{}
+	if mount, env, ok := sshAgentForwarding(runtime.GOOS, homeDir, a.logger); ok {
+		mounts = append(mounts, mount)
+		for k, v := range env {
+			extraEnv[k] = v
+		}
+	}
+
 	sbxSession, err := a.sandboxManager.Provision(ctx, sandbox.SessionConfig{
 		Repository:   target.Repo,
 		IssueNumber:  issue.Number,
@@ -7212,6 +7222,7 @@ func (a *App) runSandboxSession(ctx context.Context, target state.WatchTarget, i
 		CPUs:         firstNonEmpty(config.SandboxCPUs, sandbox.DefaultCPUs),
 		EnableDinD:   true,
 		Mounts:       mounts,
+		ExtraEnv:     extraEnv,
 	})
 	if err != nil {
 		session.Status = state.SessionStatusFailed
@@ -7313,6 +7324,61 @@ func sandboxConfigMounts(homeDir string, store *state.Store) []container.Mount {
 	}
 
 	return mounts
+}
+
+// sshAgentForwarding returns the bind mount and env var needed to forward
+// the host's SSH agent into the sandbox container, so the agent inside the
+// sandbox can run `git push` against GitHub using the operator's existing
+// SSH key (1Password agent on macOS, ssh-agent on Linux). The container
+// never sees the private key — only the agent socket protocol.
+//
+// On macOS Docker Desktop, this uses the magic path
+// `/run/host-services/ssh-auth.sock` which Docker Desktop automatically
+// proxies back to the host SSH agent regardless of how vigilante was
+// launched (launchd doesn't propagate $SSH_AUTH_SOCK to its children).
+//
+// On Linux, it bind-mounts $SSH_AUTH_SOCK directly when set and reachable.
+//
+// Returns ok=false when no agent is available — git push from inside the
+// sandbox will then fail with a clear "Permission denied (publickey)"
+// instead of mysteriously hanging.
+func sshAgentForwarding(goos string, homeDir string, logger *slog.Logger) (container.Mount, map[string]string, bool) {
+	if goos == "darwin" {
+		const dockerDesktopAgent = "/run/host-services/ssh-auth.sock"
+		if logger != nil {
+			logger.Info("forwarding host ssh agent via docker desktop magic socket", "path", dockerDesktopAgent)
+		}
+		return container.Mount{Source: dockerDesktopAgent, Target: dockerDesktopAgent},
+			map[string]string{"SSH_AUTH_SOCK": dockerDesktopAgent},
+			true
+	}
+	sock := strings.TrimSpace(os.Getenv("SSH_AUTH_SOCK"))
+	if sock == "" {
+		// Fall back to the common 1Password and ssh-agent locations.
+		candidates := []string{}
+		if homeDir != "" {
+			candidates = append(candidates,
+				filepath.Join(homeDir, ".1password", "agent.sock"),
+			)
+		}
+		for _, c := range candidates {
+			if _, err := os.Stat(c); err == nil {
+				sock = c
+				break
+			}
+		}
+	}
+	if sock == "" {
+		return container.Mount{}, nil, false
+	}
+	if _, err := os.Stat(sock); err != nil {
+		return container.Mount{}, nil, false
+	}
+	target := "/run/host-ssh-agent.sock"
+	if logger != nil {
+		logger.Info("forwarding host ssh agent", "host_socket", sock, "container_socket", target)
+	}
+	return container.Mount{Source: sock, Target: target}, map[string]string{"SSH_AUTH_SOCK": target}, true
 }
 
 // writeSandboxGitconfig reads the operator's gitconfig and writes a sanitized

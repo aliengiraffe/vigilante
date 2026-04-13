@@ -9622,6 +9622,53 @@ func TestSanitizeGitconfigPreservesContentWithoutBlockedSections(t *testing.T) {
 	}
 }
 
+func TestSSHAgentForwardingDarwinUsesDockerDesktopMagicSocket(t *testing.T) {
+	mount, env, ok := sshAgentForwarding("darwin", t.TempDir(), nil)
+	if !ok {
+		t.Fatal("expected SSH agent forwarding to be available on darwin")
+	}
+	const want = "/run/host-services/ssh-auth.sock"
+	if mount.Source != want || mount.Target != want {
+		t.Errorf("expected magic socket mount %s, got src=%s tgt=%s", want, mount.Source, mount.Target)
+	}
+	if env["SSH_AUTH_SOCK"] != want {
+		t.Errorf("expected SSH_AUTH_SOCK=%s, got %q", want, env["SSH_AUTH_SOCK"])
+	}
+}
+
+func TestSSHAgentForwardingLinuxBindsHostSocket(t *testing.T) {
+	tmp := t.TempDir()
+	sock := filepath.Join(tmp, "agent.sock")
+	if f, err := os.Create(sock); err != nil {
+		t.Fatal(err)
+	} else {
+		f.Close()
+	}
+	t.Setenv("SSH_AUTH_SOCK", sock)
+
+	mount, env, ok := sshAgentForwarding("linux", tmp, nil)
+	if !ok {
+		t.Fatal("expected SSH agent forwarding to be available when SSH_AUTH_SOCK is set")
+	}
+	if mount.Source != sock {
+		t.Errorf("expected mount source %s, got %s", sock, mount.Source)
+	}
+	if mount.Target != "/run/host-ssh-agent.sock" {
+		t.Errorf("expected mount target /run/host-ssh-agent.sock, got %s", mount.Target)
+	}
+	if env["SSH_AUTH_SOCK"] != "/run/host-ssh-agent.sock" {
+		t.Errorf("expected container SSH_AUTH_SOCK env, got %q", env["SSH_AUTH_SOCK"])
+	}
+}
+
+func TestSSHAgentForwardingLinuxReturnsFalseWhenSocketMissing(t *testing.T) {
+	t.Setenv("SSH_AUTH_SOCK", "")
+	tmp := t.TempDir()
+	if _, _, ok := sshAgentForwarding("linux", tmp, nil); ok {
+		t.Error("expected SSH agent forwarding to be unavailable when no socket exists")
+	}
+}
+
 func TestWriteSandboxGitconfigWritesSanitizedFile(t *testing.T) {
 	tmp := t.TempDir()
 	srcPath := filepath.Join(tmp, "source.gitconfig")

@@ -706,6 +706,51 @@ func ClosePullRequest(ctx context.Context, runner environment.Runner, repo strin
 	return err
 }
 
+// DeployKey is the subset of fields returned by the GitHub deploy keys API.
+type DeployKey struct {
+	ID       int64  `json:"id"`
+	Title    string `json:"title"`
+	Key      string `json:"key"`
+	ReadOnly bool   `json:"read_only"`
+}
+
+// AddDeployKey registers a public SSH key as a deploy key on the given repo.
+// Set readOnly=false for push access. Returns the key ID for later removal.
+func AddDeployKey(ctx context.Context, runner environment.Runner, repo string, title string, pubKey string, readOnly bool) (int64, error) {
+	roFlag := "true"
+	if !readOnly {
+		roFlag = "false"
+	}
+	output, err := runner.Run(ctx, "", "gh", "api", "--method", "POST",
+		"-H", "Accept: application/vnd.github+json",
+		fmt.Sprintf("repos/%s/keys", repo),
+		"-f", "title="+title,
+		"-f", "key="+pubKey,
+		"-F", "read_only="+roFlag,
+	)
+	if err != nil {
+		trimmed := strings.TrimSpace(output)
+		if trimmed != "" {
+			return 0, fmt.Errorf("add deploy key to %s: %w: %s", repo, err, trimmed)
+		}
+		return 0, fmt.Errorf("add deploy key to %s: %w", repo, err)
+	}
+	var key DeployKey
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &key); err != nil {
+		return 0, fmt.Errorf("parse deploy key response: %w", err)
+	}
+	return key.ID, nil
+}
+
+// RemoveDeployKey removes a deploy key by its ID from the given repo.
+func RemoveDeployKey(ctx context.Context, runner environment.Runner, repo string, keyID int64) error {
+	_, err := runner.Run(ctx, "", "gh", "api", "--method", "DELETE",
+		"-H", "Accept: application/vnd.github+json",
+		fmt.Sprintf("repos/%s/keys/%d", repo, keyID),
+	)
+	return err
+}
+
 func DeleteRemoteBranch(ctx context.Context, runner environment.Runner, repoPath string, remote string, branch string) error {
 	remote = strings.TrimSpace(remote)
 	if remote == "" {

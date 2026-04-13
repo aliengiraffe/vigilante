@@ -33,6 +33,14 @@ func (r *apiTestRunner) Run(_ context.Context, _ string, name string, args ...st
 			}
 		}
 	}
+	// Deploy key API calls return JSON with an id field.
+	cmd := name + " " + strings.Join(args, " ")
+	if strings.Contains(cmd, "/keys") && strings.Contains(cmd, "POST") {
+		return `{"id":99999,"title":"test","read_only":false}`, r.err
+	}
+	if strings.Contains(cmd, "/keys/") && strings.Contains(cmd, "DELETE") {
+		return "", r.err
+	}
 	return r.out, r.err
 }
 

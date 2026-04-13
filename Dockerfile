@@ -58,8 +58,14 @@ RUN mkdir -p /etc/vigilante/ssh /workspace /root/.ssh
 # commit.gpgsign / tag.gpgsign, which is enough as long as the operator's
 # global gitconfig is sanitized before being mounted into the container
 # (see app.sandboxConfigMounts).
+#
+# The ssh command offers the ephemeral key first (registered as a deploy key
+# when the operator has admin access to the repo). When deploy key registration
+# fails (collaborator-level access), the container falls back to the forwarded
+# SSH agent (SSH_AUTH_SOCK set by the host). The ephemeral key is listed first
+# via -i so it's tried before agent identities.
 RUN git config --system core.sshCommand \
-    "ssh -i /etc/vigilante/ssh/id_ed25519 -o StrictHostKeyChecking=no" \
+    "ssh -i /etc/vigilante/ssh/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" \
     && git config --system commit.gpgsign false \
     && git config --system tag.gpgsign false
 

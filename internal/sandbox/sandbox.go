@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nicobistolfi/vigilante/internal/environment"
+	ghcli "github.com/nicobistolfi/vigilante/internal/github"
 	"github.com/nicobistolfi/vigilante/internal/sandbox/container"
 	"github.com/nicobistolfi/vigilante/internal/sandbox/proxy"
 	"github.com/nicobistolfi/vigilante/internal/sandbox/token"
@@ -55,6 +56,10 @@ type SessionConfig struct {
 	CPUs        string
 	EnableDinD  bool
 	Mounts      []container.Mount
+	// ExtraEnv adds environment variables to the sandbox container on top of
+	// the hardcoded VIGILANTE_* variables. Used for things like
+	// SSH_AUTH_SOCK when the host SSH agent is forwarded into the sandbox.
+	ExtraEnv map[string]string
 }
 
 // Session represents an active sandbox session.
@@ -179,6 +184,27 @@ func (m *Manager) Provision(ctx context.Context, cfg SessionConfig) (*Session, e
 		return nil, fmt.Errorf("generate ssh keypair: %w", err)
 	}
 
+	// Register the ephemeral public key as a write-access deploy key on the
+	// target repository so the container can `git push` over SSH using its own
+	// short-lived identity. The key is removed on teardown; if teardown fails,
+	// ReconcileStale handles cleanup via the GitHub API.
+	//
+	// Deploy key registration requires admin access to the repo. When the
+	// authenticated user only has write/collaborator access, the API returns
+	// 404 or 403. In that case we fall back to SSH agent forwarding (the
+	// ExtraEnv SSH_AUTH_SOCK set by the caller) — git push will then use the
+	// operator's host SSH agent instead of the ephemeral key.
+	var deployKeyID int64
+	deployKeyTitle := "vigilante-sandbox-" + sessionID
+	keyID, deployErr := ghcli.AddDeployKey(ctx, m.runner, cfg.Repository, deployKeyTitle, pubKeyStr, false)
+	if deployErr != nil {
+		m.logger.Warn("deploy key registration failed, falling back to ssh agent forwarding",
+			"session_id", sessionID, "repo", cfg.Repository, "err", deployErr)
+	} else {
+		deployKeyID = keyID
+		m.logger.Info("deploy key registered", "session_id", sessionID, "repo", cfg.Repository, "key_id", deployKeyID)
+	}
+
 	containerName := "vigilante-sandbox-" + sessionID
 	proxyAddr := m.proxy.Addr()
 	port := proxyPort(proxyAddr)
@@ -195,6 +221,18 @@ func (m *Manager) Provision(ctx context.Context, cfg SessionConfig) (*Session, e
 		mounts = append(mounts, mount)
 	}
 
+	envVars := map[string]string{
+		"VIGILANTE_SESSION_ID":    sessionID,
+		"VIGILANTE_SANDBOX_TOKEN": sandboxToken,
+		"VIGILANTE_PROXY_URL":     containerProxyURL,
+	}
+	for k, v := range cfg.ExtraEnv {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		envVars[k] = v
+	}
+
 	// Create the container.
 	containerID, err := container.Create(ctx, m.runner, container.Config{
 		Image:        image,
@@ -202,15 +240,11 @@ func (m *Manager) Provision(ctx context.Context, cfg SessionConfig) (*Session, e
 		WorktreePath: cfg.WorktreePath,
 		SSHKeyPath:   filepath.Join(sshDir, "id_ed25519"),
 		ProxyPort:    port,
-		EnvVars: map[string]string{
-			"VIGILANTE_SESSION_ID":    sessionID,
-			"VIGILANTE_SANDBOX_TOKEN": sandboxToken,
-			"VIGILANTE_PROXY_URL":     containerProxyURL,
-		},
-		MemoryLimit: memLimit,
-		CPUs:        cpus,
-		EnableDinD:  cfg.EnableDinD,
-		Mounts:      mounts,
+		EnvVars:      envVars,
+		MemoryLimit:  memLimit,
+		CPUs:         cpus,
+		EnableDinD:   cfg.EnableDinD,
+		Mounts:       mounts,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create sandbox container: %w", err)
@@ -234,6 +268,7 @@ func (m *Manager) Provision(ctx context.Context, cfg SessionConfig) (*Session, e
 		ProxyPort:     proxyPort(proxyAddr),
 		SSHKeyDir:     sshDir,
 		SSHPublicKey:  pubKeyStr,
+		DeployKeyID:   deployKeyID,
 		Status:        "provisioned",
 		CreatedAt:     now,
 		ExpiresAt:     expiresAt,
@@ -320,7 +355,17 @@ func (m *Manager) Teardown(ctx context.Context, sessionID string, reason string)
 	// Step 2: Invalidate token in proxy.
 	m.proxy.DeregisterSession(sessionID)
 
-	// Step 3: Stop container (10s grace period).
+	// Step 3: Revoke the ephemeral deploy key so the session's SSH identity
+	// can no longer push to the repository.
+	if sess.DeployKeyID > 0 {
+		if err := ghcli.RemoveDeployKey(ctx, m.runner, sess.Repository, sess.DeployKeyID); err != nil {
+			m.logger.Warn("deploy key removal failed", "session_id", sessionID, "repo", sess.Repository, "key_id", sess.DeployKeyID, "err", err)
+		} else {
+			m.logger.Info("deploy key removed", "session_id", sessionID, "repo", sess.Repository, "key_id", sess.DeployKeyID)
+		}
+	}
+
+	// Step 4: Stop container (10s grace period).
 	if err := container.Stop(ctx, m.runner, sess.ContainerName, 10); err != nil {
 		m.logger.Warn("container stop failed", "session_id", sessionID, "err", err)
 	}
