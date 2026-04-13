@@ -237,6 +237,39 @@ func TestIsPRTrackingIssueExecution(t *testing.T) {
 	}
 }
 
+func TestGroupSessionsIncomplete(t *testing.T) {
+	now := time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)
+	sessions := []state.Session{
+		{Repo: "owner/repo", IssueNumber: 80, Status: state.SessionStatusIncomplete, IncompleteReason: "commits_without_pr"},
+	}
+	groups := groupSessions(sessions, now, 20*time.Minute)
+	if len(groups) != 1 {
+		t.Fatalf("expected 1 group, got %d", len(groups))
+	}
+	if groups[0].Label != "Incomplete, pending rerun" {
+		t.Fatalf("expected 'Incomplete, pending rerun', got %q", groups[0].Label)
+	}
+	if len(groups[0].Sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(groups[0].Sessions))
+	}
+}
+
+func TestFormatSessionRowIncomplete(t *testing.T) {
+	s := state.Session{
+		Repo:             "owner/repo",
+		IssueNumber:      99,
+		Status:           state.SessionStatusIncomplete,
+		IncompleteReason: "commits_without_pr",
+	}
+	row := formatSessionRow(s)
+	if !strings.Contains(row, "incomplete") {
+		t.Errorf("expected incomplete status in row: %s", row)
+	}
+	if !strings.Contains(row, "reason commits_without_pr") {
+		t.Errorf("expected incomplete reason in row: %s", row)
+	}
+}
+
 func TestStatusCommandOutputPreservesServiceState(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

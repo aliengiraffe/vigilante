@@ -225,10 +225,31 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		return session
 	}
 
-	session.Status = state.SessionStatusSuccess
 	session.IterationInProgress = false
-	writeLifecycleEvent(logWriter, fmt.Sprintf("session completed status=success duration=%s", time.Since(invocationStart).Truncate(time.Second)))
-	appendSessionLog(logPath, fmt.Sprintf("session succeeded duration=%s output_bytes=%d", time.Since(invocationStart).Truncate(time.Second), len(output)), session, output)
+
+	signal := EvaluateSessionProgress(ctx, env.Runner, session)
+	if signal.HasPullRequest {
+		session.Status = state.SessionStatusSuccess
+		session.IncompleteReason = ""
+		writeLifecycleEvent(logWriter, fmt.Sprintf("session completed status=success duration=%s", time.Since(invocationStart).Truncate(time.Second)))
+		appendSessionLog(logPath, fmt.Sprintf("session succeeded duration=%s output_bytes=%d", time.Since(invocationStart).Truncate(time.Second), len(output)), session, output)
+	} else {
+		reason := ClassifyIncompleteReason(signal)
+		session.Status = state.SessionStatusIncomplete
+		session.IncompleteReason = reason
+		writeLifecycleEvent(logWriter, fmt.Sprintf("session completed status=incomplete reason=%s duration=%s commits=%t worktree_changes=%t",
+			reason, time.Since(invocationStart).Truncate(time.Second), signal.HasNewCommits, signal.HasWorktreeChanges))
+		appendSessionLog(logPath, fmt.Sprintf("session incomplete reason=%s duration=%s output_bytes=%d", reason, time.Since(invocationStart).Truncate(time.Second), len(output)), session, output)
+		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+			Stage:      "Incomplete",
+			Emoji:      "⚠️",
+			Percent:    90,
+			ETAMinutes: 5,
+			Items:      incompleteSessionItems(session, signal),
+			Tagline:    "Progress saved — not done yet.",
+		})
+		_ = issueTracker.CommentOnWorkItem(ctx, target.Repo, issue.Number, body)
+	}
 	return session
 }
 
@@ -422,6 +443,24 @@ func blockedPreflightItems(blocked state.BlockedReason, providerID string, prefl
 		}
 	}
 	items = append(items, fmt.Sprintf("Next step: restore the repository baseline, then run `%s` or request resume from GitHub.", resumeHint))
+	return items
+}
+
+func incompleteSessionItems(session state.Session, signal ProgressSignal) []string {
+	items := []string{
+		fmt.Sprintf("The coding agent exited successfully but no pull request was created for `%s`.", session.Branch),
+	}
+	switch {
+	case signal.HasNewCommits && signal.HasWorktreeChanges:
+		items = append(items, "New commits were pushed to the branch and uncommitted changes remain in the worktree.")
+	case signal.HasNewCommits:
+		items = append(items, "New commits were pushed to the branch but no PR was opened.")
+	case signal.HasWorktreeChanges:
+		items = append(items, "Uncommitted changes exist in the worktree but no commits were made.")
+	default:
+		items = append(items, "No durable progress was detected: no new commits and no modified files.")
+	}
+	items = append(items, "Next step: Vigilante will attempt to rerun the session in the existing worktree to continue from the current state.")
 	return items
 }
 
