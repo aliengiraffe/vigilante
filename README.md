@@ -10,7 +10,7 @@
 [![License](https://img.shields.io/github/license/aliengiraffe/vigilante)](https://github.com/aliengiraffe/vigilante/blob/main/LICENSE)
 [![Release Workflow](https://img.shields.io/github/actions/workflow/status/aliengiraffe/vigilante/release.yml?label=release)](https://github.com/aliengiraffe/vigilante/actions/workflows/release.yml)
 
-`vigilante` is a local control plane for autonomous software delivery. It watches repositories, selects eligible work items, prepares isolated git worktrees, launches a supported coding-agent CLI, and keeps the issue tracker updated while the work moves toward a pull request.
+`vigilante` is a local control plane for autonomous software delivery. It watches repositories, selects eligible work items, prepares isolated git worktrees, launches a supported coding-agent CLI, and keeps the issue tracker updated while the work moves toward a pull request. It is calm under pressure, even when the issue queue is reproducing like gremlins after midnight.
 
 It is the orchestration layer around agents such as `codex`, `claude`, and `gemini`, not the model itself. Vigilante owns scheduling, worktree isolation, backend coordination, and recovery so a repository checkout behaves like a controlled worker instead of a loose collection of scripts.
 
