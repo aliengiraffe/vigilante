@@ -233,6 +233,20 @@ func (m *Manager) Provision(ctx context.Context, cfg SessionConfig) (*Session, e
 		envVars[k] = v
 	}
 
+	// GIT_SSH_COMMAND overrides core.sshCommand from the system gitconfig.
+	// We set it per-session based on whether the deploy key was registered:
+	//   - deploy key registered: IdentitiesOnly=yes + ephemeral key only.
+	//     Guarantees the repo-scoped key is used, no agent identities tried.
+	//   - deploy key failed: no -i, let ssh use the forwarded agent only.
+	//     Avoids burning GitHub's per-connection auth retry budget on the
+	//     unauthorized ephemeral key before the agent's GitHub key is offered
+	//     (1Password agents commonly carry many keys).
+	if deployKeyID > 0 {
+		envVars["GIT_SSH_COMMAND"] = "ssh -i /etc/vigilante/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+	} else {
+		envVars["GIT_SSH_COMMAND"] = "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+	}
+
 	// Create the container.
 	containerID, err := container.Create(ctx, m.runner, container.Config{
 		Image:        image,
