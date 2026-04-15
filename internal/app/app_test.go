@@ -8959,7 +8959,7 @@ func TestRecreateSessionFallsBackToUserRepoLookup(t *testing.T) {
 		Outputs: map[string]string{
 			testutil.Key("gh", "api", "--paginate", "-H", "Accept: application/vnd.github+json", "user/repos?per_page=100&affiliation=owner,collaborator,organization_member", "-q", ".[].full_name"): "other/repo\nowner/repo\nthird/repo\n",
 			"gh api repos/owner/repo/issues/80": `{"title":"adopted","body":"body","html_url":"https://github.com/owner/repo/issues/80","state":"open","labels":[],"assignees":[]}`,
-			testutil.Key("gh", "api", "--method", "POST", "-H", "Accept: application/vnd.github+json", "repos/owner/repo/issues", "-f", "title=adopted", "-f", "body=body\n\n---\n_Recreated from #80 by Vigilante._"):                  `{"number":81,"html_url":"https://github.com/owner/repo/issues/81"}`,
+			testutil.Key("gh", "api", "--method", "POST", "-H", "Accept: application/vnd.github+json", "repos/owner/repo/issues", "-f", "title=adopted", "-f", "body=body\n\n---\n_Recreated from #80 by Vigilante._"):                       `{"number":81,"html_url":"https://github.com/owner/repo/issues/81"}`,
 			"gh issue comment --repo owner/repo 80 --body ## ♻️ Issue Recreated\n\nThis issue has been recreated as #81.\n\nThe original issue is being closed as `not planned` and stale artifacts are being cleaned up.\n\nSource: `cli`.": "ok",
 			testutil.Key("gh", "api", "--method", "PATCH", "-H", "Accept: application/vnd.github+json", "repos/owner/repo/issues/80", "-f", "state=closed", "-f", "state_reason=not_planned"):                                                "ok",
 		},
