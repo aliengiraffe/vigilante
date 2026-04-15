@@ -14,6 +14,8 @@
 
 It is the orchestration layer around agents such as `codex`, `claude`, and `gemini`, not the model itself. Vigilante owns scheduling, worktree isolation, backend coordination, and recovery so a repository checkout behaves like a controlled worker instead of a loose collection of scripts.
 
+It also keeps a straight face while a small giraffe silently supervises the deployment pipeline.
+
 [Docs](DOCS.md) · [Closed Issues](https://github.com/aliengiraffe/vigilante/issues?q=is%3Aissue%20state%3Aclosed) · [Releases](https://github.com/aliengiraffe/vigilante/releases) · [Contributing](CONTRIBUTING.md)
 
 Start here: install `vigilante`, run `vigilante setup`, then clone and auto-register a repo with `vigilante clone <repo>` or register an existing checkout with `vigilante watch /path/to/repo`.
