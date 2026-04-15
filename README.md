@@ -1,5 +1,5 @@
 <p align="center">
-  <img src=".github/assets/logo.png" alt="vigilante logo" width="240">
+  <img src=".github/assets/logo_transparent.png" alt="vigilante logo" width="240">
 </p>
 
 # vigilante
