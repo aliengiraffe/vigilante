@@ -60,6 +60,13 @@ type SessionConfig struct {
 	// the hardcoded VIGILANTE_* variables. Used for things like
 	// SSH_AUTH_SOCK when the host SSH agent is forwarded into the sandbox.
 	ExtraEnv map[string]string
+	// HostSSHKeyPath is an optional path to a host SSH private key (e.g.
+	// ~/.ssh/id_ed25519) to mount as a fallback push identity when deploy
+	// key registration fails. Used on Linux hosts where deploy keys are
+	// disabled and the gnome-keyring SSH agent is unreliable across the
+	// docker bind-mount boundary. The corresponding public key must already
+	// be registered with the operator's GitHub account.
+	HostSSHKeyPath string
 }
 
 // Session represents an active sandbox session.
@@ -75,6 +82,7 @@ type Session struct {
 	SSHKeyDir     string
 	SSHPublicKey  string
 	DeployKeyID   int64
+	HostSSHKeySrc string
 	Status        string
 	CreatedAt     time.Time
 	ExpiresAt     time.Time
@@ -126,7 +134,7 @@ func NewManager(runner environment.Runner, logger *slog.Logger, stateDir string)
 	}, nil
 }
 
-// StartProxy starts the reverse proxy on the given address (e.g. "127.0.0.1:0").
+// StartProxy starts the reverse proxy on the given address (e.g. "0.0.0.0:0").
 func (m *Manager) StartProxy(addr string) error {
 	return m.proxy.Start(addr)
 }
@@ -221,6 +229,30 @@ func (m *Manager) Provision(ctx context.Context, cfg SessionConfig) (*Session, e
 		mounts = append(mounts, mount)
 	}
 
+	// Mount the operator's host SSH key whenever one was supplied, regardless
+	// of deploy key registration outcome. Two distinct uses:
+	//   - auth fallback for git push when deploy key registration failed
+	//     (useHostSSHKeyForAuth below)
+	//   - commit signing (always, when mounted), since deploy keys cannot
+	//     produce "Verified" signatures on GitHub — only keys registered
+	//     under the user's account as SSH signing keys can.
+	// Manager.Start re-installs it as root-owned 0600 inside the container.
+	hostKeyMounted := false
+	if strings.TrimSpace(cfg.HostSSHKeyPath) != "" {
+		if _, err := os.Stat(cfg.HostSSHKeyPath); err == nil {
+			mounts = append(mounts, container.Mount{
+				Source:   cfg.HostSSHKeyPath,
+				Target:   "/etc/vigilante/ssh/host_id",
+				ReadOnly: true,
+			})
+			hostKeyMounted = true
+		} else {
+			m.logger.Warn("host ssh key path not accessible, skipping mount",
+				"path", cfg.HostSSHKeyPath, "err", err)
+		}
+	}
+	useHostSSHKeyForAuth := deployKeyID == 0 && hostKeyMounted
+
 	envVars := map[string]string{
 		"VIGILANTE_SESSION_ID":    sessionID,
 		"VIGILANTE_SANDBOX_TOKEN": sandboxToken,
@@ -241,9 +273,18 @@ func (m *Manager) Provision(ctx context.Context, cfg SessionConfig) (*Session, e
 	//     Avoids burning GitHub's per-connection auth retry budget on the
 	//     unauthorized ephemeral key before the agent's GitHub key is offered
 	//     (1Password agents commonly carry many keys).
-	if deployKeyID > 0 {
-		envVars["GIT_SSH_COMMAND"] = "ssh -i /etc/vigilante/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
-	} else {
+	// The ephemeral key is bind-mounted at /etc/vigilante/ssh/id_ed25519 owned
+	// by the host user (typically uid 1000). OpenSSH refuses identity files
+	// whose owner is neither root nor the current user, so on Linux the
+	// container (running as root, uid 0) cannot load the bind-mounted file.
+	// Manager.Start re-installs it at /root/.ssh/id_ed25519 with root:root 0600
+	// once the container is running; point GIT_SSH_COMMAND there.
+	switch {
+	case deployKeyID > 0:
+		envVars["GIT_SSH_COMMAND"] = "ssh -i /root/.ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+	case useHostSSHKeyForAuth:
+		envVars["GIT_SSH_COMMAND"] = "ssh -i /root/.ssh/host_id -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+	default:
 		envVars["GIT_SSH_COMMAND"] = "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 	}
 
@@ -287,6 +328,9 @@ func (m *Manager) Provision(ctx context.Context, cfg SessionConfig) (*Session, e
 		CreatedAt:     now,
 		ExpiresAt:     expiresAt,
 	}
+	if hostKeyMounted {
+		sess.HostSSHKeySrc = cfg.HostSSHKeyPath
+	}
 
 	m.mu.Lock()
 	m.sessions[sessionID] = sess
@@ -314,6 +358,34 @@ func (m *Manager) Start(ctx context.Context, sessionID string) error {
 
 	if err := container.Start(ctx, m.runner, sess.ContainerName); err != nil {
 		return err
+	}
+
+	// Re-install the bind-mounted ephemeral SSH key as root-owned 0600 inside
+	// the container. The bind mount preserves the host file's uid (typically
+	// 1000), and OpenSSH refuses to use identity files owned by neither root
+	// nor the current user — which would surface as "Permission denied
+	// (publickey)" on git push from inside the sandbox.
+	if sess.DeployKeyID > 0 {
+		installCmd := []string{"sh", "-c",
+			"install -m 600 -o root -g root /etc/vigilante/ssh/id_ed25519 /root/.ssh/id_ed25519"}
+		if out, err := container.Exec(ctx, m.runner, sess.ContainerName, installCmd); err != nil {
+			return fmt.Errorf("install sandbox ssh key: %w\n%s", err, out)
+		}
+	}
+	if sess.HostSSHKeySrc != "" {
+		// Install host key at root-owned 0600 and derive the public key that
+		// the sanitized gitconfig's user.signingkey references. Signing is
+		// turned on in the mounted ~/.gitconfig (see writeSandboxGitconfig),
+		// not via `git config` here — that file is a bind mount, and git's
+		// rename-based writes fail on it with "Device or resource busy".
+		installCmd := []string{"sh", "-c", strings.Join([]string{
+			"install -m 600 -o root -g root /etc/vigilante/ssh/host_id /root/.ssh/host_id",
+			"ssh-keygen -y -f /root/.ssh/host_id > /root/.ssh/host_id.pub",
+			"chmod 644 /root/.ssh/host_id.pub",
+		}, " && ")}
+		if out, err := container.Exec(ctx, m.runner, sess.ContainerName, installCmd); err != nil {
+			return fmt.Errorf("install host ssh key: %w\n%s", err, out)
+		}
 	}
 
 	m.mu.Lock()

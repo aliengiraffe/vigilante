@@ -9677,7 +9677,7 @@ func TestWriteSandboxGitconfigWritesSanitizedFile(t *testing.T) {
 	}
 	stateRoot := filepath.Join(tmp, "state")
 
-	dst, err := writeSandboxGitconfig(srcPath, stateRoot)
+	dst, err := writeSandboxGitconfig(srcPath, stateRoot, false)
 	if err != nil {
 		t.Fatal(err)
 	}
