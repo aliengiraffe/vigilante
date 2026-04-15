@@ -167,6 +167,10 @@ func TestRunIssueSessionSuccessInSandboxUsesDockerExec(t *testing.T) {
 				ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"},
 				state.Session{WorktreePath: "/workspace", Branch: "vigilante/issue-7", Provider: "codex", SandboxMode: true, SandboxContainerName: "vigilante-sandbox-sbx_test"},
 			)): "done",
+			// Progress evaluation looks for commits ahead of the base branch; a
+			// non-zero rev-list count is what distinguishes a successful session
+			// from an "incomplete / no_durable_progress" one.
+			"git rev-list --count origin/main..HEAD": "1\n",
 		},
 	}
 	store := state.NewStore()
@@ -188,6 +192,7 @@ func TestRunIssueSessionSuccessInSandboxUsesDockerExec(t *testing.T) {
 		Status:               state.SessionStatusRunning,
 		SandboxMode:          true,
 		SandboxContainerName: "vigilante-sandbox-sbx_test",
+		PullRequestNumber:    42,
 	}
 	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
 	if got.Status != state.SessionStatusSuccess {

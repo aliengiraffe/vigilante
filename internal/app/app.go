@@ -5427,6 +5427,26 @@ func (a *App) dispatchIssueSession(ctx context.Context, target state.WatchTarget
 	if err != nil {
 		return blockedIssueSessionForDispatchFailure(target, issue, selectedProvider, err, a.clock()), err
 	}
+
+	// When an iteration request targets an already-existing worktree, try to
+	// reuse it before calling CreateIssueWorktree. CreateIssueWorktree treats a
+	// stale on-disk worktree as something to remove, which is the wrong
+	// instinct for iterations — the previous run left commits there that we
+	// want to keep. Reuse first; only if reuse refuses do we fall through to
+	// the fresh-creation path, which will surface the real unsafe-reuse error
+	// instead of a generic "remove stale worktree" failure.
+	if triggeringComment != nil {
+		expectedPath := worktree.IssueWorktreePath(target.Path, issue.Number)
+		if info, statErr := os.Stat(expectedPath); statErr == nil && info.IsDir() {
+			reused, reuseErr := reuseExistingIterationSession(target, issue, selectedProvider, previous, issueBody, iterationContext, triggeringComment, a.clock())
+			if reuseErr == nil {
+				a.logger.Info("iteration dispatch reusing existing worktree", "repo", target.Repo, "issue", issue.Number, "path", reused.WorktreePath, "branch", reused.Branch)
+				return reused, nil
+			}
+			return blockedIssueSessionForDispatchFailure(target, issue, selectedProvider, reuseErr, a.clock()), reuseErr
+		}
+	}
+
 	wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, target, issue.Number, issue.Title)
 	if err != nil {
 		if triggeringComment != nil && strings.Contains(strings.ToLower(err.Error()), "worktree already exists") {
