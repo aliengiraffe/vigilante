@@ -39,3 +39,8 @@ tasks:
     deps: [install]
     cmds:
       - ./scripts/setup-daemon.sh
+
+  sandbox-image:
+    desc: Build the vigilante-sandbox Docker image
+    cmds:
+      - docker build -t vigilante-sandbox:latest .

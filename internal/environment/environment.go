@@ -54,6 +54,32 @@ func (ExecRunner) Run(ctx context.Context, dir string, name string, args ...stri
 	return output, nil
 }
 
+// RunWithStdin executes a command with the given bytes piped on stdin and
+// returns the combined stdout/stderr output. Used by the sandbox proxy to
+// forward agent stdin (e.g. `--body-file -`) through to the host gh CLI.
+func (ExecRunner) RunWithStdin(ctx context.Context, stdin string, dir string, name string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	if stdin != "" {
+		cmd.Stdin = strings.NewReader(stdin)
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	output := stdout.String()
+	if stderr.Len() > 0 {
+		output += stderr.String()
+	}
+	if err != nil {
+		return output, fmt.Errorf("%s %v: %w", name, args, err)
+	}
+	return output, nil
+}
+
 // RunStreaming executes a command and copies stdout/stderr to w in real-time
 // while also capturing the full output to return as a string.
 func (ExecRunner) RunStreaming(ctx context.Context, dir string, w io.Writer, name string, args ...string) (string, error) {
@@ -83,6 +109,46 @@ func (r LoggingRunner) Run(ctx context.Context, dir string, name string, args ..
 		r.Logger.Info("command start", "dir", dir, "cmd", commandString(name, args...))
 	}
 	output, err := r.Base.Run(ctx, dir, name, args...)
+	endedAt := time.Now().UTC()
+	exitCode := exitCodeForError(err)
+	if r.CaptureCommand != nil {
+		r.CaptureCommand(ctx, name, args, exitCode, endedAt.Sub(startedAt).Milliseconds())
+	}
+	if r.AccessLog != nil {
+		r.AccessLog(buildAccessLogEntry(ctx, dir, name, args, startedAt, endedAt, output, err))
+	}
+	if r.Logger != nil {
+		if err != nil {
+			r.Logger.Error("command failed", "cmd", commandString(name, args...), "err", err, "output", trimForLog(output))
+		} else {
+			if r.LogSuccessOutput {
+				r.Logger.Info("command ok", "cmd", commandString(name, args...), "output", trimForLog(output))
+			} else {
+				r.Logger.Info("command ok", "cmd", commandString(name, args...))
+			}
+		}
+	}
+	return output, err
+}
+
+// RunWithStdin delegates to the base runner's RunWithStdin if available,
+// otherwise falls back to Run (dropping stdin). Logging and telemetry are
+// applied as usual.
+func (r LoggingRunner) RunWithStdin(ctx context.Context, stdin string, dir string, name string, args ...string) (string, error) {
+	startedAt := time.Now().UTC()
+	if r.Logger != nil {
+		r.Logger.Info("command start", "dir", dir, "cmd", commandString(name, args...), "stdin_bytes", len(stdin))
+	}
+	var output string
+	var err error
+	type stdinCapable interface {
+		RunWithStdin(context.Context, string, string, string, ...string) (string, error)
+	}
+	if sr, ok := r.Base.(stdinCapable); ok {
+		output, err = sr.RunWithStdin(ctx, stdin, dir, name, args...)
+	} else {
+		output, err = r.Base.Run(ctx, dir, name, args...)
+	}
 	endedAt := time.Now().UTC()
 	exitCode := exitCodeForError(err)
 	if r.CaptureCommand != nil {

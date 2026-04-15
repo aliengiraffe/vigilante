@@ -36,6 +36,8 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/provider"
 	"github.com/nicobistolfi/vigilante/internal/repo"
 	issuerunner "github.com/nicobistolfi/vigilante/internal/runner"
+	"github.com/nicobistolfi/vigilante/internal/sandbox"
+	"github.com/nicobistolfi/vigilante/internal/sandbox/container"
 	"github.com/nicobistolfi/vigilante/internal/service"
 	"github.com/nicobistolfi/vigilante/internal/skill"
 	"github.com/nicobistolfi/vigilante/internal/state"
@@ -118,6 +120,7 @@ type App struct {
 	githubRateLimitMu         sync.Mutex
 	githubRateLimitState      githubRateLimitState
 	proxyExec                 func(context.Context, io.Reader, io.Writer, io.Writer, string, ...string) (int, error)
+	sandboxManager            *sandbox.Manager
 }
 
 type githubRateLimitState struct {
@@ -148,6 +151,12 @@ type watchBranchOptions struct {
 type watchIssueOptions struct {
 	issueBackend string
 	issueStage   string
+}
+
+type watchSandboxOptions struct {
+	sandboxFlagSet bool
+	sandboxMode    bool
+	sandboxImage   string
 }
 
 func (f *stringListFlag) String() string {
@@ -633,7 +642,7 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 	case "watch":
 		fs := flag.NewFlagSet("watch", flag.ContinueOnError)
 		configureFlagSet(fs, func(w io.Writer) {
-			fmt.Fprintln(w, "usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] [--fork [--fork-owner value]] <path>")
+			fmt.Fprintln(w, "usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] [--fork [--fork-owner value]] [--sandbox [--sandbox-image value]] <path>")
 			fmt.Fprintln(w)
 			fmt.Fprintln(w, "Register a local repository for issue monitoring.")
 			fmt.Fprintln(w)
@@ -651,6 +660,8 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		trackDefaultBranch := fs.Bool("track-default-branch", false, "track the repository default branch automatically")
 		forkMode := fs.Bool("fork", false, "push implementation branches to a GitHub fork and open PRs back to the watched repository")
 		forkOwner := fs.String("fork-owner", "", "GitHub owner that should host the fork (defaults to the authenticated gh user)")
+		sandboxMode := fs.Bool("sandbox", false, "run coding-agent sessions inside isolated Docker containers")
+		sandboxImage := fs.String("sandbox-image", "", "Docker image for sandbox containers (defaults to vigilante-sandbox:latest)")
 		if err := parseFlagSet(fs, args[1:], a.stdout); err != nil {
 			if errors.Is(err, errHelpHandled) {
 				return nil
@@ -658,10 +669,11 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 			return err
 		}
 		if fs.NArg() != 1 {
-			return errors.New("usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] [--fork [--fork-owner value]] <path>")
+			return errors.New("usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] [--fork [--fork-owner value]] [--sandbox [--sandbox-image value]] <path>")
 		}
 		parsedMaxParallel := unsetMaxParallel
 		branchOptions := watchBranchOptions{}
+		sbxOptions := watchSandboxOptions{sandboxImage: strings.TrimSpace(*sandboxImage)}
 		fs.Visit(func(f *flag.Flag) {
 			switch f.Name {
 			case "max-parallel":
@@ -674,6 +686,9 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 				branchOptions.forkFlagSet = true
 			case "fork-owner":
 				branchOptions.forkFlagSet = true
+			case "sandbox":
+				sbxOptions.sandboxFlagSet = true
+				sbxOptions.sandboxMode = *sandboxMode
 			}
 		})
 		branchOptions.pinnedBranch = strings.TrimSpace(*branch)
@@ -689,7 +704,7 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		return a.watchWithOptions(ctx, fs.Arg(0), labels, *assignee, parsedMaxParallel, *selectedProvider, watchIssueOptions{
 			issueBackend: *issueBackend,
 			issueStage:   *issueStage,
-		}, branchOptions)
+		}, branchOptions, sbxOptions)
 	case "unwatch":
 		if len(args) != 2 {
 			return errors.New("usage: vigilante unwatch <path>")
@@ -856,7 +871,7 @@ func (a *App) runCloneCommand(ctx context.Context, args []string) error {
 		return fmt.Errorf("clone succeeded but automatic watch-target registration failed for %s: load watch targets: %w", clonePath, err)
 	}
 	alreadyWatched := findWatchTargetByPath(targets, clonePath).Path != ""
-	if err := a.watchWithOptions(ctx, clonePath, nil, "", unsetMaxParallel, "", watchIssueOptions{}, watchBranchOptions{}); err != nil {
+	if err := a.watchWithOptions(ctx, clonePath, nil, "", unsetMaxParallel, "", watchIssueOptions{}, watchBranchOptions{}, watchSandboxOptions{}); err != nil {
 		return fmt.Errorf("clone succeeded but automatic watch-target registration failed for %s: %w", clonePath, err)
 	}
 	if alreadyWatched {
@@ -934,7 +949,7 @@ func (a *App) runCloneFork(ctx context.Context, args []string) error {
 		return fmt.Errorf("clone succeeded but automatic watch-target registration failed for %s: load watch targets: %w", clonePath, err)
 	}
 	alreadyWatched := findWatchTargetByPath(targets, clonePath).Path != ""
-	if err := a.watchWithOptions(ctx, clonePath, nil, "", unsetMaxParallel, "", watchIssueOptions{}, branchOptions); err != nil {
+	if err := a.watchWithOptions(ctx, clonePath, nil, "", unsetMaxParallel, "", watchIssueOptions{}, branchOptions, watchSandboxOptions{}); err != nil {
 		return fmt.Errorf("clone succeeded but automatic watch-target registration failed for %s: %w", clonePath, err)
 	}
 
@@ -1108,7 +1123,7 @@ func (a *App) runCleanupCommand(ctx context.Context, args []string) error {
 func (a *App) runStartCommand(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
 	configureFlagSet(fs, func(w io.Writer) {
-		fmt.Fprintln(w, "usage: vigilante start <repo-folder> --issue <n> [--provider value]")
+		fmt.Fprintln(w, "usage: vigilante start <repo-folder> --issue <n> [--provider value] [--sandbox]")
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Run a one-off issue implementation session against a local repository.")
 		fmt.Fprintln(w, "The repository does not need to be watched.")
@@ -1118,6 +1133,7 @@ func (a *App) runStartCommand(ctx context.Context, args []string) error {
 	})
 	issue := fs.Int("issue", 0, "issue number to implement")
 	selectedProvider := fs.String("provider", "", "coding agent provider")
+	sandboxMode := fs.Bool("sandbox", false, "run this one-off session inside an isolated Docker container")
 	if err := parseFlagSet(fs, args, a.stdout); err != nil {
 		if errors.Is(err, errHelpHandled) {
 			return nil
@@ -1125,18 +1141,18 @@ func (a *App) runStartCommand(ctx context.Context, args []string) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: vigilante start <repo-folder> --issue <n> [--provider value]")
+		return errors.New("usage: vigilante start <repo-folder> --issue <n> [--provider value] [--sandbox]")
 	}
 	if *issue <= 0 {
-		return errors.New("usage: vigilante start <repo-folder> --issue <n> [--provider value]")
+		return errors.New("usage: vigilante start <repo-folder> --issue <n> [--provider value] [--sandbox]")
 	}
-	return a.StartOneOffSession(ctx, fs.Arg(0), *issue, strings.TrimSpace(*selectedProvider))
+	return a.StartOneOffSession(ctx, fs.Arg(0), *issue, strings.TrimSpace(*selectedProvider), *sandboxMode)
 }
 
 // StartOneOffSession runs a one-off issue implementation session for a local
 // repository that is not necessarily in the watchlist. The repository is not
 // added to the watchlist as a side effect.
-func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumber int, providerID string) error {
+func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumber int, providerID string, sandboxRequested bool) error {
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
 	}
@@ -1171,6 +1187,7 @@ func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumbe
 		Classification: info.Classification,
 		Provider:       providerID,
 		MaxParallel:    1,
+		SandboxMode:    sandboxRequested,
 	}
 
 	if err := a.ensureIssueTrackerReady(ctx, target.EffectiveIssueBackend()); err != nil {
@@ -1205,6 +1222,14 @@ func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumbe
 	target, err = a.prepareExecutionTarget(ctx, target)
 	if err != nil {
 		return err
+	}
+
+	enableSandbox := target.SandboxMode || a.isSandboxEnabled()
+	if enableSandbox {
+		if err := a.initSandbox(ctx, true); err != nil {
+			return err
+		}
+		defer a.shutdownSandbox(ctx)
 	}
 
 	a.sessionMu.Lock()
@@ -1251,16 +1276,36 @@ func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumbe
 		LastHeartbeatAt:    now,
 		UpdatedAt:          now,
 	}
+	if enableSandbox {
+		session.SandboxMode = true
+	}
 	sessions = upsertSession(sessions, session)
 	if err := a.state.SaveSessions(sessions); err != nil {
 		return err
 	}
 
+	a.syncSessionIssueLabelsBestEffort(ctx, &session, nil, nil, nil)
+
 	fmt.Fprintf(a.stdout, "starting one-off session for %s issue #%d in %s\n", info.Repo, issueNumber, wt.Path)
 	fmt.Fprintf(a.stdout, "note: this is a one-off session — the repository was not added to watched targets\n")
 
+	streamCtx, stopStream := context.WithCancel(ctx)
+	defer stopStream()
+	streamDone := make(chan struct{})
+	go func() {
+		defer close(streamDone)
+		_ = a.streamSessionLog(streamCtx, info.Repo, issueNumber)
+	}()
+
 	// Run the session synchronously so the CLI blocks until completion.
-	result := issuerunner.RunIssueSession(ctx, a.env, a.state, issueTracker, target, ghIssue, session)
+	var result state.Session
+	if session.SandboxMode && a.sandboxManager != nil {
+		result = a.runSandboxSession(ctx, target, ghIssue, session)
+	} else {
+		result = issuerunner.RunIssueSession(ctx, a.env, a.state, issueTracker, target, ghIssue, session)
+	}
+	stopStream()
+	<-streamDone
 
 	sessions, err = a.state.LoadSessions()
 	if err != nil {
@@ -1583,10 +1628,10 @@ func (a *App) Watch(ctx context.Context, rawPath string, labels []string, assign
 }
 
 func (a *App) WatchWithProvider(ctx context.Context, rawPath string, labels []string, assignee string, maxParallel int, providerID string) error {
-	return a.watchWithOptions(ctx, rawPath, labels, assignee, maxParallel, providerID, watchIssueOptions{}, watchBranchOptions{})
+	return a.watchWithOptions(ctx, rawPath, labels, assignee, maxParallel, providerID, watchIssueOptions{}, watchBranchOptions{}, watchSandboxOptions{})
 }
 
-func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []string, assignee string, maxParallel int, providerID string, issueOptions watchIssueOptions, branchOptions watchBranchOptions) error {
+func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []string, assignee string, maxParallel int, providerID string, issueOptions watchIssueOptions, branchOptions watchBranchOptions, sandboxOptions watchSandboxOptions) error {
 	a.logger.Info("watch start", "raw_path", rawPath, "assignee", assignee, "max_parallel", maxParallel)
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
@@ -1710,6 +1755,12 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []str
 				}
 				targets[i].Branch = resolvedBranch
 			}
+			if sandboxOptions.sandboxFlagSet {
+				targets[i].SandboxMode = sandboxOptions.sandboxMode
+			}
+			if sandboxOptions.sandboxImage != "" {
+				targets[i].SandboxImage = sandboxOptions.sandboxImage
+			}
 			updated = true
 			break
 		}
@@ -1731,6 +1782,8 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []str
 			AddedAt:        a.clock().Format(time.RFC3339),
 			IssueBackend:   effectiveIssueBackend,
 			IssueStage:     effectiveIssueStage,
+			SandboxMode:    sandboxOptions.sandboxMode,
+			SandboxImage:   sandboxOptions.sandboxImage,
 		}
 		if providerID != "" {
 			target.Provider = providerID
@@ -1888,6 +1941,12 @@ func (a *App) DaemonRun(ctx context.Context, interval time.Duration, once bool) 
 			"result":           result,
 		})
 	}()
+
+	// Initialize sandbox manager if sandbox mode is enabled.
+	if err := a.initSandboxIfEnabled(ctx); err != nil {
+		a.logger.Warn("sandbox initialization skipped", "err", err)
+	}
+	defer a.shutdownSandbox(ctx)
 
 	if once {
 		if err := a.ScanOnce(ctx); err != nil {
@@ -2606,7 +2665,12 @@ func (a *App) launchIssueSession(ctx context.Context, target state.WatchTarget, 
 		defer a.sessionWG.Done()
 		defer a.clearSessionCancel(key)
 
-		result := issuerunner.RunIssueSession(runCtx, a.env, a.state, a.issueTrackerForTarget(target), target, issue, session)
+		var result state.Session
+		if session.SandboxMode && a.sandboxManager != nil {
+			result = a.runSandboxSession(runCtx, target, issue, session)
+		} else {
+			result = issuerunner.RunIssueSession(runCtx, a.env, a.state, a.issueTrackerForTarget(target), target, issue, session)
+		}
 
 		a.sessionMu.Lock()
 		defer a.sessionMu.Unlock()
@@ -3929,7 +3993,15 @@ func (a *App) RecreateSession(ctx context.Context, repoSlug string, issue int, s
 	}
 	target, ok := findWatchTargetByRepo(targets, repoSlug)
 	if !ok {
-		return fmt.Errorf("watch target not found for %s", repoSlug)
+		resolved, lookupErr := ghcli.FindAuthenticatedUserRepository(ctx, a.env.Runner, repoSlug)
+		if lookupErr != nil {
+			return fmt.Errorf("watch target not found for %s and user repo lookup failed: %w", repoSlug, lookupErr)
+		}
+		if resolved == "" {
+			return fmt.Errorf("repo %s is not in watch targets and was not found in the authenticated user's GitHub repositories", repoSlug)
+		}
+		repoSlug = resolved
+		target = state.WatchTarget{Repo: resolved}
 	}
 
 	details, err := a.issueTrackerForTarget(target).GetWorkItemDetails(ctx, a.issueProjectForTarget(target), issue)
@@ -5355,6 +5427,26 @@ func (a *App) dispatchIssueSession(ctx context.Context, target state.WatchTarget
 	if err != nil {
 		return blockedIssueSessionForDispatchFailure(target, issue, selectedProvider, err, a.clock()), err
 	}
+
+	// When an iteration request targets an already-existing worktree, try to
+	// reuse it before calling CreateIssueWorktree. CreateIssueWorktree treats a
+	// stale on-disk worktree as something to remove, which is the wrong
+	// instinct for iterations — the previous run left commits there that we
+	// want to keep. Reuse first; only if reuse refuses do we fall through to
+	// the fresh-creation path, which will surface the real unsafe-reuse error
+	// instead of a generic "remove stale worktree" failure.
+	if triggeringComment != nil {
+		expectedPath := worktree.IssueWorktreePath(target.Path, issue.Number)
+		if info, statErr := os.Stat(expectedPath); statErr == nil && info.IsDir() {
+			reused, reuseErr := reuseExistingIterationSession(target, issue, selectedProvider, previous, issueBody, iterationContext, triggeringComment, a.clock())
+			if reuseErr == nil {
+				a.logger.Info("iteration dispatch reusing existing worktree", "repo", target.Repo, "issue", issue.Number, "path", reused.WorktreePath, "branch", reused.Branch)
+				return reused, nil
+			}
+			return blockedIssueSessionForDispatchFailure(target, issue, selectedProvider, reuseErr, a.clock()), reuseErr
+		}
+	}
+
 	wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, target, issue.Number, issue.Title)
 	if err != nil {
 		if triggeringComment != nil && strings.Contains(strings.ToLower(err.Error()), "worktree already exists") {
@@ -5416,7 +5508,23 @@ func (a *App) dispatchIssueSession(ctx context.Context, target state.WatchTarget
 		session.LastIterationCommentID = triggeringComment.ID
 		session.LastIterationCommentAt = triggeringComment.CreatedAt.UTC().Format(time.RFC3339)
 	}
+
+	// Mark the session for sandbox execution when the watch target or
+	// service config has sandbox mode enabled.
+	if target.SandboxMode || a.isSandboxEnabled() {
+		session.SandboxMode = true
+	}
+
 	return session, nil
+}
+
+// isSandboxEnabled checks the service config for sandbox mode.
+func (a *App) isSandboxEnabled() bool {
+	config, err := a.state.LoadServiceConfig()
+	if err != nil {
+		return false
+	}
+	return config.IsSandboxEnabled()
 }
 
 func reuseExistingIterationSession(target state.WatchTarget, issue ghcli.Issue, selectedProvider string, previous state.Session, issueBody string, iterationContext string, triggeringComment *ghcli.IssueComment, now time.Time) (state.Session, error) {
@@ -7097,4 +7205,378 @@ func (a *App) dispatchPackageRemediation(ctx context.Context, target state.Watch
 	body := hardening.FormatRemediationResultComment(true, "Remediation changes have been pushed to the PR branch. Please review the updated dependency state.")
 	_ = prMgr.CommentOnPullRequest(ctx, target.Repo, pr.Number, body)
 	a.logger.Info("package remediation succeeded", "repo", target.Repo, "pr", pr.Number)
+}
+
+// runSandboxSession provisions a sandbox container, runs the coding agent
+// inside it, and tears down the sandbox when done.
+func (a *App) runSandboxSession(ctx context.Context, target state.WatchTarget, issue ghcli.Issue, session state.Session) state.Session {
+	config, _ := a.state.LoadServiceConfig()
+
+	var ttl time.Duration
+	if raw := strings.TrimSpace(config.SandboxDefaultTTL); raw != "" {
+		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
+			ttl = parsed
+		}
+	}
+
+	homeDir, _ := os.UserHomeDir()
+	hostSSHKeyPath := hostSSHKeyForFallback(homeDir, a.logger)
+	enableSSHSigning := hostSSHKeyPath != ""
+	if enableSSHSigning {
+		a.logger.Info("ssh commit signing enabled in sandbox gitconfig", "host_key", hostSSHKeyPath)
+	} else {
+		a.logger.Warn("ssh commit signing disabled: no host key found under ~/.ssh (id_ed25519/id_ecdsa/id_rsa); commits will be unsigned")
+	}
+	mounts := sandboxConfigMounts(homeDir, a.state, enableSSHSigning)
+
+	extraEnv := map[string]string{}
+	if mount, env, ok := sshAgentForwarding(runtime.GOOS, homeDir, a.logger); ok {
+		mounts = append(mounts, mount)
+		for k, v := range env {
+			extraEnv[k] = v
+		}
+	} else {
+		a.logger.Warn("no host ssh agent available to forward into sandbox; will rely on deploy key or host ssh key fallback")
+	}
+
+	sbxSession, err := a.sandboxManager.Provision(ctx, sandbox.SessionConfig{
+		Repository:     target.Repo,
+		IssueNumber:    issue.Number,
+		Provider:       session.Provider,
+		WorktreePath:   session.WorktreePath,
+		RepoPath:       session.RepoPath,
+		TTL:            ttl,
+		Image:          firstNonEmpty(target.SandboxImage, config.SandboxImage, sandbox.DefaultImage),
+		MemoryLimit:    firstNonEmpty(config.SandboxMemoryLimit, sandbox.DefaultMemoryLimit),
+		CPUs:           firstNonEmpty(config.SandboxCPUs, sandbox.DefaultCPUs),
+		EnableDinD:     true,
+		Mounts:         mounts,
+		ExtraEnv:       extraEnv,
+		HostSSHKeyPath: hostSSHKeyPath,
+	})
+	if err != nil {
+		session.Status = state.SessionStatusFailed
+		session.LastError = fmt.Sprintf("sandbox provision: %s", err)
+		session.EndedAt = a.clock().Format(time.RFC3339)
+		session.UpdatedAt = session.EndedAt
+		return session
+	}
+
+	session.SandboxSessionID = sbxSession.ID
+	session.SandboxContainerName = sbxSession.ContainerName
+	session.SandboxContainerID = sbxSession.ContainerID
+	session.SandboxExpiresAt = sbxSession.ExpiresAt.Format(time.RFC3339)
+
+	if err := a.sandboxManager.Start(ctx, sbxSession.ID); err != nil {
+		session.Status = state.SessionStatusFailed
+		session.LastError = fmt.Sprintf("sandbox start: %s", err)
+		session.EndedAt = a.clock().Format(time.RFC3339)
+		session.UpdatedAt = session.EndedAt
+		_ = a.sandboxManager.Teardown(ctx, sbxSession.ID, "start_failed")
+		return session
+	}
+
+	// Run the actual coding-agent session (host-side runner against the
+	// container worktree). The provider invocation runs as normal but
+	// gh commands inside the sandbox are routed through the proxy.
+	result := issuerunner.RunIssueSession(ctx, a.env, a.state, a.issueTrackerForTarget(target), target, issue, session)
+
+	// Preserve failed or blocked sandboxes for inspection. Successful runs are
+	// still torn down immediately.
+	if result.Status == state.SessionStatusSuccess {
+		if err := a.sandboxManager.Teardown(ctx, sbxSession.ID, "completed"); err != nil {
+			a.logger.Warn("sandbox teardown after session failed", "session_id", sbxSession.ID, "err", err)
+		}
+	} else {
+		// Stop the container to release the port mapping but keep it for
+		// inspection via docker logs / docker cp / docker start.
+		if err := a.sandboxManager.StopContainer(ctx, sbxSession.ID); err != nil {
+			a.logger.Warn("sandbox stop after unsuccessful session failed", "session_id", sbxSession.ID, "err", err)
+		}
+		notice := fmt.Sprintf(
+			"sandbox preserved for inspection: container=%s session_id=%s\ncheck session logs with: vigilante logs --repo %s --issue %d\n",
+			sbxSession.ContainerName,
+			sbxSession.ID,
+			target.Repo,
+			issue.Number,
+		)
+		if result.LastError != "" {
+			result.LastError = strings.TrimSpace(result.LastError) + " (sandbox preserved: " + sbxSession.ContainerName + ")"
+		} else {
+			result.LastError = "sandbox preserved: " + sbxSession.ContainerName
+		}
+		fmt.Fprint(a.stdout, notice)
+		a.logger.Warn("sandbox preserved after unsuccessful session",
+			"session_id", sbxSession.ID,
+			"container", sbxSession.ContainerName,
+			"repo", target.Repo,
+			"issue", issue.Number,
+			"status", result.Status,
+		)
+	}
+
+	return result
+}
+
+func sandboxConfigMounts(homeDir string, store *state.Store, enableSSHSigning bool) []container.Mount {
+	var mounts []container.Mount
+
+	addMount := func(source string, target string, readOnly bool) {
+		if strings.TrimSpace(source) == "" || strings.TrimSpace(target) == "" {
+			return
+		}
+		if _, err := os.Stat(source); err != nil {
+			return
+		}
+		mounts = append(mounts, container.Mount{Source: source, Target: target, ReadOnly: readOnly})
+	}
+
+	addMount(store.CodexHome(), "/root/.codex", false)
+	addMount(store.ClaudeHome(), "/root/.claude", false)
+	addMount(store.GeminiHome(), "/root/.gemini", false)
+
+	if homeDir != "" {
+		// Do not mount the operator's raw ~/.gitconfig: on macOS it commonly
+		// declares `gpg.ssh.program = /Applications/1Password.app/...` and
+		// `commit.gpgsign = true`, which break every git commit inside the
+		// Linux sandbox ("fatal: cannot run /Applications/1Password.app/...").
+		// Generate a sanitized copy that keeps the operator identity but
+		// strips the host-only signing/ssh sections.
+		hostGitconfig := filepath.Join(homeDir, ".gitconfig")
+		if sanitized, err := writeSandboxGitconfig(hostGitconfig, store.Root(), enableSSHSigning); err == nil && sanitized != "" {
+			addMount(sanitized, "/root/.gitconfig", true)
+		} else {
+			addMount(hostGitconfig, "/root/.gitconfig", true)
+		}
+		addMount(filepath.Join(homeDir, ".git-credentials"), "/root/.git-credentials", true)
+		addMount(filepath.Join(homeDir, ".config", "git"), "/root/.config/git", true)
+		addMount(filepath.Join(homeDir, ".ssh", "known_hosts"), "/root/.ssh/known_hosts", true)
+	}
+
+	return mounts
+}
+
+// sshAgentForwarding returns the bind mount and env var needed to forward
+// the host's SSH agent into the sandbox container, so the agent inside the
+// sandbox can run `git push` against GitHub using the operator's existing
+// SSH key (1Password agent on macOS, ssh-agent on Linux). The container
+// never sees the private key — only the agent socket protocol.
+//
+// On macOS Docker Desktop, this uses the magic path
+// `/run/host-services/ssh-auth.sock` which Docker Desktop automatically
+// proxies back to the host SSH agent regardless of how vigilante was
+// launched (launchd doesn't propagate $SSH_AUTH_SOCK to its children).
+//
+// On Linux, it bind-mounts $SSH_AUTH_SOCK directly when set and reachable.
+//
+// Returns ok=false when no agent is available — git push from inside the
+// sandbox will then fail with a clear "Permission denied (publickey)"
+// instead of mysteriously hanging.
+func sshAgentForwarding(goos string, homeDir string, logger *slog.Logger) (container.Mount, map[string]string, bool) {
+	if goos == "darwin" {
+		const dockerDesktopAgent = "/run/host-services/ssh-auth.sock"
+		if logger != nil {
+			logger.Info("forwarding host ssh agent via docker desktop magic socket", "path", dockerDesktopAgent)
+		}
+		return container.Mount{Source: dockerDesktopAgent, Target: dockerDesktopAgent},
+			map[string]string{"SSH_AUTH_SOCK": dockerDesktopAgent},
+			true
+	}
+	sock := strings.TrimSpace(os.Getenv("SSH_AUTH_SOCK"))
+	if sock == "" {
+		// Fall back to the common 1Password and ssh-agent locations.
+		candidates := []string{}
+		if homeDir != "" {
+			candidates = append(candidates,
+				filepath.Join(homeDir, ".1password", "agent.sock"),
+			)
+		}
+		for _, c := range candidates {
+			if _, err := os.Stat(c); err == nil {
+				sock = c
+				break
+			}
+		}
+	}
+	if sock == "" {
+		return container.Mount{}, nil, false
+	}
+	if _, err := os.Stat(sock); err != nil {
+		return container.Mount{}, nil, false
+	}
+	target := "/run/host-ssh-agent.sock"
+	if logger != nil {
+		logger.Info("forwarding host ssh agent", "host_socket", sock, "container_socket", target)
+	}
+	return container.Mount{Source: sock, Target: target}, map[string]string{"SSH_AUTH_SOCK": target}, true
+}
+
+// hostSSHKeyForFallback returns the path to a host SSH private key suitable
+// for use as a sandbox push identity when deploy key registration is denied
+// (e.g. "Deploy keys are disabled for this repository") and SSH agent
+// forwarding is not usable (common on Linux when the gnome-keyring socket
+// is unreachable across the docker bind-mount). Returns "" when no key is
+// found; callers must treat this strictly as a fallback.
+//
+// The corresponding public key is expected to already be registered with
+// the operator's GitHub account. We only check well-known filenames in
+// ~/.ssh/ — generated by `ssh-keygen` defaults — and do not probe agents.
+func hostSSHKeyForFallback(homeDir string, logger *slog.Logger) string {
+	if strings.TrimSpace(homeDir) == "" {
+		return ""
+	}
+	for _, name := range []string{"id_ed25519", "id_ecdsa", "id_rsa"} {
+		path := filepath.Join(homeDir, ".ssh", name)
+		if _, err := os.Stat(path); err == nil {
+			if logger != nil {
+				logger.Info("host ssh key available as sandbox fallback identity", "path", path)
+			}
+			return path
+		}
+	}
+	return ""
+}
+
+// writeSandboxGitconfig reads the operator's gitconfig and writes a sanitized
+// copy with the [gpg], [gpg "*"], [commit], [tag], and [core] sshCommand-style
+// sections removed. The sanitized file lives under <stateRoot>/sandbox so it
+// is regenerated whenever the operator changes their host gitconfig.
+//
+// Returns the path to the sanitized file, or "" if the source doesn't exist
+// (the caller should fall back to mounting the original).
+func writeSandboxGitconfig(srcPath string, stateRoot string, enableSSHSigning bool) (string, error) {
+	data, err := os.ReadFile(srcPath)
+	if err != nil {
+		return "", err
+	}
+	dstDir := filepath.Join(stateRoot, "sandbox")
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		return "", err
+	}
+	dstPath := filepath.Join(dstDir, "gitconfig")
+	content := sanitizeGitconfig(string(data))
+	if enableSSHSigning {
+		// Append SSH signing config that points at the host key the sandbox
+		// will install at /root/.ssh/host_id.pub on Start. This has to be
+		// baked in at write time because /root/.gitconfig is bind-mounted as
+		// a single file inside the container — `git config` rewrites via
+		// rename() and fails with "Device or resource busy" on bind mounts.
+		// GitHub only marks commits as "Verified" when the signing key is
+		// registered under the author's account as an SSH signing key, so
+		// this is only enabled when a host SSH key fallback is available.
+		content = strings.TrimRight(content, "\n") + "\n" + strings.Join([]string{
+			"[gpg]",
+			"\tformat = ssh",
+			"[user]",
+			"\tsigningkey = /root/.ssh/host_id.pub",
+			"[commit]",
+			"\tgpgsign = true",
+			"[tag]",
+			"\tgpgsign = true",
+			"",
+		}, "\n")
+	}
+	if err := os.WriteFile(dstPath, []byte(content), 0o644); err != nil {
+		return "", err
+	}
+	return dstPath, nil
+}
+
+// sanitizeGitconfig drops sections that bind to host-only binaries or signing
+// state: [gpg], any [gpg "<format>"] subsection, [commit], and [tag]. Lines
+// inside those sections (until the next section header) are dropped, and the
+// section header itself is dropped. All other sections are preserved verbatim.
+func sanitizeGitconfig(content string) string {
+	blocked := map[string]bool{
+		"gpg":    true,
+		"commit": true,
+		"tag":    true,
+	}
+	var out strings.Builder
+	skip := false
+	for line := range strings.SplitSeq(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			inside := strings.TrimSuffix(strings.TrimPrefix(trimmed, "["), "]")
+			name := strings.ToLower(strings.TrimSpace(strings.SplitN(inside, " ", 2)[0]))
+			name = strings.TrimSuffix(name, "\"")
+			skip = blocked[name]
+			if skip {
+				continue
+			}
+		}
+		if skip {
+			continue
+		}
+		out.WriteString(line)
+		out.WriteByte('\n')
+	}
+	return strings.TrimRight(out.String(), "\n") + "\n"
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// initSandbox checks whether sandbox mode is enabled in the service config or
+// was explicitly requested, then initializes the sandbox manager, reverse
+// proxy, and stale session reconciler when needed.
+func (a *App) initSandbox(ctx context.Context, force bool) error {
+	if a.sandboxManager != nil {
+		return nil
+	}
+	config, err := a.state.LoadServiceConfig()
+	if err != nil {
+		return fmt.Errorf("load service config for sandbox: %w", err)
+	}
+	if !force && !config.IsSandboxEnabled() {
+		return nil
+	}
+
+	mgr, err := sandbox.NewManager(a.env.Runner, a.logger, a.state.Root())
+	if err != nil {
+		return fmt.Errorf("create sandbox manager: %w", err)
+	}
+
+	// Bind to 0.0.0.0 so the listener is reachable from sandbox containers
+	// via host.docker.internal. On Linux that resolves to the docker bridge
+	// gateway (e.g. 172.17.0.1) which cannot reach a 127.0.0.1-only listener.
+	// Per-request HMAC tokens (see internal/sandbox/proxy) authorize access.
+	if err := mgr.StartProxy("0.0.0.0:0"); err != nil {
+		return fmt.Errorf("start sandbox proxy: %w", err)
+	}
+	a.sandboxManager = mgr
+	a.logger.Info("sandbox mode initialized", "proxy_addr", mgr.ProxyAddr())
+
+	if err := mgr.ReconcileStale(ctx); err != nil {
+		a.logger.Warn("sandbox stale reconciliation failed", "err", err)
+	}
+	return nil
+}
+
+// initSandboxIfEnabled checks whether sandbox mode is enabled in the service
+// config and initializes the sandbox manager, reverse proxy, and stale session
+// reconciler when it is.
+func (a *App) initSandboxIfEnabled(ctx context.Context) error {
+	return a.initSandbox(ctx, false)
+}
+
+// shutdownSandbox tears down all active sandbox sessions and stops the proxy.
+func (a *App) shutdownSandbox(ctx context.Context) {
+	if a.sandboxManager == nil {
+		return
+	}
+	for _, id := range a.sandboxManager.ActiveSessions() {
+		if err := a.sandboxManager.Teardown(ctx, id, "daemon_shutdown"); err != nil {
+			a.logger.Warn("sandbox teardown on shutdown failed", "session_id", id, "err", err)
+		}
+	}
+	if err := a.sandboxManager.StopProxy(ctx); err != nil {
+		a.logger.Warn("sandbox proxy shutdown failed", "err", err)
+	}
 }

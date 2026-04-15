@@ -1,0 +1,11 @@
+.git
+.github
+!.github/
+!.github/labels.json
+.worktrees
+*.md
+!go.mod
+!go.sum
+LICENSE
+vigilante
+dist/

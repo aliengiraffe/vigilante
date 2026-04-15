@@ -1,6 +1,6 @@
 # Sandbox Design
 
-Sandbox is a planned security feature for Vigilante that would run coding agents inside isolated Docker containers on your local machine. It is an additional isolation layer managed by Vigilante, not the built-in sandboxing behavior of a coding-agent CLI such as Codex.
+Sandbox is a security feature for Vigilante that runs coding agents inside isolated Docker containers on your local machine. It is an additional isolation layer managed by Vigilante, not the built-in sandboxing behavior of a coding-agent CLI such as Codex.
 
 Today, Vigilante launches coding agents from the host machine against isolated git worktrees. The design in this document describes a future containerized execution mode that would reduce host exposure further by moving each session into a repo-scoped container with scoped GitHub access.
 

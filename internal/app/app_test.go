@@ -8946,7 +8946,40 @@ func TestRecreateSessionSuccess(t *testing.T) {
 	}
 }
 
-func TestRecreateSessionFailsWhenRepoIsUnwatched(t *testing.T) {
+func TestRecreateSessionFallsBackToUserRepoLookup(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			testutil.Key("gh", "api", "--paginate", "-H", "Accept: application/vnd.github+json", "user/repos?per_page=100&affiliation=owner,collaborator,organization_member", "-q", ".[].full_name"): "other/repo\nowner/repo\nthird/repo\n",
+			"gh api repos/owner/repo/issues/80": `{"title":"adopted","body":"body","html_url":"https://github.com/owner/repo/issues/80","state":"open","labels":[],"assignees":[]}`,
+			testutil.Key("gh", "api", "--method", "POST", "-H", "Accept: application/vnd.github+json", "repos/owner/repo/issues", "-f", "title=adopted", "-f", "body=body\n\n---\n_Recreated from #80 by Vigilante._"):                       `{"number":81,"html_url":"https://github.com/owner/repo/issues/81"}`,
+			"gh issue comment --repo owner/repo 80 --body ## ♻️ Issue Recreated\n\nThis issue has been recreated as #81.\n\nThe original issue is being closed as `not planned` and stale artifacts are being cleaned up.\n\nSource: `cli`.": "ok",
+			testutil.Key("gh", "api", "--method", "PATCH", "-H", "Accept: application/vnd.github+json", "repos/owner/repo/issues/80", "-f", "state=closed", "-f", "state_reason=not_planned"):                                                "ok",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.RecreateSession(context.Background(), "owner/repo", 80, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "recreated owner/repo issue #80 as #81") {
+		t.Fatalf("unexpected output: %s", stdout.String())
+	}
+}
+
+func TestRecreateSessionFailsWhenRepoIsUnknown(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 	t.Setenv("HOME", home)
@@ -8954,7 +8987,11 @@ func TestRecreateSessionFailsWhenRepoIsUnwatched(t *testing.T) {
 	app := New()
 	app.stdout = &bytes.Buffer{}
 	app.stderr = testutil.IODiscard{}
-	app.env.Runner = testutil.FakeRunner{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			testutil.Key("gh", "api", "--paginate", "-H", "Accept: application/vnd.github+json", "user/repos?per_page=100&affiliation=owner,collaborator,organization_member", "-q", ".[].full_name"): "other/repo\nthird/repo\n",
+		},
+	}
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
@@ -8963,8 +9000,8 @@ func TestRecreateSessionFailsWhenRepoIsUnwatched(t *testing.T) {
 	}
 
 	err := app.RecreateSession(context.Background(), "owner/repo", 50, "cli")
-	if err == nil || !strings.Contains(err.Error(), "watch target not found") {
-		t.Fatalf("expected watch target error, got: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "not in watch targets") {
+		t.Fatalf("expected unknown repo error, got: %v", err)
 	}
 }
 
@@ -9540,5 +9577,121 @@ func TestCollectSessionCommentsDeduplicatesAcrossSurfaces(t *testing.T) {
 	}
 	if len(comments) != 2 {
 		t.Fatalf("expected 2 deduplicated comments, got %d: %#v", len(comments), comments)
+	}
+}
+
+func TestSanitizeGitconfigStripsSigningSections(t *testing.T) {
+	src := `[user]
+	name = Nico Bistolfi
+	email = git@bistol.fi
+[gpg]
+	format = ssh
+[gpg "ssh"]
+	program = /Applications/1Password.app/Contents/MacOS/op-ssh-sign
+[commit]
+	gpgsign = true
+[tag]
+	gpgsign = true
+[core]
+	editor = vim
+[alias]
+	st = status
+`
+	got := sanitizeGitconfig(src)
+
+	mustContain := []string{"[user]", "name = Nico Bistolfi", "git@bistol.fi", "[core]", "editor = vim", "[alias]", "st = status"}
+	for _, want := range mustContain {
+		if !strings.Contains(got, want) {
+			t.Errorf("sanitized config missing %q\nfull output:\n%s", want, got)
+		}
+	}
+
+	mustNotContain := []string{"[gpg]", "[gpg \"ssh\"]", "op-ssh-sign", "[commit]", "gpgsign = true", "[tag]"}
+	for _, banned := range mustNotContain {
+		if strings.Contains(got, banned) {
+			t.Errorf("sanitized config still contains %q\nfull output:\n%s", banned, got)
+		}
+	}
+}
+
+func TestSanitizeGitconfigPreservesContentWithoutBlockedSections(t *testing.T) {
+	src := "[user]\n\tname = Test\n\temail = test@example.com\n"
+	got := sanitizeGitconfig(src)
+	if !strings.Contains(got, "name = Test") || !strings.Contains(got, "test@example.com") {
+		t.Errorf("expected user section preserved, got: %s", got)
+	}
+}
+
+func TestSSHAgentForwardingDarwinUsesDockerDesktopMagicSocket(t *testing.T) {
+	mount, env, ok := sshAgentForwarding("darwin", t.TempDir(), nil)
+	if !ok {
+		t.Fatal("expected SSH agent forwarding to be available on darwin")
+	}
+	const want = "/run/host-services/ssh-auth.sock"
+	if mount.Source != want || mount.Target != want {
+		t.Errorf("expected magic socket mount %s, got src=%s tgt=%s", want, mount.Source, mount.Target)
+	}
+	if env["SSH_AUTH_SOCK"] != want {
+		t.Errorf("expected SSH_AUTH_SOCK=%s, got %q", want, env["SSH_AUTH_SOCK"])
+	}
+}
+
+func TestSSHAgentForwardingLinuxBindsHostSocket(t *testing.T) {
+	tmp := t.TempDir()
+	sock := filepath.Join(tmp, "agent.sock")
+	if f, err := os.Create(sock); err != nil {
+		t.Fatal(err)
+	} else {
+		f.Close()
+	}
+	t.Setenv("SSH_AUTH_SOCK", sock)
+
+	mount, env, ok := sshAgentForwarding("linux", tmp, nil)
+	if !ok {
+		t.Fatal("expected SSH agent forwarding to be available when SSH_AUTH_SOCK is set")
+	}
+	if mount.Source != sock {
+		t.Errorf("expected mount source %s, got %s", sock, mount.Source)
+	}
+	if mount.Target != "/run/host-ssh-agent.sock" {
+		t.Errorf("expected mount target /run/host-ssh-agent.sock, got %s", mount.Target)
+	}
+	if env["SSH_AUTH_SOCK"] != "/run/host-ssh-agent.sock" {
+		t.Errorf("expected container SSH_AUTH_SOCK env, got %q", env["SSH_AUTH_SOCK"])
+	}
+}
+
+func TestSSHAgentForwardingLinuxReturnsFalseWhenSocketMissing(t *testing.T) {
+	t.Setenv("SSH_AUTH_SOCK", "")
+	tmp := t.TempDir()
+	if _, _, ok := sshAgentForwarding("linux", tmp, nil); ok {
+		t.Error("expected SSH agent forwarding to be unavailable when no socket exists")
+	}
+}
+
+func TestWriteSandboxGitconfigWritesSanitizedFile(t *testing.T) {
+	tmp := t.TempDir()
+	srcPath := filepath.Join(tmp, "source.gitconfig")
+	if err := os.WriteFile(srcPath, []byte("[user]\n\tname = Test\n[gpg]\n\tformat = ssh\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stateRoot := filepath.Join(tmp, "state")
+
+	dst, err := writeSandboxGitconfig(srcPath, stateRoot, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dst != filepath.Join(stateRoot, "sandbox", "gitconfig") {
+		t.Errorf("unexpected dst path: %s", dst)
+	}
+	data, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "name = Test") {
+		t.Errorf("expected user.name preserved, got: %s", string(data))
+	}
+	if strings.Contains(string(data), "[gpg]") {
+		t.Errorf("expected [gpg] stripped, got: %s", string(data))
 	}
 }
