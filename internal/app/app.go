@@ -4469,6 +4469,15 @@ func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Se
 		return err
 	}
 	signal := issuerunner.EvaluateSessionProgress(ctx, a.env.Runner, *session)
+	if !signal.HasPullRequest {
+		pr, err := a.loadPullRequestForSession(ctx, *session)
+		if err != nil {
+			a.logger.Warn("resume issue pull request reconciliation failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
+		} else if pr != nil {
+			updatePullRequestTrackingFromLookup(session, *pr)
+			signal.HasPullRequest = true
+		}
+	}
 	if signal.HasPullRequest {
 		session.Status = state.SessionStatusSuccess
 		session.IncompleteReason = ""
