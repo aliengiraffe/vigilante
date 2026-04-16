@@ -1,0 +1,134 @@
+.qs-section {
+  background: var(--dark2);
+  padding: 80px 24px;
+}
+
+.qs-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 64px;
+}
+
+.steps-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 36px 0 28px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.qs-step {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--dark);
+  transition: background 0.15s;
+}
+
+.qs-step:last-child { border-bottom: none; }
+.qs-step:hover { background: var(--dark3); }
+
+.qs-step-num {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--green-glow);
+  border: 1px solid var(--border);
+  color: var(--green);
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.qs-step-label {
+  font-size: 12px;
+  color: var(--gray);
+  margin-bottom: 4px;
+}
+
+.qs-cmd {
+  font-size: 14px;
+  color: var(--green);
+}
+
+.watch-note {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.watch-label {
+  font-size: 12px;
+  color: var(--gray);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.watch-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.watch-tags span {
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+  background: var(--dark);
+  border: 1px solid var(--border);
+  color: var(--gray-light);
+  padding: 4px 10px;
+  border-radius: 4px;
+}
+
+/* TL;DR right column */
+.tldr-list {
+  margin-top: 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.tldr-item {
+  display: flex;
+  gap: 16px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--dark);
+  align-items: flex-start;
+}
+
+.tldr-item:last-child { border-bottom: none; }
+
+.tldr-final {
+  background: var(--green-glow);
+  border-top: 1px solid rgba(57,255,20,0.3);
+}
+
+.tldr-num {
+  font-size: 12px;
+  color: var(--green);
+  flex-shrink: 0;
+  margin-top: 3px;
+  min-width: 16px;
+}
+
+.tldr-item p {
+  font-size: 14px;
+  color: var(--gray-light);
+  line-height: 1.55;
+}
+
+.tldr-final p { color: var(--white); }
+.tldr-final strong { color: var(--green); }
+
+@media (max-width: 900px) {
+  .qs-split { grid-template-columns: 1fr; gap: 48px; }
+}
