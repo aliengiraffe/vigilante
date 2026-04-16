@@ -86,6 +86,58 @@ func TestRunIssueSessionSuccess(t *testing.T) {
 	}
 }
 
+func TestRunIssueSessionReconcilesExistingPullRequestAfterSuccessfulExit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	baseRunner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"codex --version": "codex 0.114.0",
+			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Vigilante Session Start",
+				Emoji:      "🧢",
+				Percent:    20,
+				ETAMinutes: 25,
+				Items: []string{
+					"Vigilante launched this implementation session in `/tmp/worktree`.",
+					"Branch: `vigilante/issue-7`.",
+					"Current stage: handing the issue off to the configured coding agent (`Codex`) for investigation and implementation.",
+					"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
+				},
+				Tagline: "Make it simple, but significant.",
+			}): "ok",
+			preflightPromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", "vigilante/issue-7"):                         "baseline ok",
+			issuePromptCommand("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", "vigilante/issue-7"):                             "done",
+			"gh pr list --repo owner/repo --head vigilante/issue-7 --state all --json number,url,state,mergedAt":                                                                 `[{"number":42,"url":"https://github.com/owner/repo/pull/42","state":"OPEN","mergedAt":null}]`,
+			"gh pr view --repo owner/repo 42 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": `{"number":42,"title":"Demo","body":"Closes #7","url":"https://github.com/owner/repo/pull/42","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"","statusCheckRollup":[],"baseRefName":"main"}`,
+		},
+	}
+	store := state.NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	env := &environment.Environment{
+		OS: "darwin",
+		Runner: environment.LoggingRunner{
+			Base:      baseRunner,
+			AccessLog: store.AppendAccessLogEntry,
+		},
+	}
+	session := state.Session{RepoPath: "/tmp/repo", IssueNumber: 7, WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Status: state.SessionStatusRunning}
+	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	if got.Status != state.SessionStatusSuccess {
+		t.Fatalf("unexpected status: %s (expected success after PR reconciliation)", got.Status)
+	}
+	if got.IncompleteReason != "" {
+		t.Fatalf("expected empty IncompleteReason, got %q", got.IncompleteReason)
+	}
+	if got.PullRequestNumber != 42 || got.PullRequestURL != "https://github.com/owner/repo/pull/42" {
+		t.Fatalf("expected reconciled PR tracking, got %#v", got)
+	}
+	if got.PullRequestState != "OPEN" || got.PullRequestBaseBranch != "main" || got.PullRequestHeadBranch != "vigilante/issue-7" {
+		t.Fatalf("expected reconciled PR state, got %#v", got)
+	}
+}
+
 func TestRunIssueSessionSuccessWithPR(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
