@@ -4473,7 +4473,7 @@ func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Se
 		pr, err := a.loadPullRequestForSession(ctx, *session)
 		if err != nil {
 			a.logger.Warn("resume issue pull request reconciliation failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
-		} else if pullRequestCountsAsCompletedImplementation(*pr) {
+		} else if pr != nil && pullRequestCountsAsCompletedImplementation(*pr) {
 			updatePullRequestTrackingFromLookup(session, *pr)
 			signal.HasPullRequest = true
 		}
