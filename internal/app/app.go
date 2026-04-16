@@ -3771,6 +3771,25 @@ func (a *App) rerunIncompleteSessions(ctx context.Context, sessions []state.Sess
 		if strings.TrimSpace(session.WorktreePath) == "" || strings.TrimSpace(session.Branch) == "" {
 			continue
 		}
+		if pr, err := a.loadPullRequestForSession(ctx, *session); err != nil {
+			a.logger.Warn("incomplete session pull request reconciliation failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
+		} else if pr != nil && (strings.EqualFold(strings.TrimSpace(pr.State), "OPEN") || pr.MergedAt != nil) {
+			previousStatus := session.Status
+			now := a.clock().Format(time.RFC3339)
+			session.Status = state.SessionStatusSuccess
+			session.IncompleteReason = ""
+			session.UpdatedAt = now
+			session.RecoveredAt = now
+			session.LastError = ""
+			updatePullRequestMaintenanceSnapshot(session, *pr)
+			if strings.EqualFold(strings.TrimSpace(pr.State), "OPEN") {
+				session.LastMaintainedAt = now
+				session.LastMaintenanceError = ""
+			}
+			a.emitSessionTransition(previousStatus, *session, "incomplete_github_reconciliation")
+			a.logger.Info("incomplete session recovered to pull request tracking", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "pr", pr.Number, "state", pr.State)
+			continue
+		}
 		if _, err := os.Stat(session.WorktreePath); err != nil {
 			a.logger.Info("incomplete session worktree missing, skipping rerun", "repo", session.Repo, "issue", session.IssueNumber, "worktree", session.WorktreePath)
 			continue
@@ -4450,6 +4469,15 @@ func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Se
 		return err
 	}
 	signal := issuerunner.EvaluateSessionProgress(ctx, a.env.Runner, *session)
+	if !signal.HasPullRequest {
+		pr, err := a.loadPullRequestForSession(ctx, *session)
+		if err != nil {
+			a.logger.Warn("resume issue pull request reconciliation failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
+		} else if pullRequestCountsAsCompletedImplementation(*pr) {
+			updatePullRequestTrackingFromLookup(session, *pr)
+			signal.HasPullRequest = true
+		}
+	}
 	if signal.HasPullRequest {
 		session.Status = state.SessionStatusSuccess
 		session.IncompleteReason = ""
@@ -4917,6 +4945,10 @@ func updatePullRequestTrackingFromLookup(session *state.Session, pr ghcli.PullRe
 	if pr.MergedAt != nil {
 		session.PullRequestMergedAt = pr.MergedAt.UTC().Format(time.RFC3339)
 	}
+}
+
+func pullRequestCountsAsCompletedImplementation(pr ghcli.PullRequest) bool {
+	return strings.EqualFold(strings.TrimSpace(pr.State), "OPEN") || pr.MergedAt != nil
 }
 
 func updatePullRequestMaintenanceSnapshot(session *state.Session, pr ghcli.PullRequest) string {

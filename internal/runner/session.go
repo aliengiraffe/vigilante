@@ -229,6 +229,15 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 	session.IterationInProgress = false
 
 	signal := EvaluateSessionProgress(ctx, env.Runner, session)
+	if !signal.HasPullRequest {
+		pr, err := reconcileSessionPullRequest(ctx, issueTracker, session)
+		if err != nil {
+			appendSessionLog(logPath, "pull request reconciliation failed", session, err.Error())
+		} else if pullRequestCountsAsCompletedImplementation(*pr) {
+			updateSessionPullRequestTracking(&session, *pr)
+			signal.HasPullRequest = true
+		}
+	}
 	if signal.HasPullRequest {
 		session.Status = state.SessionStatusSuccess
 		session.IncompleteReason = ""
@@ -252,6 +261,52 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		_ = issueTracker.CommentOnWorkItem(ctx, target.Repo, issue.Number, body)
 	}
 	return session
+}
+
+func reconcileSessionPullRequest(ctx context.Context, issueTracker backend.IssueTracker, session state.Session) (*backend.PullRequest, error) {
+	prManager, ok := issueTracker.(backend.PullRequestManager)
+	if !ok || session.Repo == "" {
+		return nil, nil
+	}
+	head := sessionPullRequestHeadSelector(session)
+	if head == "" {
+		return nil, nil
+	}
+	pr, err := prManager.FindPullRequestForBranch(ctx, session.Repo, head)
+	if err != nil || pr == nil {
+		return pr, err
+	}
+	return prManager.GetPullRequestDetails(ctx, session.Repo, pr.Number)
+}
+
+func updateSessionPullRequestTracking(session *state.Session, pr backend.PullRequest) {
+	session.PullRequestNumber = pr.Number
+	session.PullRequestURL = strings.TrimSpace(pr.URL)
+	session.PullRequestState = strings.TrimSpace(pr.State)
+	session.PullRequestHeadBranch = strings.TrimSpace(session.Branch)
+	if baseRef := strings.TrimSpace(pr.BaseRefName); baseRef != "" {
+		session.PullRequestBaseBranch = baseRef
+	}
+	if pr.MergedAt != nil {
+		session.PullRequestMergedAt = pr.MergedAt.UTC().Format(time.RFC3339)
+	} else {
+		session.PullRequestMergedAt = ""
+	}
+}
+
+func pullRequestCountsAsCompletedImplementation(pr backend.PullRequest) bool {
+	return strings.EqualFold(strings.TrimSpace(pr.State), "OPEN") || pr.MergedAt != nil
+}
+
+func sessionPullRequestHeadSelector(session state.Session) string {
+	branch := strings.TrimSpace(session.Branch)
+	if branch == "" {
+		return ""
+	}
+	if owner := strings.TrimSpace(session.ForkOwner); owner != "" && strings.TrimSpace(session.PushRemote) != "" && strings.TrimSpace(session.PushRemote) != "origin" {
+		return owner + ":" + branch
+	}
+	return branch
 }
 
 func fallbackSessionText(value string, fallback string) string {
