@@ -8571,6 +8571,83 @@ func TestScanOnceRecoversStalledSessionIntoPRMaintenance(t *testing.T) {
 	}
 }
 
+func TestScanOnceRecoversIncompleteSessionIntoPRMaintenanceWhenBranchPRExists(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	var stdout bytes.Buffer
+	app := New()
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	now := time.Date(2026, 3, 10, 15, 0, 0, 0, time.UTC)
+	app.clock = func() time.Time { return now }
+
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"gh api repos/owner/repo/issues/1": `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"open","labels":[]}`,
+			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt":                                                                 `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
+			"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": automergePRDetailsJSON("", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
+			"gh api user --jq .login": "nicobistolfi\n",
+			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-10T14:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[]}]`,
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:          repoPath,
+		Repo:              "owner/repo",
+		IssueNumber:       1,
+		IssueTitle:        "first",
+		IssueURL:          "https://github.com/owner/repo/issues/1",
+		Branch:            "vigilante/issue-1",
+		WorktreePath:      worktreePath,
+		Status:            state.SessionStatusIncomplete,
+		IncompleteReason:  "commits_without_pr",
+		PullRequestNumber: 0,
+		UpdatedAt:         now.Add(-20 * time.Minute).Format(time.RFC3339),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+	if sessions[0].Status != state.SessionStatusSuccess {
+		t.Fatalf("expected incomplete session to recover into success: %#v", sessions[0])
+	}
+	if sessions[0].IncompleteReason != "" {
+		t.Fatalf("expected incomplete reason to clear after recovery: %#v", sessions[0])
+	}
+	if sessions[0].PullRequestNumber != 31 || sessions[0].PullRequestState != "OPEN" || sessions[0].LastMaintainedAt == "" {
+		t.Fatalf("expected open PR tracking after recovery: %#v", sessions[0])
+	}
+	if strings.Contains(stdout.String(), "started issue #1") {
+		t.Fatalf("expected scan to avoid redispatching recovered issue, got output: %s", stdout.String())
+	}
+}
+
 func TestScanOnceReconcilesStaleRunningSessionAgainstClosedIssueAndMergedPullRequest(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
