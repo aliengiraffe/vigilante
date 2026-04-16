@@ -4285,6 +4285,75 @@ func TestResumeBlockedSessionReconcilesExistingPullRequestAfterIssueExecution(t 
 	}
 }
 
+func TestResumeBlockedSessionLeavesIncompleteWhenBranchLookupFindsClosedPullRequest(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	recoveredComment := ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Recovered",
+		Emoji:      "🫡",
+		Percent:    92,
+		ETAMinutes: 5,
+		Items: []string{
+			"The previous `provider_auth` block was cleared for `vigilante/issue-1`.",
+			"Resume source: `comment`.",
+			"Next step: Vigilante resumed `issue_execution` successfully.",
+		},
+		Tagline: "Back on the wire.",
+	})
+	session := state.Session{
+		RepoPath:       repoPath,
+		Repo:           "owner/repo",
+		Provider:       "codex",
+		IssueNumber:    1,
+		IssueTitle:     "first",
+		IssueURL:       "https://github.com/owner/repo/issues/1",
+		Branch:         "vigilante/issue-1",
+		WorktreePath:   worktreePath,
+		Status:         state.SessionStatusBlocked,
+		BlockedStage:   "issue_execution",
+		BlockedReason:  state.BlockedReason{Kind: "provider_auth", Operation: "codex exec", Summary: "session expired", Detail: "session expired"},
+		ResumeRequired: true,
+		ResumeHint:     "vigilante resume --repo owner/repo --issue 1",
+	}
+
+	app.env.Runner = testutil.FakeRunner{
+		LookPaths: map[string]string{"codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"codex --version": "codex 1.0.0",
+			issuePromptCommand(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", "vigilante/issue-1"):                                  "done",
+			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt":                                                                 `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"CLOSED","mergedAt":null}]`,
+			"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": `{"number":31,"title":"PR","body":"Closes #1","url":"https://github.com/owner/repo/pull/31","state":"CLOSED","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","reviewDecision":"","statusCheckRollup":[],"baseRefName":"main"}`,
+			"gh issue comment --repo owner/repo 1 --body " + recoveredComment:                                                                                                    "ok",
+			"git rev-list --count origin/main..HEAD": "1\n",
+			"git status --porcelain":                 "",
+		},
+	}
+
+	if err := app.resumeBlockedSession(context.Background(), &session, "comment"); err != nil {
+		t.Fatal(err)
+	}
+	if session.Status != state.SessionStatusIncomplete {
+		t.Fatalf("expected resumed session to stay incomplete when only a closed PR exists: %#v", session)
+	}
+	if session.IncompleteReason != "commits_without_pr" {
+		t.Fatalf("expected commits_without_pr when only a closed PR exists: %#v", session)
+	}
+	if session.PullRequestNumber != 0 {
+		t.Fatalf("expected closed PR lookup not to populate PR tracking: %#v", session)
+	}
+}
+
 func TestScanOnceProcessesGitHubCommentCleanupRequest(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))

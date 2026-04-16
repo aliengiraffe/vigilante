@@ -233,7 +233,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		pr, err := reconcileSessionPullRequest(ctx, issueTracker, session)
 		if err != nil {
 			appendSessionLog(logPath, "pull request reconciliation failed", session, err.Error())
-		} else if pr != nil {
+		} else if pullRequestCountsAsCompletedImplementation(*pr) {
 			updateSessionPullRequestTracking(&session, *pr)
 			signal.HasPullRequest = true
 		}
@@ -292,6 +292,10 @@ func updateSessionPullRequestTracking(session *state.Session, pr backend.PullReq
 	} else {
 		session.PullRequestMergedAt = ""
 	}
+}
+
+func pullRequestCountsAsCompletedImplementation(pr backend.PullRequest) bool {
+	return strings.EqualFold(strings.TrimSpace(pr.State), "OPEN") || pr.MergedAt != nil
 }
 
 func sessionPullRequestHeadSelector(session state.Session) string {

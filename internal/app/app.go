@@ -4473,7 +4473,7 @@ func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Se
 		pr, err := a.loadPullRequestForSession(ctx, *session)
 		if err != nil {
 			a.logger.Warn("resume issue pull request reconciliation failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
-		} else if pr != nil {
+		} else if pullRequestCountsAsCompletedImplementation(*pr) {
 			updatePullRequestTrackingFromLookup(session, *pr)
 			signal.HasPullRequest = true
 		}
@@ -4945,6 +4945,10 @@ func updatePullRequestTrackingFromLookup(session *state.Session, pr ghcli.PullRe
 	if pr.MergedAt != nil {
 		session.PullRequestMergedAt = pr.MergedAt.UTC().Format(time.RFC3339)
 	}
+}
+
+func pullRequestCountsAsCompletedImplementation(pr ghcli.PullRequest) bool {
+	return strings.EqualFold(strings.TrimSpace(pr.State), "OPEN") || pr.MergedAt != nil
 }
 
 func updatePullRequestMaintenanceSnapshot(session *state.Session, pr ghcli.PullRequest) string {
