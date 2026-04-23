@@ -4613,6 +4613,7 @@ func (a *App) cleanupBlockedSessionForInactivity(ctx context.Context, session *s
 	now := a.clock().Format(time.RFC3339)
 	session.LastCleanupSource = "blocked_inactivity_timeout"
 	previousStatus := session.Status
+	previousStage := strings.TrimSpace(session.BlockedStage)
 	if err := worktree.CleanupIssueArtifacts(ctx, a.env.Runner, session.RepoPath, session.WorktreePath, session.Branch); err != nil {
 		session.CleanupError = err.Error()
 		session.LastError = fmt.Sprintf("blocked session exceeded inactivity timeout (%s) but cleanup failed: %s", timeout, err)
@@ -4621,9 +4622,22 @@ func (a *App) cleanupBlockedSessionForInactivity(ctx context.Context, session *s
 		return err
 	}
 
+	// Best-effort refresh of PR tracking before transitioning so SelectIssues can tell
+	// whether the associated PR is still open when deciding future redispatch.
+	if a.prManager != nil && strings.TrimSpace(session.Branch) != "" {
+		if pr, err := a.prManager.FindPullRequestForBranch(ctx, session.Repo, pullRequestHeadSelector(*session)); err != nil {
+			a.logger.Warn("blocked session inactivity cleanup: pull request refresh failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
+		} else if pr != nil {
+			updatePullRequestTrackingFromLookup(session, *pr)
+		}
+	}
+
 	session.Status = state.SessionStatusFailed
 	session.ProcessID = 0
 	session.BlockedAt = ""
+	if previousStage != "" {
+		session.LastBlockedStage = previousStage
+	}
 	session.BlockedStage = ""
 	session.BlockedReason = state.BlockedReason{}
 	session.RetryPolicy = ""
@@ -4636,7 +4650,7 @@ func (a *App) cleanupBlockedSessionForInactivity(ctx context.Context, session *s
 	session.UpdatedAt = now
 	session.LastError = fmt.Sprintf("blocked session cleaned up after %s of inactivity", timeout)
 	a.emitSessionTransition(previousStatus, *session, "blocked_inactivity_timeout")
-	a.logger.Info("blocked session inactivity cleanup complete", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "timeout", timeout)
+	a.logger.Info("blocked session inactivity cleanup complete", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "timeout", timeout, "last_blocked_stage", previousStage)
 	return nil
 }
 

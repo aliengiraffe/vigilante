@@ -141,6 +141,9 @@ func sessionPreventsRedispatch(session state.Session) bool {
 	if sessionConsumesDispatchCapacity(session) || session.Status == state.SessionStatusBlocked {
 		return true
 	}
+	if sessionSuppressesRedispatchAfterMaintenanceCleanup(session) {
+		return true
+	}
 	if session.Status != state.SessionStatusSuccess {
 		return false
 	}
@@ -148,6 +151,32 @@ func sessionPreventsRedispatch(session state.Session) bool {
 		return false
 	}
 	return true
+}
+
+// sessionSuppressesRedispatchAfterMaintenanceCleanup reports whether an inactivity-cleaned
+// blocked PR-maintenance-class session should still suppress redispatch while its
+// associated PR is open. Without this, cleanup flips the session to failed and the issue
+// becomes eligible again, producing a loop: blocked maintenance -> cleanup -> redispatch
+// on the existing branch -> blocked again. See issue #462.
+func sessionSuppressesRedispatchAfterMaintenanceCleanup(session state.Session) bool {
+	if session.Status != state.SessionStatusFailed {
+		return false
+	}
+	if session.CleanupCompletedAt == "" {
+		return false
+	}
+	if session.PullRequestNumber <= 0 {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(session.PullRequestState), "OPEN") {
+		return false
+	}
+	switch strings.TrimSpace(session.LastBlockedStage) {
+	case "pr_maintenance", "ci_remediation", "conflict_resolution":
+		return true
+	default:
+		return false
+	}
 }
 
 func sessionConsumesDispatchCapacity(session state.Session) bool {

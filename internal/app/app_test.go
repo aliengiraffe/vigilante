@@ -4864,6 +4864,134 @@ func TestShouldAutoRecoverBlockedSession(t *testing.T) {
 	}
 }
 
+func TestCleanupBlockedSessionForInactivityPreservesLastBlockedStageAndRefreshesPRState(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 4, 22, 18, 30, 0, 0, time.UTC)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.clock = func() time.Time { return now }
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"git worktree prune":                                         "ok",
+			"git worktree remove --force " + worktreePath:                "ok",
+			"git worktree list --porcelain":                              "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/main\n",
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-1": "ok",
+			"git branch -D vigilante/issue-1":                            "Deleted branch vigilante/issue-1\n",
+			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":351,"url":"https://github.com/owner/repo/pull/351","state":"OPEN","baseRefName":"main"}]`,
+		},
+	}
+	app.prManager = githubbackend.NewBackend(&app.env.Runner)
+
+	session := &state.Session{
+		RepoPath:          repoPath,
+		Repo:              "owner/repo",
+		IssueNumber:       1,
+		Branch:            "vigilante/issue-1",
+		WorktreePath:      worktreePath,
+		Status:            state.SessionStatusBlocked,
+		BlockedAt:         now.Add(-30 * time.Minute).Format(time.RFC3339),
+		BlockedStage:      "pr_maintenance",
+		BlockedReason:     state.BlockedReason{Kind: "unknown_operator_action_required"},
+		PullRequestNumber: 351,
+		UpdatedAt:         now.Add(-30 * time.Minute).Format(time.RFC3339),
+	}
+
+	if err := app.cleanupBlockedSessionForInactivity(context.Background(), session, 20*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+
+	if session.Status != state.SessionStatusFailed {
+		t.Fatalf("expected status Failed, got %q", session.Status)
+	}
+	if session.CleanupCompletedAt == "" {
+		t.Fatal("expected CleanupCompletedAt to be set")
+	}
+	if session.BlockedStage != "" {
+		t.Fatalf("expected BlockedStage cleared, got %q", session.BlockedStage)
+	}
+	if session.LastBlockedStage != "pr_maintenance" {
+		t.Fatalf("expected LastBlockedStage preserved, got %q", session.LastBlockedStage)
+	}
+	if !strings.EqualFold(session.PullRequestState, "OPEN") {
+		t.Fatalf("expected PR state refreshed to OPEN, got %q", session.PullRequestState)
+	}
+	if session.PullRequestNumber != 351 {
+		t.Fatalf("expected PR number to remain 351, got %d", session.PullRequestNumber)
+	}
+}
+
+func TestCleanupBlockedSessionForInactivityToleratesPullRequestLookupFailure(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Date(2026, 4, 22, 18, 30, 0, 0, time.UTC)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.clock = func() time.Time { return now }
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"git worktree prune":                                         "ok",
+			"git worktree remove --force " + worktreePath:                "ok",
+			"git worktree list --porcelain":                              "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/main\n",
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-1": "ok",
+			"git branch -D vigilante/issue-1":                            "Deleted branch vigilante/issue-1\n",
+		},
+		Errors: map[string]error{
+			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": errors.New("gh: transient network failure"),
+		},
+	}
+	app.prManager = githubbackend.NewBackend(&app.env.Runner)
+
+	session := &state.Session{
+		RepoPath:          repoPath,
+		Repo:              "owner/repo",
+		IssueNumber:       1,
+		Branch:            "vigilante/issue-1",
+		WorktreePath:      worktreePath,
+		Status:            state.SessionStatusBlocked,
+		BlockedAt:         now.Add(-30 * time.Minute).Format(time.RFC3339),
+		BlockedStage:      "ci_remediation",
+		BlockedReason:     state.BlockedReason{Kind: "unknown_operator_action_required"},
+		PullRequestNumber: 351,
+		PullRequestState:  "OPEN",
+		UpdatedAt:         now.Add(-30 * time.Minute).Format(time.RFC3339),
+	}
+
+	if err := app.cleanupBlockedSessionForInactivity(context.Background(), session, 20*time.Minute); err != nil {
+		t.Fatalf("cleanup must tolerate PR lookup failure, got %v", err)
+	}
+
+	if session.Status != state.SessionStatusFailed {
+		t.Fatalf("expected status Failed, got %q", session.Status)
+	}
+	if session.LastBlockedStage != "ci_remediation" {
+		t.Fatalf("expected LastBlockedStage preserved even on PR lookup failure, got %q", session.LastBlockedStage)
+	}
+	if !strings.EqualFold(session.PullRequestState, "OPEN") {
+		t.Fatalf("expected existing PR state to be retained on lookup failure, got %q", session.PullRequestState)
+	}
+}
+
 func TestNewAppClockReturnsLiveTime(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
