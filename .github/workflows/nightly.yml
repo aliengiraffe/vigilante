@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - main
+      # Temporary: remove once the goreleaser homebrew_casks fix is confirmed green.
+      - fix/goreleaser-homebrew-cask-ids
 
 permissions:
   contents: write
@@ -65,6 +67,7 @@ jobs:
         run: goreleaser release --snapshot --clean
 
       - name: Publish rolling prerelease
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
           NIGHTLY_TAG: ${{ env.NIGHTLY_TAG }}
@@ -96,6 +99,7 @@ jobs:
             --prerelease
 
       - name: Verify nightly release publication
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
           NIGHTLY_TAG: ${{ env.NIGHTLY_TAG }}
@@ -103,12 +107,14 @@ jobs:
         run: bash ./scripts/verify-nightly-release.sh
 
       - name: Check out Homebrew tap
+        if: github.ref == 'refs/heads/main'
         env:
           TAP_TOKEN: ${{ steps.tap_token.outputs.token }}
         run: |
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/aliengiraffe/homebrew-spaceship.git" "$RUNNER_TEMP/homebrew-spaceship"
 
       - name: Update nightly Homebrew cask
+        if: github.ref == 'refs/heads/main'
         env:
           CHECKSUMS_FILE: dist/checksums.txt
           NIGHTLY_TAG: ${{ env.NIGHTLY_TAG }}
@@ -117,6 +123,7 @@ jobs:
         run: ./scripts/update-nightly-cask.sh
 
       - name: Push nightly Homebrew cask
+        if: github.ref == 'refs/heads/main'
         working-directory: ${{ runner.temp }}/homebrew-spaceship
         run: |
           git config user.name "github-actions[bot]"
