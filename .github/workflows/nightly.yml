@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - main
-      # Temporary: remove once the goreleaser homebrew_casks fix is confirmed green.
-      - fix/goreleaser-homebrew-cask-ids
 
 permissions:
   contents: write
