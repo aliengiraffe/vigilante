@@ -168,6 +168,130 @@ func TestSelectIssuesSkipsSessionAfterStaleAutoRestartLimitReached(t *testing.T)
 	}
 }
 
+func cleanedUpBlockedMaintenanceSession(issueNumber int, lastStage, prState string, prNumber int) state.Session {
+	return state.Session{
+		Repo:               "owner/repo",
+		IssueNumber:        issueNumber,
+		Status:             state.SessionStatusFailed,
+		Branch:             "vigilante/issue-1",
+		CleanupCompletedAt: "2026-04-22T18:00:00Z",
+		LastCleanupSource:  "blocked_inactivity_timeout",
+		LastBlockedStage:   lastStage,
+		PullRequestNumber:  prNumber,
+		PullRequestState:   prState,
+	}
+}
+
+func TestSelectIssuesSkipsCleanedUpBlockedPRMaintenanceSessionWithOpenPR(t *testing.T) {
+	issues := []Issue{
+		{Number: 1, Labels: []Label{{Name: "to-do"}}},
+		{Number: 2, Labels: []Label{{Name: "to-do"}}},
+	}
+
+	selected := SelectIssues(issues, []state.Session{
+		cleanedUpBlockedMaintenanceSession(1, "pr_maintenance", "OPEN", 351),
+	}, state.WatchTarget{Repo: "owner/repo", Labels: []string{"to-do"}}, 2)
+	if len(selected) != 1 || selected[0].Number != 2 {
+		t.Fatalf("expected issue 1 to be suppressed while PR #351 is open, got %#v", selected)
+	}
+}
+
+func TestSelectIssuesSkipsCleanedUpBlockedCIRemediationSessionWithOpenPR(t *testing.T) {
+	issues := []Issue{
+		{Number: 1, Labels: []Label{{Name: "to-do"}}},
+		{Number: 2, Labels: []Label{{Name: "to-do"}}},
+	}
+
+	selected := SelectIssues(issues, []state.Session{
+		cleanedUpBlockedMaintenanceSession(1, "ci_remediation", "OPEN", 351),
+	}, state.WatchTarget{Repo: "owner/repo", Labels: []string{"to-do"}}, 2)
+	if len(selected) != 1 || selected[0].Number != 2 {
+		t.Fatalf("expected ci_remediation cleanup to suppress redispatch, got %#v", selected)
+	}
+}
+
+func TestSelectIssuesSkipsCleanedUpBlockedConflictResolutionSessionWithOpenPR(t *testing.T) {
+	issues := []Issue{
+		{Number: 1, Labels: []Label{{Name: "to-do"}}},
+		{Number: 2, Labels: []Label{{Name: "to-do"}}},
+	}
+
+	selected := SelectIssues(issues, []state.Session{
+		cleanedUpBlockedMaintenanceSession(1, "conflict_resolution", "open", 351),
+	}, state.WatchTarget{Repo: "owner/repo", Labels: []string{"to-do"}}, 2)
+	if len(selected) != 1 || selected[0].Number != 2 {
+		t.Fatalf("expected conflict_resolution cleanup to suppress redispatch, got %#v", selected)
+	}
+}
+
+func TestSelectIssuesAllowsRedispatchForCleanedUpBlockedPRMaintenanceSessionWhenPRMerged(t *testing.T) {
+	issues := []Issue{
+		{Number: 1, Labels: []Label{{Name: "to-do"}}},
+	}
+
+	selected := SelectIssues(issues, []state.Session{
+		cleanedUpBlockedMaintenanceSession(1, "pr_maintenance", "MERGED", 351),
+	}, state.WatchTarget{Repo: "owner/repo", Labels: []string{"to-do"}}, 2)
+	if len(selected) != 1 || selected[0].Number != 1 {
+		t.Fatalf("expected issue 1 eligible after PR merged, got %#v", selected)
+	}
+}
+
+func TestSelectIssuesAllowsRedispatchForCleanedUpBlockedPRMaintenanceSessionWhenPRClosed(t *testing.T) {
+	issues := []Issue{
+		{Number: 1, Labels: []Label{{Name: "to-do"}}},
+	}
+
+	selected := SelectIssues(issues, []state.Session{
+		cleanedUpBlockedMaintenanceSession(1, "pr_maintenance", "CLOSED", 351),
+	}, state.WatchTarget{Repo: "owner/repo", Labels: []string{"to-do"}}, 2)
+	if len(selected) != 1 || selected[0].Number != 1 {
+		t.Fatalf("expected issue 1 eligible after PR closed, got %#v", selected)
+	}
+}
+
+func TestSelectIssuesAllowsRedispatchForCleanedUpBlockedPRMaintenanceSessionWithoutPR(t *testing.T) {
+	issues := []Issue{
+		{Number: 1, Labels: []Label{{Name: "to-do"}}},
+	}
+
+	selected := SelectIssues(issues, []state.Session{
+		cleanedUpBlockedMaintenanceSession(1, "pr_maintenance", "", 0),
+	}, state.WatchTarget{Repo: "owner/repo", Labels: []string{"to-do"}}, 2)
+	if len(selected) != 1 || selected[0].Number != 1 {
+		t.Fatalf("expected issue 1 eligible when no PR is tracked, got %#v", selected)
+	}
+}
+
+func TestSelectIssuesAllowsRedispatchForCleanedUpBlockedNonMaintenanceSession(t *testing.T) {
+	issues := []Issue{
+		{Number: 1, Labels: []Label{{Name: "to-do"}}},
+	}
+
+	selected := SelectIssues(issues, []state.Session{
+		cleanedUpBlockedMaintenanceSession(1, "issue_execution", "OPEN", 99),
+	}, state.WatchTarget{Repo: "owner/repo", Labels: []string{"to-do"}}, 2)
+	if len(selected) != 1 || selected[0].Number != 1 {
+		t.Fatalf("expected non-maintenance cleanup to remain eligible, got %#v", selected)
+	}
+}
+
+func TestSelectIssuesAllowsRedispatchForCleanedUpFailedSessionWithoutBlockedStageHistory(t *testing.T) {
+	issues := []Issue{
+		{Number: 1, Labels: []Label{{Name: "to-do"}}},
+	}
+
+	selected := SelectIssues(issues, []state.Session{{
+		Repo:               "owner/repo",
+		IssueNumber:        1,
+		Status:             state.SessionStatusFailed,
+		CleanupCompletedAt: "2026-04-22T18:00:00Z",
+	}}, state.WatchTarget{Repo: "owner/repo", Labels: []string{"to-do"}}, 2)
+	if len(selected) != 1 || selected[0].Number != 1 {
+		t.Fatalf("expected plain failed+cleaned session to remain eligible, got %#v", selected)
+	}
+}
+
 func TestListOpenIssuesSupportsExplicitAssignee(t *testing.T) {
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{

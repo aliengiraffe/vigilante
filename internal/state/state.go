@@ -219,6 +219,7 @@ type Session struct {
 	LastCIRemediationAttemptedAt   string              `json:"last_ci_remediation_attempted_at,omitempty"`
 	BlockedAt                      string              `json:"blocked_at,omitempty"`
 	BlockedStage                   string              `json:"blocked_stage,omitempty"`
+	LastBlockedStage               string              `json:"last_blocked_stage,omitempty"`
 	BlockedReason                  BlockedReason       `json:"blocked_reason,omitempty"`
 	RetryPolicy                    string              `json:"retry_policy,omitempty"`
 	ResumeAfter                    string              `json:"resume_after,omitempty"`
