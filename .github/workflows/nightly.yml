@@ -13,7 +13,9 @@ permissions:
 jobs:
   prerelease:
     runs-on: ubuntu-latest
-    environment: main
+    # Only gate production secrets behind the protected `main` environment on main pushes;
+    # verification runs on other branches build without access to publish credentials.
+    environment: ${{ github.ref == 'refs/heads/main' && 'main' || '' }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
@@ -50,6 +52,7 @@ jobs:
         run: goreleaser check
 
       - name: Get token for Homebrew tap
+        if: github.ref == 'refs/heads/main'
         uses: actions/create-github-app-token@v3
         id: tap_token
         with:
