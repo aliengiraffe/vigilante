@@ -69,6 +69,8 @@ release:
 
 homebrew_casks:
   - name: vigilante
+    ids:
+      - release-archives
     repository:
       owner: aliengiraffe
       name: homebrew-spaceship
