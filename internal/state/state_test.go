@@ -264,6 +264,26 @@ func TestHardeningPRKey(t *testing.T) {
 	}
 }
 
+func TestOpenCodeHomeRespectsEnvOverride(t *testing.T) {
+	override := filepath.Join(t.TempDir(), "custom-opencode")
+	t.Setenv("OPENCODE_HOME", override)
+
+	store := NewStore()
+	if got := store.OpenCodeHome(); got != override {
+		t.Fatalf("OpenCodeHome = %q, want %q", got, override)
+	}
+}
+
+func TestOpenCodeHomeDefaultsToConfigOpencode(t *testing.T) {
+	t.Setenv("OPENCODE_HOME", "")
+
+	store := NewStore()
+	got := store.OpenCodeHome()
+	if !strings.HasSuffix(got, filepath.Join(".config", "opencode")) {
+		t.Fatalf("OpenCodeHome = %q, expected suffix .config/opencode", got)
+	}
+}
+
 func TestServiceConfigPackageHardeningPersistence(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))

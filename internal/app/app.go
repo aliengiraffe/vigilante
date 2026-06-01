@@ -1615,6 +1615,7 @@ func (a *App) installBundledSkills() error {
 		{runtime: skill.RuntimeCodex, home: a.state.CodexHome()},
 		{runtime: skill.RuntimeClaude, home: a.state.ClaudeHome()},
 		{runtime: skill.RuntimeGemini, home: a.state.GeminiHome()},
+		{runtime: skill.RuntimeOpenCode, home: a.state.OpenCodeHome()},
 	} {
 		if err := skill.EnsureInstalled(runtimeHome.runtime, runtimeHome.home); err != nil {
 			return err
@@ -6207,6 +6208,16 @@ func buildResumeFailureSummaryInvocation(selectedProvider provider.Provider, wor
 				"--yolo",
 			},
 		}, nil
+	case provider.OpenCodeID:
+		return provider.Invocation{
+			Dir:  workdir,
+			Name: "opencode",
+			Args: []string{
+				"run",
+				"--dangerously-skip-permissions",
+				prompt,
+			},
+		}, nil
 	case provider.DefaultID:
 		fallthrough
 	default:
@@ -7380,6 +7391,7 @@ func sandboxConfigMounts(homeDir string, store *state.Store, enableSSHSigning bo
 	addMount(store.CodexHome(), "/root/.codex", false)
 	addMount(store.ClaudeHome(), "/root/.claude", false)
 	addMount(store.GeminiHome(), "/root/.gemini", false)
+	addMount(store.OpenCodeHome(), "/root/.config/opencode", false)
 
 	if homeDir != "" {
 		// Do not mount the operator's raw ~/.gitconfig: on macOS it commonly

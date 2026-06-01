@@ -76,6 +76,105 @@ func TestResolveGeminiProvider(t *testing.T) {
 	}
 }
 
+func TestResolveOpenCodeProvider(t *testing.T) {
+	selectedProvider, err := Resolve(OpenCodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selectedProvider.ID() != OpenCodeID {
+		t.Fatalf("unexpected provider id: %s", selectedProvider.ID())
+	}
+	if selectedProvider.DisplayName() != "OpenCode" {
+		t.Fatalf("unexpected provider: %#v", selectedProvider)
+	}
+	got := RequiredToolset(selectedProvider)
+	want := []string{"gh", "git", "opencode"}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected tool count: %#v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected toolset: %#v", got)
+		}
+	}
+}
+
+func TestOpenCodeInvocationUsesWorktreeDirAndRunCommand(t *testing.T) {
+	selectedProvider, err := Resolve(OpenCodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
+	issue := ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}
+	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", Provider: OpenCodeID}
+	pr := ghcli.PullRequest{Number: 11, URL: "https://github.com/owner/repo/pull/11"}
+
+	preflight, err := selectedProvider.BuildIssuePreflightInvocation(IssueTask{Target: target, Issue: issue, Session: session})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preflight.Name != "opencode" {
+		t.Fatalf("expected opencode binary, got %q", preflight.Name)
+	}
+	if preflight.Dir != "/tmp/worktree" {
+		t.Fatalf("expected preflight dir to be worktree, got %#v", preflight)
+	}
+	wantPreflightArgs := []string{"run", "--dangerously-skip-permissions", skill.BuildIssuePreflightPrompt(target, issue, session)}
+	assertInvocationArgs(t, preflight.Args, wantPreflightArgs)
+
+	issueInvocation, err := selectedProvider.BuildIssueInvocation(IssueTask{Target: target, Issue: issue, Session: session})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issueInvocation.Dir != "/tmp/worktree" {
+		t.Fatalf("expected issue dir to be worktree, got %#v", issueInvocation)
+	}
+	wantIssueArgs := []string{"run", "--dangerously-skip-permissions", skill.BuildIssuePromptForRuntime(skill.RuntimeOpenCode, target, issue, session)}
+	assertInvocationArgs(t, issueInvocation.Args, wantIssueArgs)
+
+	conflictInvocation, err := selectedProvider.BuildConflictResolutionInvocation(ConflictTask{Target: target, Session: session, PR: pr})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conflictInvocation.Dir != "/tmp/worktree" {
+		t.Fatalf("expected conflict dir to be worktree, got %#v", conflictInvocation)
+	}
+	wantConflictArgs := []string{"run", "--dangerously-skip-permissions", skill.BuildConflictResolutionPromptForRuntime(skill.RuntimeOpenCode, target, session, pr)}
+	assertInvocationArgs(t, conflictInvocation.Args, wantConflictArgs)
+
+	remediationInvocation, err := selectedProvider.BuildCIRemediationInvocation(CIRemediationTask{
+		Target:        target,
+		Session:       session,
+		PR:            pr,
+		FailingChecks: []ghcli.StatusCheckRoll{{Context: "test", Conclusion: "FAILURE"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remediationInvocation.Dir != "/tmp/worktree" {
+		t.Fatalf("expected remediation dir to be worktree, got %#v", remediationInvocation)
+	}
+	wantRemediationArgs := []string{"run", "--dangerously-skip-permissions", skill.BuildCIRemediationPromptForRuntime(skill.RuntimeOpenCode, target, session, pr, []ghcli.StatusCheckRoll{{Context: "test", Conclusion: "FAILURE"}})}
+	assertInvocationArgs(t, remediationInvocation.Args, wantRemediationArgs)
+
+	packageInvocation, err := selectedProvider.BuildPackageRemediationInvocation(PackageRemediationTask{
+		Target:        target,
+		PRNumber:      11,
+		PRBranch:      "vigilante/issue-7",
+		FindingsCount: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if packageInvocation.Dir != "/tmp/repo" {
+		t.Fatalf("expected package dir to be target path, got %#v", packageInvocation)
+	}
+	if packageInvocation.Args[0] != "run" || packageInvocation.Args[1] != "--dangerously-skip-permissions" {
+		t.Fatalf("expected opencode run flags, got %#v", packageInvocation.Args)
+	}
+}
+
 func TestClaudeInvocationUsesWorktreeDirForHeadlessRuns(t *testing.T) {
 	selectedProvider, err := Resolve(ClaudeID)
 	if err != nil {
@@ -181,6 +280,8 @@ func TestValidateVersionOutputAcceptsSupportedVersions(t *testing.T) {
 		{name: "codex", provider: DefaultID, output: "codex 1.2.3"},
 		{name: "claude 2.x", provider: ClaudeID, output: "Claude Code v2.1.3"},
 		{name: "gemini current supported 0.x", provider: GeminiID, output: "gemini-cli 0.34.0"},
+		{name: "opencode 1.x minimum", provider: OpenCodeID, output: "opencode 1.0.0"},
+		{name: "opencode 1.x current", provider: OpenCodeID, output: "opencode 1.15.13"},
 	}
 
 	for _, tc := range cases {
@@ -257,6 +358,38 @@ func TestValidateVersionOutputRejectsMalformedVersionOutput(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("expected error to contain %q, got %q", want, err.Error())
 		}
+	}
+}
+
+func TestValidateVersionOutputRejectsTooOldOpenCodeContract(t *testing.T) {
+	selectedProvider, err := Resolve(OpenCodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = ValidateVersionOutput(selectedProvider, "opencode 0.99.0")
+	if err == nil {
+		t.Fatal("expected compatibility error")
+	}
+	for _, want := range []string{"opencode CLI version 0.99.0 is incompatible", "supported: >=1.0.0, <2.0.0"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("expected error to contain %q, got %q", want, err.Error())
+		}
+	}
+}
+
+func TestValidateVersionOutputRejectsTooNewOpenCodeContract(t *testing.T) {
+	selectedProvider, err := Resolve(OpenCodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = ValidateVersionOutput(selectedProvider, "opencode 2.0.0")
+	if err == nil {
+		t.Fatal("expected compatibility error")
+	}
+	if !strings.Contains(err.Error(), "supported: >=1.0.0, <2.0.0") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

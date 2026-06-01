@@ -759,6 +759,53 @@ func TestBuildIssuePromptForGeminiInlinesSkillInstructions(t *testing.T) {
 	}
 }
 
+func TestEnsureInstalledForOpenCodeCreatesSkills(t *testing.T) {
+	dir := t.TempDir()
+	repoRoot := t.TempDir()
+	for _, name := range VigilanteSkillNames() {
+		skillSourceDir := filepath.Join(repoRoot, "skills", name)
+		if err := os.MkdirAll(skillSourceDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(skillSourceDir, "SKILL.md"), []byte("# repo skill\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(repoRoot); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = os.Chdir(wd)
+	}()
+
+	if err := EnsureInstalled(RuntimeOpenCode, dir); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, name := range VigilanteSkillNames() {
+		path := filepath.Join(dir, "skills", name, "SKILL.md")
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("expected %s to exist: %v", path, err)
+		}
+	}
+}
+
+func TestBuildIssuePromptForOpenCodeInlinesSkillInstructions(t *testing.T) {
+	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
+	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "opencode"}
+	prompt := BuildIssuePromptForRuntime(RuntimeOpenCode, target, issue, session)
+	for _, text := range []string{"Follow these `vigilante-issue-implementation` skill instructions directly", "Coding Agent Launched: OpenCode", "@vigilanteai resume", "@vigilanteai cleanup", "Issue: #12 - Fix bug"} {
+		if !strings.Contains(prompt, text) {
+			t.Fatalf("prompt missing %q: %s", text, prompt)
+		}
+	}
+}
+
 func TestIssueImplementationSkillDefaultsToTraditional(t *testing.T) {
 	if got := IssueImplementationSkill(state.WatchTarget{}); got != VigilanteIssueImplementation {
 		t.Fatalf("unexpected default issue skill: %s", got)

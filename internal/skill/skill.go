@@ -44,6 +44,7 @@ const DockerComposeLaunch = "docker-compose-launch"
 const RuntimeCodex = "codex"
 const RuntimeClaude = "claude"
 const RuntimeGemini = "gemini"
+const RuntimeOpenCode = "opencode"
 
 func VigilanteSkillNames() []string {
 	return []string{
@@ -112,6 +113,10 @@ func installTargets(runtime string, home string, name string) ([]string, error) 
 			filepath.Join(home, "commands", name),
 		}, nil
 	case RuntimeGemini:
+		return []string{
+			filepath.Join(home, "skills", name),
+		}, nil
+	case RuntimeOpenCode:
 		return []string{
 			filepath.Join(home, "skills", name),
 		}, nil
@@ -609,6 +614,8 @@ func displayProviderName(name string) string {
 		return "Codex"
 	case RuntimeGemini:
 		return "Gemini CLI"
+	case RuntimeOpenCode:
+		return "OpenCode"
 	}
 	parts := strings.FieldsFunc(name, func(r rune) bool {
 		return r == '-' || r == '_' || r == ' '
@@ -728,7 +735,7 @@ func BuildCIRemediationPromptForRuntime(runtime string, target state.WatchTarget
 
 func runtimeUsesInlineSkillHeader(runtime string) bool {
 	switch strings.TrimSpace(runtime) {
-	case RuntimeClaude, RuntimeGemini:
+	case RuntimeClaude, RuntimeGemini, RuntimeOpenCode:
 		return true
 	default:
 		return false
