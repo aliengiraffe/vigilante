@@ -47,7 +47,7 @@ GitHub is the only fully implemented issue-tracking backend today. The backend i
 
 - **Worktree isolation.** Every issue gets its own branch and worktree so the main checkout stays untouched.
 - **Operator-visible lifecycle.** Start, progress, failure, and PR state are reflected through GitHub comments and local Vigilante state.
-- **Provider-neutral orchestration.** Works with supported headless coding-agent CLIs including `codex`, `claude`, and `gemini`.
+- **Provider-neutral orchestration.** Works with supported headless coding-agent CLIs including `codex`, `claude`, `gemini`, and `opencode`.
 - **Recovery tooling.** `resume`, `redispatch`, and `cleanup` are first-class flows, not ad hoc scripts.
 - **Rate-limit awareness.** Vigilante monitors GitHub API budget and delays additional work when quota gets tight.
 
@@ -74,7 +74,7 @@ Requirements:
 
 - `git`
 - `gh` authenticated against the GitHub account Vigilante should operate with
-- one supported coding-agent CLI installed locally: `codex`, `claude`, or `gemini`
+- one supported coding-agent CLI installed locally: `codex`, `claude`, `gemini`, or `opencode`
 
 Bootstrap the local machine and install the managed service:
 

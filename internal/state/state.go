@@ -313,6 +313,20 @@ func (s *Store) GeminiHome() string {
 	return filepath.Join(home, ".gemini")
 }
 
+// OpenCodeHome returns the directory where OpenCode stores configuration and
+// extensions (skills, commands, agents). OPENCODE_HOME overrides the default,
+// which is the documented OpenCode config dir at ~/.config/opencode.
+func (s *Store) OpenCodeHome() string {
+	if value := os.Getenv("OPENCODE_HOME"); value != "" {
+		return value
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(s.root, ".config", "opencode")
+	}
+	return filepath.Join(home, ".config", "opencode")
+}
+
 func (s *Store) EnsureLayout() error {
 	for _, dir := range []string{s.root, s.LogsDir()} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {

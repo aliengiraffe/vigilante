@@ -81,7 +81,7 @@ Quickstart requirements:
 
 - `git`
 - `gh` authenticated against the GitHub account you want Vigilante to operate with
-- one supported coding-agent CLI installed locally: `codex`, `claude`, or `gemini`
+- one supported coding-agent CLI installed locally: `codex`, `claude`, `gemini`, or `opencode`
 
 ## Product Goal
 
@@ -123,7 +123,7 @@ For each watched repository:
 3. Ensure required tools are available:
    - `git`
    - `gh`
-   - the configured coding-agent provider CLI (`codex`, `claude`, or `gemini`)
+   - the configured coding-agent provider CLI (`codex`, `claude`, `gemini`, or `opencode`)
 4. Ensure the bundled issue implementation skills from the repo `skills/` folder are installed during setup, including companion agent metadata.
 5. Query GitHub for open issues.
 6. Determine which issues are eligible for execution.
@@ -240,7 +240,7 @@ Upgrade later with:
 brew upgrade vigilante
 ```
 
-### `vigilante watch [--assignee <value>] [--max-parallel <value>] [--provider <codex|claude|gemini>] [--issue-tracker <github|linear>] [--issue-tracker-stage <value>] [--branch <name> | --track-default-branch] <path>`
+### `vigilante watch [--assignee <value>] [--max-parallel <value>] [--provider <codex|claude|gemini|opencode>] [--issue-tracker <github|linear>] [--issue-tracker-stage <value>] [--branch <name> | --track-default-branch] <path>`
 
 Register a local repository for issue monitoring.
 
@@ -286,6 +286,10 @@ vigilante watch --provider claude ~/hello-world-app
 
 ```sh
 vigilante watch --provider gemini ~/hello-world-app
+```
+
+```sh
+vigilante watch --provider opencode ~/hello-world-app
 ```
 
 ```sh
@@ -384,7 +388,7 @@ Remove a repository from the watchlist without deleting the repository itself.
 Run the long-lived watcher loop in the foreground. This is the process the OS service should execute.
 By default it scans watched repositories every 1 minute. Use `--interval` to override that cadence for manual runs.
 
-### `vigilante setup [--provider <codex|claude|gemini>]`
+### `vigilante setup [--provider <codex|claude|gemini|opencode>]`
 
 Prepare the machine for autonomous execution.
 
@@ -393,7 +397,7 @@ Expected behavior:
 - creates `~/.vigilante/`
 - initializes `watchlist.json`
 - verifies `git`, `gh`, and the selected coding-agent provider CLI
-- verifies the selected provider CLI reports a compatible build-supported version range, currently `>=0.114.0, <2.0.0` for `codex`, `>=2.0.0, <3.0.0` for `claude`, and `>=1.0.0, <2.0.0` for `gemini`
+- verifies the selected provider CLI reports a compatible build-supported version range, currently `>=0.114.0, <2.0.0` for `codex`, `>=2.0.0, <3.0.0` for `claude`, `>=0.34.0, <1.0.0` for `gemini`, and `>=1.0.0, <2.0.0` for `opencode`
 - installs the bundled coding-agent skills for regular runtime use, including any companion files under each skill directory
   - `vigilante-issue-implementation`
   - `vigilante-issue-implementation-on-monorepo`
@@ -634,7 +638,7 @@ Initial rules:
 - treat `max_parallel_sessions: 0` as unlimited parallel issue dispatch for that repository
 - count both running implementation sessions and open-PR maintenance sessions against that repository limit
 - avoid duplicate work across multiple daemon scans
-- allow an issue label that exactly matches a registered provider id, such as `codex`, `claude`, or `gemini`, to override the watch target provider for that issue only
+- allow an issue label that exactly matches a registered provider id, such as `codex`, `claude`, `gemini`, or `opencode`, to override the watch target provider for that issue only
 - if more than one provider-id label is present on the same issue, skip dispatch instead of choosing a provider arbitrarily
 - prefer oldest eligible open issue first unless later prioritization rules are added
 
@@ -714,14 +718,14 @@ Label ownership rules:
 
 - Work-classification labels such as `bug`, `feature`, and `good first issue` remain repository-managed and should not be changed by Vigilante.
 - `vigilante:*` lifecycle and intervention labels are primarily informational and should be set or cleared by Vigilante as the issue moves through execution.
-- Provider-routing labels `codex`, `claude`, and `gemini` keep their existing control semantics and remain human-managed overrides.
+- Provider-routing labels `codex`, `claude`, `gemini`, and `opencode` keep their existing control semantics and remain human-managed overrides.
 - `vigilante:resume` is the preferred control label for unblocking a paused session; `resume` remains a legacy-compatible alias.
 
 Proposed groups:
 
 - Execution state: `vigilante:queued`, `vigilante:running`, `vigilante:blocked`, `vigilante:ready-for-review`, `vigilante:awaiting-user-validation`, `vigilante:done`
 - Human-intervention state: `vigilante:needs-human-input`, `vigilante:needs-provider-fix`, `vigilante:needs-git-fix`
-- Provider routing controls: `codex`, `claude`, `gemini`
+- Provider routing controls: `codex`, `claude`, `gemini`, `opencode`
 - Explicit control labels: `vigilante:resume` and legacy `resume`
 
 Recommended lifecycle:
@@ -748,7 +752,7 @@ When `vigilante` launches a coding agent for an issue, it should:
 - instruct the agent not to add coding-agent `Co-authored by:` trailers or similar attribution
 - instruct the agent to report failures on the issue if execution aborts
 
-The agent invocation remains a subprocess wrapper around an installed coding CLI such as `codex`, `claude`, or `gemini`, while keeping the orchestration behavior provider-neutral.
+The agent invocation remains a subprocess wrapper around an installed coding CLI such as `codex`, `claude`, `gemini`, or `opencode`, while keeping the orchestration behavior provider-neutral.
 
 ## GitHub Integration
 
