@@ -228,6 +228,8 @@ type Session struct {
 	LastResumeSource               string              `json:"last_resume_source,omitempty"`
 	LastResumeCommentID            int64               `json:"last_resume_comment_id,omitempty"`
 	LastResumeCommentAt            string              `json:"last_resume_comment_at,omitempty"`
+	LastBlockedCommentFingerprint  string              `json:"last_blocked_comment_fingerprint,omitempty"`
+	LastBlockedCommentedAt         string              `json:"last_blocked_commented_at,omitempty"`
 	LastResumeFailureFingerprint   string              `json:"last_resume_failure_fingerprint,omitempty"`
 	LastResumeFailureCommentedAt   string              `json:"last_resume_failure_commented_at,omitempty"`
 	LastDispatchFailureFingerprint string              `json:"last_dispatch_failure_fingerprint,omitempty"`
