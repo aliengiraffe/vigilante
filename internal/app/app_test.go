@@ -1712,6 +1712,126 @@ func TestCommentOnIssueEmitsTypedTelemetry(t *testing.T) {
 	}
 }
 
+func TestCommentBlockedIssueSuppressesDuplicateFingerprint(t *testing.T) {
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	now := time.Date(2026, 6, 1, 18, 0, 0, 0, time.UTC)
+	app.clock = func() time.Time { return now }
+	session := state.Session{
+		Repo:                   "owner/repo",
+		IssueNumber:            7,
+		BlockedStage:           "pr_maintenance",
+		BlockedReason:          state.BlockedReason{Kind: "git_auth", Operation: "git fetch origin main", Summary: "fetch failed", Detail: "fetch failed"},
+		LastBlockedCommentedAt: now.Add(-time.Hour).Format(time.RFC3339),
+	}
+	session.LastBlockedCommentFingerprint = blockedCommentFingerprint(session.BlockedStage, session.BlockedReason)
+
+	if err := app.commentBlockedIssue(context.Background(), &session, "body", "pr_maintenance"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := session.LastBlockedCommentedAt, now.Add(-time.Hour).Format(time.RFC3339); got != want {
+		t.Fatalf("LastBlockedCommentedAt = %q, want %q", got, want)
+	}
+}
+
+func TestRunPullRequestMaintenanceSuppressesDuplicateBlockedCommentForSameFingerprint(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	now := time.Date(2026, 6, 1, 18, 5, 0, 0, time.UTC)
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	app.clock = func() time.Time { return now }
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
+		},
+		Errors: map[string]error{
+			"git fetch origin main": errors.New("fetch failed"),
+		},
+	}
+
+	session := state.Session{
+		RepoPath:               repoPath,
+		Repo:                   "owner/repo",
+		IssueNumber:            1,
+		IssueTitle:             "first",
+		IssueURL:               "https://github.com/owner/repo/issues/1",
+		Branch:                 "vigilante/issue-1",
+		WorktreePath:           worktreePath,
+		ResumeHint:             "vigilante resume --repo owner/repo --issue 1",
+		Status:                 state.SessionStatusSuccess,
+		LastBlockedCommentedAt: now.Add(-2 * time.Hour).Format(time.RFC3339),
+	}
+	blocked := classifyBlockedReason("pr_maintenance", "git fetch origin main", errors.New("fetch failed"))
+	session.LastBlockedCommentFingerprint = blockedCommentFingerprint("pr_maintenance", blocked)
+
+	pr, _, err := app.runPullRequestMaintenance(context.Background(), &session, nil)
+	if err == nil {
+		t.Fatal("expected maintenance failure")
+	}
+	if pr == nil || pr.Number != 31 {
+		t.Fatalf("unexpected pull request: %#v", pr)
+	}
+	if got, want := session.LastBlockedCommentedAt, now.Add(-2*time.Hour).Format(time.RFC3339); got != want {
+		t.Fatalf("expected duplicate blocked comment to be suppressed: %#v", session)
+	}
+}
+
+func TestCleanupBlockedSessionForInactivityPreservesBlockedCommentFingerprint(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	now := time.Date(2026, 6, 1, 18, 10, 0, 0, time.UTC)
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.clock = func() time.Time { return now }
+	app.prManager = nil
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"git worktree prune":                                         "ok",
+			"git worktree remove --force " + worktreePath:                "ok",
+			"git ls-remote --exit-code --heads origin vigilante/issue-1": "abc123\trefs/heads/vigilante/issue-1",
+			"git fetch origin vigilante/issue-1:vigilante/issue-1":       "ok",
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-1": "ok",
+			"git branch -D vigilante/issue-1":                            "Deleted branch vigilante/issue-1 (was abc123).",
+			"git worktree list --porcelain":                              "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/main\n",
+		},
+	}
+	session := state.Session{
+		RepoPath:                      repoPath,
+		Repo:                          "owner/repo",
+		IssueNumber:                   1,
+		IssueTitle:                    "first",
+		Branch:                        "vigilante/issue-1",
+		WorktreePath:                  worktreePath,
+		Status:                        state.SessionStatusBlocked,
+		BlockedStage:                  "pr_maintenance",
+		BlockedReason:                 state.BlockedReason{Kind: "git_auth", Operation: "git fetch origin main", Summary: "fetch failed", Detail: "fetch failed"},
+		LastBlockedCommentFingerprint: "pr_maintenance|git_auth|git fetch origin main|fetch failed|fetch failed",
+		LastBlockedCommentedAt:        now.Add(-30 * time.Minute).Format(time.RFC3339),
+	}
+
+	if err := app.cleanupBlockedSessionForInactivity(context.Background(), &session, 20*time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := session.LastBlockedCommentFingerprint, "pr_maintenance|git_auth|git fetch origin main|fetch failed|fetch failed"; got != want {
+		t.Fatalf("LastBlockedCommentFingerprint = %q, want %q", got, want)
+	}
+	if got, want := session.LastBlockedCommentedAt, now.Add(-30*time.Minute).Format(time.RFC3339); got != want {
+		t.Fatalf("LastBlockedCommentedAt = %q, want %q", got, want)
+	}
+}
+
 func TestRecordSessionFailureEmitsSessionTransitionTelemetry(t *testing.T) {
 	capture, shutdownTelemetry := setupTelemetryCapture(t)
 	app := New()

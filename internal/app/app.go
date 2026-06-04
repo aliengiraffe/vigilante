@@ -540,6 +540,57 @@ func (a *App) commentOnIssue(ctx context.Context, repo string, issue int, body s
 	return nil
 }
 
+func normalizeBlockedFingerprintPart(value string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+}
+
+func blockedCommentFingerprint(stage string, reason state.BlockedReason) string {
+	return strings.Join([]string{
+		normalizeBlockedFingerprintPart(stage),
+		normalizeBlockedFingerprintPart(reason.Kind),
+		normalizeBlockedFingerprintPart(reason.Operation),
+		normalizeBlockedFingerprintPart(reason.Summary),
+		normalizeBlockedFingerprintPart(reason.Detail),
+	}, "|")
+}
+
+func hasBlockedCommentFingerprint(stage string, reason state.BlockedReason) bool {
+	return normalizeBlockedFingerprintPart(stage) != "" ||
+		normalizeBlockedFingerprintPart(reason.Kind) != "" ||
+		normalizeBlockedFingerprintPart(reason.Operation) != "" ||
+		normalizeBlockedFingerprintPart(reason.Summary) != "" ||
+		normalizeBlockedFingerprintPart(reason.Detail) != ""
+}
+
+func carryBlockedCommentState(session *state.Session, previous state.Session) {
+	session.LastBlockedCommentFingerprint = previous.LastBlockedCommentFingerprint
+	session.LastBlockedCommentedAt = previous.LastBlockedCommentedAt
+}
+
+func clearBlockedCommentState(session *state.Session) {
+	session.LastBlockedCommentFingerprint = ""
+	session.LastBlockedCommentedAt = ""
+}
+
+func (a *App) commentBlockedIssue(ctx context.Context, session *state.Session, body string, source string) error {
+	if session == nil {
+		return nil
+	}
+	fingerprint := blockedCommentFingerprint(session.BlockedStage, session.BlockedReason)
+	if hasBlockedCommentFingerprint(session.BlockedStage, session.BlockedReason) && fingerprint == session.LastBlockedCommentFingerprint {
+		a.logger.Info("blocked comment suppressed", "repo", session.Repo, "issue", session.IssueNumber, "stage", session.BlockedStage, "fingerprint", fingerprint, "source", source)
+		return nil
+	}
+	if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "blocked", source); err != nil {
+		return err
+	}
+	if hasBlockedCommentFingerprint(session.BlockedStage, session.BlockedReason) {
+		session.LastBlockedCommentFingerprint = fingerprint
+		session.LastBlockedCommentedAt = a.clock().Format(time.RFC3339)
+	}
+	return nil
+}
+
 func (a *App) withIssueAccessLogContext(ctx context.Context, executionContext string, repo string, issue int, branch string, worktreePath string) context.Context {
 	return environment.WithAccessLogContext(ctx, environment.AccessLogContext{
 		ExecutionContext: executionContext,
@@ -2232,6 +2283,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				}
 				if previous, ok := findSession(sessions, target.Repo, next.Number); ok {
 					carryStaleAutoRestartState(&session, previous)
+					carryBlockedCommentState(&session, previous)
 				}
 				sessions = upsertSession(sessions, session)
 				if err := a.state.SaveSessions(sessions); err != nil {
@@ -2822,7 +2874,7 @@ func (a *App) runPullRequestMaintenance(ctx context.Context, session *state.Sess
 					},
 					Tagline: "Difficulties strengthen the mind, as labor does the body.",
 				})
-				if commentErr := a.commentOnIssue(sessionCtx, session.Repo, session.IssueNumber, body, "blocked", "pr_maintenance"); commentErr != nil {
+				if commentErr := a.commentBlockedIssue(sessionCtx, session, body, "pr_maintenance"); commentErr != nil {
 					a.logger.Error("pr maintenance failure comment failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "err", commentErr)
 				}
 				session.LastMaintenanceError = err.Error()
@@ -3981,6 +4033,7 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 		} else {
 			carryStaleAutoRestartState(&session, previous)
 		}
+		carryBlockedCommentState(&session, previous)
 	}
 	sessions = upsertSession(sessions, session)
 	if err := a.state.SaveSessions(sessions); err != nil {
@@ -4726,7 +4779,7 @@ func (a *App) autoRecoverBlockedMaintenanceSession(ctx context.Context, session 
 			},
 			Tagline: "The retry stopped at the gate.",
 		})
-		if commentErr := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, failureBody, "blocked", autoRecoverySource); commentErr != nil {
+		if commentErr := a.commentBlockedIssue(ctx, session, failureBody, autoRecoverySource); commentErr != nil {
 			a.logger.Error("auto recovery failure comment failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "err", commentErr)
 		}
 		return err
@@ -4755,7 +4808,7 @@ func (a *App) autoRecoverBlockedMaintenanceSession(ctx context.Context, session 
 			},
 			Tagline: "Clean slate, real blocker.",
 		})
-		if commentErr := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, failureBody, "blocked", autoRecoverySource); commentErr != nil {
+		if commentErr := a.commentBlockedIssue(ctx, session, failureBody, autoRecoverySource); commentErr != nil {
 			a.logger.Error("auto recovery blocked comment failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "err", commentErr)
 		}
 		return resumeErr
@@ -5286,6 +5339,7 @@ func clearBlockedState(session *state.Session, now time.Time, source string) {
 	session.LastCIRemediationFingerprint = ""
 	session.LastCIRemediationAttemptedAt = ""
 	session.LastResumeSource = source
+	clearBlockedCommentState(session)
 	session.LastResumeFailureFingerprint = ""
 	session.LastResumeFailureCommentedAt = ""
 	session.LastDispatchFailureFingerprint = ""
@@ -5627,6 +5681,7 @@ func reuseExistingIterationSession(target state.WatchTarget, issue ghcli.Issue, 
 	session.IterationInProgress = true
 	session.LastResumeSource = ""
 	session.LastResumeCommentAt = ""
+	clearBlockedCommentState(&session)
 	session.LastResumeFailureFingerprint = ""
 	session.LastResumeFailureCommentedAt = ""
 	session.LastDispatchFailureFingerprint = ""
