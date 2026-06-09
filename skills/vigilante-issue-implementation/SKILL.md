@@ -36,7 +36,18 @@ Require these inputs from Vigilante:
 - The plan comment should describe the intended development steps before substantial code changes begin.
 - Keep the plan concrete and short so readers can understand what will happen next.
 
-4. Implement inside the assigned worktree only
+4. Detect a stacked base branch
+- Before implementing, scan the issue body for an explicit, single-line directive of the form `Base branch: <branch-name>` (label is case-insensitive; `<branch-name>` is trimmed and may be surrounded by backticks).
+- Only honor the directive when it appears as its own top-level line in the issue body. Do not infer a stacked base from prose, linked issue numbers, native sub-issue relationships, or branch names mentioned elsewhere in the issue.
+- If no such directive is present, follow the default workflow: branch from and target the watch target's base branch as today.
+- If the directive is present:
+  - Run `git fetch origin <base>` from inside the assigned worktree before any other code changes.
+  - If `git fetch origin <base>` fails because the branch does not exist on the remote, stop work, post a failure comment on the issue explaining that the specified stacked base branch is missing on the remote, and do not silently fall back to the default branch.
+  - When the fetch succeeds, re-root the work branch onto `origin/<base>` with either `git reset --hard origin/<base>` (preferred when the assigned branch has no commits yet) or `git rebase origin/<base>` (when commits already exist on the work branch).
+  - Use `<base>` instead of the repository default branch when opening the pull request later in the workflow.
+  - Mention the stacked base branch in the implementation-plan comment so reviewers see it before code changes start.
+
+5. Implement inside the assigned worktree only
 - Use only the provided worktree path.
 - Never edit the root checkout when a worktree was assigned.
 - Keep changes scoped to the issue.
@@ -47,12 +58,12 @@ Service dependencies:
 - If app startup, migrations, or tests need local services, call the bundled `vigilante-local-service-dependencies` skill before inventing ad hoc setup steps.
 - Prefer the skill's repository-native path first, and use its structured output to decide which env vars, commands, or cleanup steps the rest of the implementation should use.
 
-5. Validate incrementally
+6. Validate incrementally
 - Run relevant tests, builds, or linters for the changed area before concluding work.
 - Prefer targeted validation first, then broader validation when necessary.
 - If a command fails, first inspect the per-issue session log with `vigilante logs --repo <owner/name> --issue <n>` to determine whether the problem is in the code, test setup, or environment before retrying.
 
-6. Commit and push the branch
+7. Commit and push the branch
 - Use `vigilante commit` for all commit-producing operations. Do not use `git commit` or GitHub CLI commit flows directly.
 - Commit only issue-relevant changes in the assigned branch.
 - Any commit or amend must preserve the user's existing git author, committer, and signing configuration. Commit on behalf of the user and do not overwrite `git config` with a coding-agent identity.
@@ -60,28 +71,31 @@ Service dependencies:
 - Push the assigned branch to the remote with `vigilante git push`.
 - Do not leave completed implementation work only in the local worktree.
 
-7. Open a pull request
+8. Open a pull request
 - Always create a pull request for the completed change set.
-- Target the repository default branch unless repository instructions say otherwise.
+- Target the repository default branch unless the issue specified a stacked base branch in step 4 or other repository instructions say otherwise.
+- When a stacked base branch was specified, pass `--base <base>` to `vigilante gh pr create` and state in the PR body that the PR is stacked on `<base>` instead of the repository default branch.
 - Include `Closes #<issue-number>` in the PR body as a required invariant.
 - Include concise validation notes in the PR description.
 
-8. Post progress comments at meaningful milestones
+9. Post progress comments at meaningful milestones
 - Use `vigilante gh issue comment` for progress updates.
 - Comment when investigation is complete and implementation starts.
 - Comment when major milestones are reached, such as a core fix landing or tests passing.
 - Comment when the branch has been pushed and the PR has been opened.
+- When the PR is opened on a stacked base branch, the PR-opened comment must state which branch the PR is stacked on.
 - Keep comments concise and factual.
 - Do not spam the issue with low-signal updates.
 
-9. Handle failures and blockers explicitly
+10. Handle failures and blockers explicitly
 - If tool setup fails, validation fails, the provider stops unexpectedly, a resumed session still looks unclear, or the issue is otherwise blocked, first inspect the per-issue session log with `vigilante logs --repo <owner/name> --issue <n>`.
 - After checking the log, comment on the issue with the concrete problem using `vigilante gh issue comment`.
 - Use `vigilante logs` for targeted local triage only when work is blocked or failing; do not turn it into routine log scraping on successful runs.
 - Include enough detail for a human maintainer to understand the current state and next step.
 - If work cannot proceed safely, stop and report the blocker instead of guessing.
+- A `Base branch:` directive that points at a branch missing from the remote is one of these blockers: comment a failure on the issue and stop instead of falling back to the default branch.
 
-10. Finish with a clear terminal state
+11. Finish with a clear terminal state
 - Leave the worktree in a coherent state.
 - Ensure any executed validations are accurately reported.
 - If the task completed successfully, summarize what changed, what was validated, and which PR was opened.

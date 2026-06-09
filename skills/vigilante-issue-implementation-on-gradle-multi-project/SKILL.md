@@ -32,7 +32,17 @@ Implement one GitHub issue from Vigilante dispatch through validated code change
 - After inspecting the issue and repository constraints, post a concise implementation plan to the issue using `vigilante gh issue comment`.
 - The plan comment should describe the Gradle subproject scope and validation approach before substantial coding work begins.
 
-4. Implement inside the assigned worktree only
+4. Detect a stacked base branch
+- Scan the issue body for an explicit, single-line directive of the form `Base branch: <branch-name>` (label is case-insensitive; `<branch-name>` is trimmed and may be surrounded by backticks).
+- Only honor the directive when it appears as its own top-level line in the issue body. Do not infer a stacked base from prose or sub-issue links.
+- If no directive is present, branch from and target the watch target's base branch as today.
+- When the directive is present:
+  - Run `git fetch origin <base>` inside the assigned worktree before code changes.
+  - If the fetch fails because the branch does not exist on the remote, stop work, post a failure comment on the issue, and do not silently fall back to the default branch.
+  - Re-root the work branch onto `origin/<base>` with `git reset --hard origin/<base>` (no commits yet) or `git rebase origin/<base>` (commits present).
+  - Use `<base>` as the PR target later and mention it in the implementation-plan comment.
+
+5. Implement inside the assigned worktree only
 - Use only the provided worktree path.
 - Never edit the root checkout when a worktree was assigned.
 - Keep changes scoped to the issue.
@@ -40,20 +50,22 @@ Implement one GitHub issue from Vigilante dispatch through validated code change
 - When local databases or other service-backed dependencies are required, call the bundled `vigilante-local-service-dependencies` skill before inventing ad hoc setup.
 - If the repository expects `docker-compose-launch` for service-backed development or tests, use that repo-defined flow instead of replacing it with generic compose commands.
 
-5. Validate incrementally
+6. Validate incrementally
 - Run the most relevant Gradle tasks for the affected subproject(s) first, such as repo-defined `test`, `check`, `build`, or narrower module tasks.
 - Log the selected subproject(s) and Gradle task scope in issue progress updates when validation starts or changes.
 - If validation fails, first inspect the per-issue session log with `vigilante logs --repo <owner/name> --issue <n>` to determine whether the problem is in the code, Gradle task selection, test setup, or environment before retrying.
 
-6. Commit, push, and open a pull request
+7. Commit, push, and open a pull request
 - Use `vigilante commit` for all commit-producing operations. Do not use `git commit` or GitHub CLI commit flows directly.
 - Commit only issue-relevant changes in the assigned branch.
 - Any commit or amend must preserve the user's existing git author, committer, and signing configuration. Commit on behalf of the user and do not overwrite `git config` with a coding-agent identity.
 - Do not add `Co-authored by:` trailers or any other agent attribution for Codex, Claude, Gemini, or similar coding-agent identities.
 - Push the assigned branch to the remote.
-- Open a pull request targeting the repository default branch unless repository instructions say otherwise.
+- Open a pull request targeting the repository default branch unless the issue specified a stacked base branch in step 4 or other repository instructions say otherwise.
+- When a stacked base branch was specified, pass `--base <base>` to `vigilante gh pr create` and state in the PR body and the PR-opened issue comment that the PR is stacked on `<base>`.
 
-7. Report progress and failures clearly
+8. Report progress and failures clearly
 - Use `vigilante gh issue comment` for progress updates, milestone updates, PR creation, and execution failures.
 - If execution is blocked, validation fails, or a resumed session is unclear, inspect `vigilante logs --repo <owner/name> --issue <n>` before retrying or reporting the blocker.
+- A `Base branch:` directive that points at a branch missing from the remote is a blocker: comment a failure on the issue and stop instead of falling back to the default branch.
 - Keep comments concise, factual, and tied to real progress.

@@ -653,6 +653,19 @@ For pull requests tied to an active Vigilante session:
 - keep the legacy plain `automerge` PR label working as a compatibility alias during migration to the namespaced label
 - never force through branch protection, required reviews, or failing checks
 
+## Stacked-PR Base Branches
+
+Issue authors can request that an issue be implemented on top of an existing in-flight branch (a stacked PR) by adding a single top-level line to the issue body of the form `Base branch: <branch-name>`. The label is case-insensitive and the branch name may be surrounded by backticks.
+
+When that directive is present:
+
+- the implementation skill fetches `origin/<branch-name>` and re-roots the work branch onto it before changing code
+- the resulting pull request targets `<branch-name>` instead of the watch target's base branch
+- the PR body and the PR-opened issue comment state that the PR is stacked on `<branch-name>`
+- the maintenance loop keeps the branch updated against `<branch-name>` through the same path used for default-branch PRs
+
+When the directive is absent, Vigilante uses the watch target's base branch as today. Only an explicit top-level `Base branch:` line triggers stacking; prose mentions of other branches, linked issue numbers, and native sub-issue relationships are ignored. If the specified branch does not exist on the remote, the session is reported as failed on the issue rather than silently falling back to the default branch.
+
 ## Package Hardening
 
 Vigilante runs a deterministic, code-driven package hardening scan for watched repositories classified with the `nodejs` tech stack. The scan is not LLM-driven — all checks use static analysis of manifest files, lockfiles, and CI configuration.
