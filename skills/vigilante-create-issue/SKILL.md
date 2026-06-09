@@ -125,6 +125,12 @@ Every issue draft should cover these sections when relevant:
 - Do include non-goals so the eventual implementation stays narrow.
 - Do include exact commands, files, components, or workflows when they are already known.
 
+## Stacked-PR Base Branch
+- When the user wants the new issue to be implemented on top of an existing in-flight branch (a stacked PR), add a single top-level line to the issue body of the form `Base branch: <branch-name>`.
+- Use this line only when the user explicitly asks to stack on another branch. Do not infer stacking from prose mentions of other branches, related issue numbers, or native sub-issue relationships.
+- The branch name must exist on the repository remote when implementation runs; the implementation skills will fail the session if it does not.
+- Without this line, Vigilante branches off and targets the watch target's base branch as today.
+
 ## Recommended Questions To Ask
 Use these to tighten the issue before drafting:
 

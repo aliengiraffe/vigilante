@@ -36,7 +36,7 @@ description: Implement a GitHub issue end-to-end when Vigilante dispatches work 
 - Do not assume a .NET repository is C#-only; use the prompt's detected tech stacks and process hints.
 
 ## Workflow
-- Follow the base `vigilante-issue-implementation` workflow for issue comments, validation, push, and PR creation.
+- Follow the base `vigilante-issue-implementation` workflow for issue comments, validation, push, and PR creation, including stacked base-branch detection (`Base branch:` directive in the issue body).
 - Use `vigilante commit` for all commit-producing operations. Do not use `git commit` or GitHub CLI commit flows directly.
 - Any commit or amend must preserve the user's existing git author, committer, and signing configuration. Commit on behalf of the user and do not overwrite `git config` with a coding-agent identity.
 - Do not add `Co-authored by:` trailers or any other agent attribution for Codex, Claude, Gemini, or similar coding-agent identities.

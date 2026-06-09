@@ -29,7 +29,7 @@ description: Implement a GitHub issue end-to-end when Vigilante dispatches work 
 - When the repository also contains other stacks such as Node.js or Go, scope Cargo commands to Rust crates only and validate the other side with its own toolchain only when the issue actually touches it.
 
 ## Workflow
-- Follow the base `vigilante-issue-implementation` workflow for issue comments, validation, push, and PR creation.
+- Follow the base `vigilante-issue-implementation` workflow for issue comments, validation, push, and PR creation, including stacked base-branch detection (`Base branch:` directive in the issue body).
 - If validation, tool setup, or push/PR execution fails, inspect `vigilante logs --repo <owner/name> --issue <n>` before retrying or reporting the blocker so the session transcript guides the next safe step.
 - Use `vigilante commit` for all commit-producing operations. Do not use `git commit` or GitHub CLI commit flows directly.
 - Any commit or amend must preserve the user's existing git author, committer, and signing configuration. Commit on behalf of the user and do not overwrite `git config` with a coding-agent identity.
