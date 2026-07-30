@@ -12,7 +12,53 @@ import (
 	"time"
 
 	"github.com/nicobistolfi/vigilante/internal/environment"
+	"github.com/nicobistolfi/vigilante/internal/logging"
+	"github.com/nicobistolfi/vigilante/internal/state"
 )
+
+// configureLogRotation applies the operator's configured rotation limits to
+// every log write path in the process and records rotations and evictions in the
+// daemon log, so operators can tell rotated logs apart from missing ones.
+// Unreadable or malformed configuration falls back to the built-in defaults.
+func configureLogRotation(store *state.Store) logging.Limits {
+	config, err := store.LoadServiceConfig()
+	if err != nil {
+		config = state.ServiceConfig{}
+	}
+	limits := config.LogRotationLimits()
+	logging.Configure(limits, store.LiveLogPaths, func(ev logging.Event) {
+		switch ev.Kind {
+		case logging.EventEvict:
+			store.AppendDaemonLog("log budget enforced: evicted %d file(s), reclaimed %s from %s",
+				len(ev.Removed), logging.FormatSize(ev.ReclaimedByte), ev.Path)
+		default:
+			store.AppendDaemonLog("rotated log file %s (max_file_size=%s)",
+				ev.Path, logging.FormatSize(limits.MaxFileSize))
+		}
+	})
+	return limits
+}
+
+// sweepLogsDir brings the logs directory back within the configured total
+// budget. It is best-effort: a failed sweep is logged and otherwise ignored.
+func (a *App) sweepLogsDir() {
+	limits := logging.CurrentLimits()
+	result, err := a.state.SweepLogs(limits)
+	if err != nil {
+		a.logger.Warn("log sweep failed", "err", err)
+		return
+	}
+	if len(result.Removed) == 0 {
+		return
+	}
+	a.logger.Info("log sweep evicted files",
+		"files", len(result.Removed),
+		"reclaimed_bytes", result.Reclaimed,
+		"total_before_bytes", result.TotalBefore,
+		"total_after_bytes", result.TotalAfter,
+		"max_total_size", logging.FormatSize(limits.MaxTotalSize),
+	)
+}
 
 func formatAccessLogEntry(e environment.AccessLogEntry) string {
 	var b strings.Builder
@@ -107,76 +153,28 @@ func (a *App) waitForFile(ctx context.Context, path string) error {
 // data until the context is canceled. If the file does not yet exist, it waits
 // for the file to appear before tailing.
 func (a *App) watchSessionLog(ctx context.Context, path string) error {
-	f, err := os.Open(path)
-	if err != nil {
+	if _, err := os.Stat(path); err != nil {
 		if waitErr := a.waitForFile(ctx, path); waitErr != nil {
 			return waitErr
 		}
-		f, err = os.Open(path)
-		if err != nil {
+		if _, err := os.Stat(path); err != nil {
 			return fmt.Errorf("no session log found for follow mode")
 		}
 	}
-	defer f.Close()
-
-	// Print existing content.
-	if _, err := io.Copy(a.stdout, f); err != nil {
-		return err
-	}
-
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
-
-	buf := make([]byte, 4096)
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			for {
-				n, err := f.Read(buf)
-				if n > 0 {
-					if _, wErr := a.stdout.Write(buf[:n]); wErr != nil {
-						return wErr
-					}
-				}
-				if err != nil {
-					break
-				}
-			}
-		}
-	}
+	return watchPlaintextLog(ctx, a.stdout, path, false)
 }
 
 func (a *App) watchAccessLog(ctx context.Context, path string) error {
-	f, err := os.Open(path)
-	if err != nil {
+	if _, err := os.Stat(path); err != nil {
 		return fmt.Errorf("no access log found")
 	}
-	defer f.Close()
-
-	// Print existing entries first.
-	if err := renderAccessLogStream(a.stdout, f); err != nil {
-		return err
-	}
-
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-ticker.C:
-			if err := renderAccessLogStream(a.stdout, f); err != nil {
-				return err
-			}
-		}
-	}
+	return followFile(ctx, path, false, 500*time.Millisecond, func(r io.Reader) error {
+		return renderAccessLogStream(a.stdout, r)
+	})
 }
 
-func renderAccessLogStream(w io.Writer, f *os.File) error {
-	scanner := bufio.NewScanner(f)
+func renderAccessLogStream(w io.Writer, r io.Reader) error {
+	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -193,6 +191,18 @@ func renderAccessLogStream(w io.Writer, f *os.File) error {
 }
 
 func watchPlaintextLog(ctx context.Context, w io.Writer, path string, startAtEnd bool) error {
+	return followFile(ctx, path, startAtEnd, 250*time.Millisecond, func(r io.Reader) error {
+		_, err := io.Copy(w, r)
+		return err
+	})
+}
+
+// followFile polls path and hands every newly appended chunk to emit until the
+// context is canceled. The file is reopened on each tick rather than held open,
+// and the byte offset resets whenever the file shrinks, so a rename-based log
+// rotation is survivable: the follow picks up the fresh current file instead of
+// tailing the rotated-away inode. Expect a visible seam at the rotation.
+func followFile(ctx context.Context, path string, startAtEnd bool, interval time.Duration, emit func(io.Reader) error) error {
 	var offset int64
 	if startAtEnd {
 		if info, err := os.Stat(path); err == nil {
@@ -200,7 +210,7 @@ func watchPlaintextLog(ctx context.Context, w io.Writer, path string, startAtEnd
 		}
 	}
 
-	ticker := time.NewTicker(250 * time.Millisecond)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	readDelta := func() error {
@@ -226,7 +236,7 @@ func watchPlaintextLog(ctx context.Context, w io.Writer, path string, startAtEnd
 		if _, err := f.Seek(offset, io.SeekStart); err != nil {
 			return err
 		}
-		if _, err := io.Copy(w, f); err != nil {
+		if err := emit(io.LimitReader(f, info.Size()-offset)); err != nil {
 			return err
 		}
 		offset = info.Size()

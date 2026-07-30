@@ -9,18 +9,17 @@ import (
 )
 
 // NewDaemonLogger creates a *slog.Logger that writes human-readable text
-// to the daemon log file at path. The file is opened in append mode and
-// timestamps use the local timezone in RFC3339 format to match the
-// previous operator-facing log format.
+// to the daemon log file at path. Writes go through the shared rotation-aware
+// Writer for that path, so the logger keeps writing to the current file across
+// rotations instead of holding a handle on a renamed inode. Timestamps use the
+// local timezone in RFC3339 format to match the previous operator-facing log
+// format.
 func NewDaemonLogger(path string) (*slog.Logger, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return nil, err
-	}
-	handler := slog.NewTextHandler(f, &slog.HandlerOptions{
+	w := OpenWriter(path)
+	handler := slog.NewTextHandler(w, &slog.HandlerOptions{
 		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
 			if a.Key == slog.TimeKey {
 				a.Value = slog.StringValue(a.Value.Time().In(time.Local).Format(time.RFC3339))
