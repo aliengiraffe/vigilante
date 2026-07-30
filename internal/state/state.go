@@ -13,6 +13,7 @@ import (
 
 	"github.com/nicobistolfi/vigilante/internal/backend"
 	"github.com/nicobistolfi/vigilante/internal/environment"
+	"github.com/nicobistolfi/vigilante/internal/logging"
 	"github.com/nicobistolfi/vigilante/internal/logtime"
 	"github.com/nicobistolfi/vigilante/internal/repo"
 )
@@ -130,6 +131,26 @@ type ServiceConfig struct {
 	SandboxDefaultTTL               string `json:"sandbox_default_ttl,omitempty"`
 	SandboxMemoryLimit              string `json:"sandbox_memory_limit,omitempty"`
 	SandboxCPUs                     string `json:"sandbox_cpus,omitempty"`
+	LogMaxTotalSize                 string `json:"log_max_total_size,omitempty"`
+	LogMaxFileSize                  string `json:"log_max_file_size,omitempty"`
+	LogMaxBackups                   *int   `json:"log_max_backups,omitempty"`
+}
+
+// LogRotationLimits returns the log rotation limits for the logs directory.
+// Unset or malformed values fall back to the built-in defaults — a bad config
+// value must never disable rotation or stop the daemon from logging.
+func (c ServiceConfig) LogRotationLimits() logging.Limits {
+	limits := logging.DefaultLimits()
+	if size, err := logging.ParseSize(c.LogMaxTotalSize); err == nil && size > 0 {
+		limits.MaxTotalSize = size
+	}
+	if size, err := logging.ParseSize(c.LogMaxFileSize); err == nil && size > 0 {
+		limits.MaxFileSize = size
+	}
+	if c.LogMaxBackups != nil && *c.LogMaxBackups >= 0 {
+		limits.MaxBackups = *c.LogMaxBackups
+	}
+	return limits
 }
 
 // IsSandboxEnabled returns whether sandbox mode is enabled.
@@ -161,6 +182,17 @@ const (
 	SessionStatusFailed     SessionStatus = "failed"
 	SessionStatusClosed     SessionStatus = "closed"
 )
+
+// IsActive reports whether a session is still in flight and therefore may still
+// be writing to its session log.
+func (s SessionStatus) IsActive() bool {
+	switch s {
+	case SessionStatusRunning, SessionStatusBlocked, SessionStatusResuming:
+		return true
+	default:
+		return false
+	}
+}
 
 type BlockedReason struct {
 	Kind      string `json:"kind,omitempty"`
@@ -596,32 +628,43 @@ func (s *Store) AppendAccessLogEntry(value environment.AccessLogEntry) {
 	appendJSONLine(s.AccessLogPath(), value)
 }
 
+// appendLogFile writes one rotation-aware log line. The line is written in a
+// single call so a rotation can never split it across two files.
 func appendLogFile(path string, message string) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	_, _ = fmt.Fprintf(f, "[%s] %s\n", logtime.FormatLocal(time.Now()), strings.TrimSpace(message))
+	line := fmt.Sprintf("[%s] %s\n", logtime.FormatLocal(time.Now()), strings.TrimSpace(message))
+	_, _ = logging.Append(path, []byte(line))
 }
 
 func appendJSONLine(path string, value any) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return
-	}
 	data, err := json.Marshal(value)
 	if err != nil {
 		return
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	_, _ = logging.Append(path, append(data, '\n'))
+}
+
+// LiveLogPaths returns the log files a directory sweep must never evict: the
+// current daemon log, the access log, and the session log of every session that
+// is not finished yet.
+func (s *Store) LiveLogPaths() []string {
+	paths := []string{s.DaemonLogPath(), s.AccessLogPath()}
+	sessions, err := s.LoadSessions()
 	if err != nil {
-		return
+		return paths
 	}
-	defer f.Close()
-	_, _ = f.Write(append(data, '\n'))
+	for _, session := range sessions {
+		if !session.Status.IsActive() {
+			continue
+		}
+		paths = append(paths, s.SessionLogPath(session.Repo, session.IssueNumber))
+	}
+	return paths
+}
+
+// SweepLogs brings the logs directory back within the configured total budget.
+// It is best-effort and reports what it reclaimed so callers can log it.
+func (s *Store) SweepLogs(limits logging.Limits) (logging.SweepResult, error) {
+	return logging.Sweep(s.LogsDir(), limits, s.LiveLogPaths())
 }
 
 func (s *Store) TryWithScanLock(fn func() error) (bool, error) {

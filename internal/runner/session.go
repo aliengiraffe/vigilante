@@ -15,6 +15,7 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	forkmode "github.com/nicobistolfi/vigilante/internal/fork"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
+	"github.com/nicobistolfi/vigilante/internal/logging"
 	"github.com/nicobistolfi/vigilante/internal/logtime"
 	"github.com/nicobistolfi/vigilante/internal/provider"
 	"github.com/nicobistolfi/vigilante/internal/sandbox/container"
@@ -613,17 +614,13 @@ func sanitizeDiagnosticText(text string, limit int) string {
 	return text
 }
 
+// appendSessionLog records one lifecycle event in the session log. It goes
+// through the same rotation-aware writer as the streaming writer from
+// openSessionLogWriter, so both agree on which file is current after a rotation,
+// and the whole event is written in one call so a rotation cannot split it.
 func appendSessionLog(path string, event string, session state.Session, details string) {
-	if err := os.MkdirAll(filepathDir(path), 0o755); err != nil {
-		return
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-
-	_, _ = fmt.Fprintf(f, "[%s] %s issue=%d provider=%s branch=%s worktree=%s status=%s\n",
+	var b strings.Builder
+	fmt.Fprintf(&b, "[%s] %s issue=%d provider=%s branch=%s worktree=%s status=%s\n",
 		logtime.FormatLocal(time.Now()),
 		event,
 		session.IssueNumber,
@@ -632,10 +629,12 @@ func appendSessionLog(path string, event string, session state.Session, details 
 		session.WorktreePath,
 		session.Status,
 	)
-	if strings.TrimSpace(details) != "" {
-		_, _ = fmt.Fprintln(f, strings.TrimSpace(details))
+	if trimmed := strings.TrimSpace(details); trimmed != "" {
+		fmt.Fprintln(&b, trimmed)
 	}
-	_, _ = fmt.Fprintln(f)
+	fmt.Fprintln(&b)
+
+	_, _ = logging.Append(path, []byte(b.String()))
 }
 
 func formatInvocationDebug(inv provider.Invocation) string {
@@ -674,13 +673,15 @@ func filepathDir(path string) string {
 	return path[:last]
 }
 
-// openSessionLogWriter opens the session log file for appending and returns it
-// as an io.WriteCloser suitable for streaming provider output.
+// openSessionLogWriter returns the rotation-aware writer for the session log,
+// suitable for streaming provider output. The writer is shared with
+// appendSessionLog and rotates the file once it exceeds the configured size, so
+// a verbose provider run cannot grow the log without bound.
 func openSessionLogWriter(path string) (io.WriteCloser, error) {
 	if err := os.MkdirAll(filepathDir(path), 0o755); err != nil {
 		return nil, err
 	}
-	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	return logging.OpenWriter(path), nil
 }
 
 // writeLifecycleEvent writes a [vigilante HH:MM:SS] prefixed event into the

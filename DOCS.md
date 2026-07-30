@@ -336,10 +336,17 @@ Inspect local log files under `~/.vigilante/logs/`.
 
 Expected behavior:
 
-- `vigilante logs` lists the available daemon, access, and per-issue session logs so an operator can see which local evidence exists before choosing a recovery action
+- `vigilante logs` lists the available daemon, access, and per-issue session logs so an operator can see which local evidence exists before choosing a recovery action, including rotated backups such as `vigilante.log.1`
 - `vigilante logs --access` prints the structured access log at `~/.vigilante/logs/access.jsonl`, where each JSON line records one subprocess execution with timing, execution context, repo or issue metadata when available, sanitized argv, and exit status
 - `vigilante logs --repo <owner/name> --issue <n>` prints the log for one issue session so an operator can inspect the latest local execution details directly
+- all read paths always show the current log file; rotated backups carry a numeric suffix and are listed but not concatenated into the current output
+- both follow modes (`vigilante logs -f` and `vigilante logs --access -w`) reopen the log path on every poll, so following continues across a rotation — expect a visible seam where the current file restarts, not an error
 - logs complement `vigilante list`, `vigilante status`, and GitHub issue comments; they do not replace session state or the remote audit trail
+
+Log files are size-bounded. Every log write path rotates its file once it exceeds
+`log_max_file_size`, and the total size of `~/.vigilante/logs/` is capped at
+`log_max_total_size` (default 500MB). See
+[Log Rotation and Disk Budget](#log-rotation-and-disk-budget).
 
 ### `vigilante service restart`
 
@@ -579,13 +586,16 @@ Initial files:
 - `config.json`: service-level daemon configuration
 - `watchlist.json`: configured repositories being monitored
 - `sessions.json`: active or recent issue execution sessions
-- `logs/`: daemon and run logs
+- `logs/`: daemon and run logs, plus their rotated backups, size-capped at `log_max_total_size` (default 500MB) in total
 
 Suggested `config.json` shape:
 
 ```json
 {
-  "blocked_session_inactivity_timeout": "20m"
+  "blocked_session_inactivity_timeout": "20m",
+  "log_max_total_size": "500MB",
+  "log_max_file_size": "50MB",
+  "log_max_backups": 3
 }
 ```
 
@@ -593,10 +603,53 @@ Notes:
 
 - `blocked_session_inactivity_timeout` is a service-level setting shared across all watched repositories.
 - The default is `20m`.
+- `log_max_total_size`, `log_max_file_size`, and `log_max_backups` bound local log growth; see [Log Rotation and Disk Budget](#log-rotation-and-disk-budget). All three are optional and default to `500MB`, `50MB`, and `3`.
 - A blocked session is eligible for automatic local cleanup only after there have been no qualifying user comments on the issue, no session updates, and no worktree updates for longer than the configured timeout.
 - This inactivity cleanup is conservative: it clears local blocked-session artifacts so the issue can be redispatched later, but it does not delete remote pull requests or remote branches automatically.
 - Stale running implementation sessions use a separate recovery path: after Vigilante first confirms the run is stale, it waits 20 minutes before attempting an automatic fresh restart, persists the restart attempt count in session state, and stops after 3 automatic restarts until a human intervenes.
 - When an issue looks blocked or the daemon appears unhealthy, inspect `vigilante logs` alongside `sessions.json`, `vigilante list`, `vigilante status`, and GitHub issue comments so recovery decisions use both local state and remote context.
+- Local log evidence is size-bounded, so it does not persist indefinitely. When investigating an older failure, collect the relevant logs before continued daemon activity pushes the directory over budget and evicts them.
+
+### Log Rotation and Disk Budget
+
+Vigilante bounds the disk it uses for local logs so a long-running daemon cannot
+fill the operator's disk. Two limits work together:
+
+- **Per-file rotation.** Each log file rotates once a write would push it past
+  `log_max_file_size` (default `50MB`). The current file is renamed to
+  `<name>.1`, existing backups shift up (`<name>.1` becomes `<name>.2`, and so
+  on), and the writer immediately reopens the original path. `log_max_backups`
+  (default `3`) retained backups are kept per file; older generations are
+  deleted. Backups are uncompressed, so they stay readable with ordinary tools.
+- **Directory budget.** The total size of `~/.vigilante/logs/` is capped at
+  `log_max_total_size` (default `500MB`). A sweep runs after every rotation, at
+  daemon start, and on each scan tick. It evicts rotated backups first (oldest
+  generation first), then logs for completed sessions by least recent
+  modification.
+
+The sweep never deletes the current `vigilante.log`, the current `access.jsonl`,
+or the session log of a session that is still running, blocked, or resuming. If
+the live files alone exceed the budget, the sweep stops rather than deleting a
+log an active writer owns.
+
+Rotations and evictions are recorded in the daemon log, including the reclaimed
+bytes, so a missing log can be distinguished from a rotated one.
+
+Notes:
+
+- All three settings live in `~/.vigilante/config.json` and are optional.
+  Existing config files without them keep working and are not rewritten.
+- Sizes accept human-readable values (`"500MB"`, `"1GB"`, `"512KB"`) or a plain
+  byte count. Suffixes are powers of 1024.
+- An unparseable or invalid value falls back to that setting's default rather
+  than disabling rotation — logging never prevents the daemon from starting.
+- Enforcement covers every write path: the daemon log, the access log, and
+  per-issue session logs, including the streaming provider output that dominates
+  log volume.
+- Upgrading with an already-oversized logs directory needs no manual step: the
+  first daemon start sweeps it back within budget and logs the eviction.
+- This is a size-driven policy only. There is no time-based retention, and
+  `vigilante cleanup` semantics are unchanged — it does not delete logs.
 
 ### Operator Log Triage
 

@@ -174,6 +174,7 @@ func (f *stringListFlag) Set(value string) error {
 
 func New() *App {
 	store := state.NewStore()
+	configureLogRotation(store)
 	logger, err := logging.NewDaemonLogger(store.DaemonLogPath())
 	if err != nil {
 		logger = logging.Discard()
@@ -1994,6 +1995,10 @@ func (a *App) DaemonRun(ctx context.Context, interval time.Duration, once bool) 
 		})
 	}()
 
+	// Bring an already-oversized logs directory back within budget before doing
+	// any work, so upgrading operators do not need a manual cleanup step.
+	a.sweepLogsDir()
+
 	// Initialize sandbox manager if sandbox mode is enabled.
 	if err := a.initSandboxIfEnabled(ctx); err != nil {
 		a.logger.Warn("sandbox initialization skipped", "err", err)
@@ -2016,6 +2021,8 @@ func (a *App) DaemonRun(ctx context.Context, interval time.Duration, once bool) 
 			a.logger.Error("scan error", "err", err)
 			fmt.Fprintln(a.stderr, "scan error:", err)
 		}
+
+		a.sweepLogsDir()
 
 		select {
 		case <-ctx.Done():
