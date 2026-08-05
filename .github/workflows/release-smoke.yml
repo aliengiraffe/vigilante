@@ -1,0 +1,114 @@
+name: Release Smoke Test
+
+# Exercises the real macOS signing path on pull requests that touch the release
+# machinery, without any secrets.
+#
+# This is the check whose absence let our sibling `lander` project ship two
+# releases whose binaries could not run at all: nothing in CI ever verified a
+# signature or executed an artifact, so a bad designated requirement reached
+# users twice. `goreleaser check` alone does not build, and the Linux CI job
+# cannot execute a darwin binary.
+#
+# With no Developer ID available the signing script falls back to ad-hoc signing
+# so the execution gate still runs. That is enough to catch a broken hook, a
+# malformed codesign invocation, or a binary that will not start.
+
+on:
+  pull_request:
+    paths:
+      - '.goreleaser.yml'
+      - 'scripts/sign-macos-binary.sh'
+      - 'scripts/import-signing-certificate.sh'
+      - '.github/workflows/release.yml'
+      - '.github/workflows/nightly.yml'
+      - '.github/workflows/release-smoke.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  snapshot:
+    name: Snapshot build with signing gate
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up GoReleaser
+        uses: goreleaser/goreleaser-action@ec59f474b9834571250b370d4735c50f8e2d1e29 # v7
+        with:
+          install-only: true
+
+      - name: Validate GoReleaser config
+        run: goreleaser check
+
+      # The build hook ad-hoc signs each macOS artifact, verifies the signature
+      # and its designated requirement, then runs the binary. A nonzero exit
+      # from any of those fails this job.
+      #
+      # The OTEL_* values are empty on purpose: they only exist because the
+      # ldflags template requires the keys to be present, and a PR has no access
+      # to the real telemetry secrets.
+      - name: Snapshot build (ad-hoc sign + execution gate)
+        env:
+          NIGHTLY_VERSION: 0.0.0-pr.${{ github.event.pull_request.number }}
+          OTEL_ENDPOINT: ''
+          OTEL_TOKEN: ''
+          OTEL_URL_PATH: ''
+          HOMEBREW_GITHUB_API_TOKEN: ''
+        run: goreleaser release --snapshot --clean
+
+      # Guard the wiring itself. Without this, deleting the hook from
+      # .goreleaser.yml would leave the job green while silently disabling
+      # signing for every future release.
+      - name: Confirm the hook signed the macOS artifacts
+        run: |
+          set -euo pipefail
+          gate_status=0
+
+          # Capture command output instead of piping into `grep -q`: under
+          # `pipefail`, grep exiting early on its first match SIGPIPEs the
+          # producer and turns a successful check into a spurious failure.
+          for binary in dist/vigilante_darwin_*/vigilante; do
+            echo "==> $binary"
+            if ! codesign --verify --strict --verbose=2 "$binary"; then
+              echo "::error::$binary failed codesign --verify --strict"
+              gate_status=1
+              continue
+            fi
+            summary="$(codesign -d --verbose=2 "$binary" 2>&1 || true)"
+            case "$summary" in
+              *"Identifier=vigilante"*) ;;
+              *)
+                echo "::error::$binary is not signed with the expected 'vigilante' identifier;" \
+                     "the .goreleaser.yml build hook probably did not run"
+                echo "$summary"
+                gate_status=1
+                ;;
+            esac
+          done
+
+          # The linux artifacts must come through untouched.
+          for binary in dist/vigilante_linux_*/vigilante dist/gh-sandbox_linux_*/gh-sandbox; do
+            case "$(file "$binary")" in
+              *Mach-O*)
+                echo "::error::$binary is a Mach-O binary; the build matrix is wrong"
+                gate_status=1
+                ;;
+            esac
+          done
+
+          exit "$gate_status"

@@ -27,6 +27,21 @@ builds:
     ignore:
       - goos: linux
         goarch: arm64
+    hooks:
+      # Sign -> verify -> EXECUTE -> notarize each macOS artifact. This is a
+      # build post hook, so it runs after the binary is linked but BEFORE the
+      # archive is built and before anything is published: a nonzero exit aborts
+      # the release instead of shipping a binary the kernel would refuse.
+      #
+      # The hook fires for every target in the matrix. The script skips itself
+      # for non-darwin targets, on non-macOS runners, and for non-Mach-O inputs,
+      # and degrades to ad-hoc signing when no Developer ID is available (fork
+      # PRs, local snapshots) so the execution gate can still run.
+      #
+      # We deliberately do not use GoReleaser's OSS `notarize.macos` pipe
+      # (anchore/quill) — see docs/releasing.md for why.
+      post:
+        - bash scripts/sign-macos-binary.sh "{{ .Path }}" "{{ .Os }}"
 
   - id: gh-sandbox
     main: ./cmd/gh-sandbox

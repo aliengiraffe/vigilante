@@ -1,5 +1,10 @@
 name: Nightly Release
 
+# Rolling prerelease from `main`, published as the `vigilante-nightly` Homebrew
+# cask. Like the tagged release, it runs on macOS so the macOS binaries can be
+# signed and notarized — the nightly cask is a real user install path, and an
+# unsigned artifact there means Gatekeeper blocks it. See docs/releasing.md.
+
 on:
   push:
     branches:
@@ -10,7 +15,7 @@ permissions:
 
 jobs:
   prerelease:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     # Only gate production secrets behind the protected `main` environment on main pushes;
     # verification runs on other branches build without access to publish credentials.
     environment: ${{ github.ref == 'refs/heads/main' && 'main' || '' }}
@@ -59,13 +64,39 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: homebrew-spaceship
 
+      # Only main pushes have access to the signing certificate. Other refs fall
+      # through to ad-hoc signing, which still exercises the execution gate.
+      - name: Import Apple Developer ID certificate
+        if: github.ref == 'refs/heads/main'
+        env:
+          APPLE_DEVELOPER_ID_CERT_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12_BASE64 }}
+          APPLE_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
+        run: bash ./scripts/import-signing-certificate.sh
+
       - name: Build nightly snapshot artifacts
         env:
           NIGHTLY_VERSION: ${{ env.NIGHTLY_VERSION }}
           OTEL_ENDPOINT: ${{ secrets.OTEL_ENDPOINT }}
           OTEL_TOKEN: ${{ secrets.OTEL_TOKEN }}
           OTEL_URL_PATH: ${{ secrets.OTEL_URL_PATH }}
-        run: goreleaser release --snapshot --clean
+          APPLE_DEVELOPER_ID_IDENTITY: ${{ vars.APPLE_DEVELOPER_ID_IDENTITY }}
+          APPLE_NOTARY_API_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_API_KEY_P8_BASE64 }}
+          APPLE_NOTARY_API_KEY_ID: ${{ secrets.APPLE_NOTARY_API_KEY_ID }}
+          APPLE_NOTARY_API_ISSUER_ID: ${{ secrets.APPLE_NOTARY_API_ISSUER_ID }}
+          # Escape hatch: set this repository variable to 1 to keep nightlies
+          # flowing when Apple's notary service is degraded. Signing and the
+          # execution gate still run; only the notary submission is skipped.
+          VIGILANTE_SKIP_NOTARIZE: ${{ vars.VIGILANTE_SKIP_NOTARIZE }}
+        run: |
+          set -euo pipefail
+          if [ -n "${APPLE_NOTARY_API_KEY_P8_BASE64:-}" ]; then
+            printf '%s' "$APPLE_NOTARY_API_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+            trap 'rm -f "$RUNNER_TEMP/notary.p8"' EXIT
+            export APPLE_NOTARY_KEY_P8="$RUNNER_TEMP/notary.p8"
+            export APPLE_NOTARY_KEY_ID="$APPLE_NOTARY_API_KEY_ID"
+            export APPLE_NOTARY_ISSUER_ID="$APPLE_NOTARY_API_ISSUER_ID"
+          fi
+          goreleaser release --snapshot --clean
 
       - name: Publish rolling prerelease
         if: github.ref == 'refs/heads/main'

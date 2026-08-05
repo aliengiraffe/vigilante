@@ -1,5 +1,16 @@
 name: Release
 
+# Builds, signs, and notarizes the macOS binaries with GoReleaser, then publishes
+# the GitHub release and the Homebrew cask.
+#
+# Runs on macOS because signing needs Apple's native codesign/notarytool. The
+# Linux artifacts cross-compile from the same runner (everything is
+# CGO_ENABLED=0); GoReleaser OSS cannot split a release across runners.
+#
+# Signing happens in a `builds` post hook (scripts/sign-macos-binary.sh), which
+# signs, verifies, EXECUTES, and notarizes each macOS artifact before the archive
+# is built and before anything is published. See docs/releasing.md.
+
 on:
   push:
     tags:
@@ -10,7 +21,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     environment: main
     steps:
       - name: Check out repository
@@ -57,6 +68,17 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: homebrew-spaceship
 
+      # Import the Developer ID Application certificate into a throwaway keychain
+      # before GoReleaser runs. `codesign` needs a real keychain identity; the
+      # keychain is scoped to this runner and discarded with it.
+      - name: Import Apple Developer ID certificate
+        env:
+          APPLE_DEVELOPER_ID_CERT_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12_BASE64 }}
+          APPLE_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
+        run: bash ./scripts/import-signing-certificate.sh
+
+      # The build post hook signs, verifies, executes, and notarizes each macOS
+      # artifact. A binary that cannot run aborts the release before publish.
       - name: Build and publish GitHub release
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -64,4 +86,19 @@ jobs:
           OTEL_ENDPOINT: ${{ secrets.OTEL_ENDPOINT }}
           OTEL_TOKEN: ${{ secrets.OTEL_TOKEN }}
           OTEL_URL_PATH: ${{ secrets.OTEL_URL_PATH }}
-        run: goreleaser release --clean
+          APPLE_DEVELOPER_ID_IDENTITY: ${{ vars.APPLE_DEVELOPER_ID_IDENTITY }}
+          APPLE_NOTARY_API_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_API_KEY_P8_BASE64 }}
+          APPLE_NOTARY_API_KEY_ID: ${{ secrets.APPLE_NOTARY_API_KEY_ID }}
+          APPLE_NOTARY_API_ISSUER_ID: ${{ secrets.APPLE_NOTARY_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          if [ -n "${APPLE_NOTARY_API_KEY_P8_BASE64:-}" ]; then
+            printf '%s' "$APPLE_NOTARY_API_KEY_P8_BASE64" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+            trap 'rm -f "$RUNNER_TEMP/notary.p8"' EXIT
+            export APPLE_NOTARY_KEY_P8="$RUNNER_TEMP/notary.p8"
+            export APPLE_NOTARY_KEY_ID="$APPLE_NOTARY_API_KEY_ID"
+            export APPLE_NOTARY_ISSUER_ID="$APPLE_NOTARY_API_ISSUER_ID"
+          else
+            echo "::warning::Apple notary credentials are not configured; the release will be signed but NOT notarized."
+          fi
+          goreleaser release --clean
