@@ -18,9 +18,11 @@ tasks:
   install:
     desc: Install the built binary into ~/.local/bin
     deps: [build]
+    # Atomic write-and-rename, not `cp`. Overwriting the destination in place
+    # corrupts the binary for every later exec when a daemon is running from it.
+    # See scripts/install-binary.sh.
     cmds:
-      - mkdir -p "{{.LOCAL_BIN_DIR}}"
-      - cp ./vigilante "{{.INSTALL_PATH}}"
+      - ./scripts/install-binary.sh ./vigilante "{{.INSTALL_PATH}}"
 
   setup:
     desc: Run setup with the repo-local binary
