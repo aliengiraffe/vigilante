@@ -1,3 +1,6 @@
 /vigilante
 .claude/
 .worktrees/
+# GoReleaser build output. docs/releasing.md documents running local snapshot
+# builds, which produce signed binaries and archives here.
+/dist/

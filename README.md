@@ -149,3 +149,7 @@ The full reference lives in [DOCS.md](DOCS.md), including:
 - package hardening behavior and config
 - GitHub integration, worktree strategy, and service behavior
 - CI, releases, and implementation notes
+
+Maintainers cutting a release should start with
+[docs/releasing.md](docs/releasing.md), which covers macOS code signing and
+notarization, the required secrets, and how to verify a published binary.
