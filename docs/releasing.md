@@ -153,34 +153,55 @@ these are the same items `lander` uses. They live in the **`Engineering`** vault
 > `env-manager/lander/docs/releasing.md` together.
 
 Run signed in to the `aliengiraffe` 1Password account with `gh` authenticated
-against this repository. `base64 | tr -d '\n'` produces the single-line encoding
-the workflows decode, and nothing touches disk:
+against this repository.
+
+Two `op` quirks make the obvious one-liners fail, so the script below works around
+both:
+
+- **`op://` secret references cannot contain an em dash**, and every item title
+  here has one. Address the Secure Note by its **item UUID** instead of its title
+  (`op item list --vault Engineering` prints the IDs).
+- **`op document get` refuses to write a binary document to a pipe** — it errors
+  with *"the queried document contains unprintable characters"*. The `.p12` is
+  binary, so it needs `--out-file`. (The `.p8` is PEM text and would pipe fine;
+  it uses a file here for symmetry.)
 
 ```bash
+set -euo pipefail
 REPO=aliengiraffe/vigilante
 VAULT=Engineering
-NOTE="op://$VAULT/Apple Developer ID — Lander Code Signing"
+# UUID of "Apple Developer ID — Lander Code Signing"; confirm with `op item list`.
+NOTE_ID=stfwdaukd5mtodowuejck2obsu
+
+WORK="$(mktemp -d)"
+trap 'rm -rf "$WORK"' EXIT
+umask 077
+
+op document get "Apple Developer ID — Lander (.p12)" --vault "$VAULT" --out-file "$WORK/cert.p12"
+op document get "Apple Notary API Key — Lander (.p8)" --vault "$VAULT" --out-file "$WORK/notary.p8"
 
 # --- secrets ---
-op document get "Apple Developer ID — Lander (.p12)" --vault "$VAULT" \
-  | base64 | tr -d '\n' \
+# `tr -d '\n'` gives the single-line encoding the workflows decode.
+base64 < "$WORK/cert.p12" | tr -d '\n' \
   | gh secret set APPLE_DEVELOPER_ID_CERT_P12_BASE64 --env main --repo "$REPO"
 
-op read "$NOTE/p12 password" \
-  | gh secret set APPLE_DEVELOPER_ID_CERT_PASSWORD --env main --repo "$REPO"
-
-op document get "Apple Notary API Key — Lander (.p8)" --vault "$VAULT" \
-  | base64 | tr -d '\n' \
+base64 < "$WORK/notary.p8" | tr -d '\n' \
   | gh secret set APPLE_NOTARY_API_KEY_P8_BASE64 --env main --repo "$REPO"
 
-op read "$NOTE/notary key id" \
+# `printf '%s' "$(...)"` guarantees no trailing newline reaches the secret value,
+# independently of how gh handles stdin. A stray newline in the .p12 password
+# fails the keychain import in CI with a misleading error.
+printf '%s' "$(op read "op://$VAULT/$NOTE_ID/p12 password")" \
+  | gh secret set APPLE_DEVELOPER_ID_CERT_PASSWORD --env main --repo "$REPO"
+
+printf '%s' "$(op read "op://$VAULT/$NOTE_ID/notary key id")" \
   | gh secret set APPLE_NOTARY_API_KEY_ID --env main --repo "$REPO"
 
-op read "$NOTE/notary issuer id" \
+printf '%s' "$(op read "op://$VAULT/$NOTE_ID/notary issuer id")" \
   | gh secret set APPLE_NOTARY_API_ISSUER_ID --env main --repo "$REPO"
 
 # --- non-secret variable ---
-op read "$NOTE/identity" \
+printf '%s' "$(op read "op://$VAULT/$NOTE_ID/identity")" \
   | gh variable set APPLE_DEVELOPER_ID_IDENTITY --env main --repo "$REPO"
 ```
 
@@ -190,6 +211,40 @@ Verify:
 gh secret   list --env main --repo aliengiraffe/vigilante
 gh variable list --env main --repo aliengiraffe/vigilante
 ```
+
+### Checking the certificate before you push it
+
+Worth doing after a rotation — a bad `.p12`/password pair fails in CI with an
+unhelpful error. Note that macOS ships **LibreSSL**, whose `openssl pkcs12` has no
+`-legacy` flag and whose `openssl x509` cannot read the `Bag Attributes` preamble
+directly, hence the `sed`:
+
+```bash
+op document get "Apple Developer ID — Lander (.p12)" --vault Engineering --out-file /tmp/c.p12
+export P12PW="$(op read "op://Engineering/$NOTE_ID/p12 password")"
+
+openssl pkcs12 -in /tmp/c.p12 -passin env:P12PW -nokeys -clcerts 2>/dev/null \
+  | sed -n '/BEGIN CERTIFICATE/,/END CERTIFICATE/p' > /tmp/c.crt
+
+openssl x509 -in /tmp/c.crt -noout -subject -enddate -issuer
+openssl x509 -in /tmp/c.crt -noout -checkend 7776000   # nonzero => expires within 90 days
+
+# Must report at least one private key; codesign cannot sign without it.
+openssl pkcs12 -in /tmp/c.p12 -passin env:P12PW -nocerts -nodes 2>/dev/null | grep -c "PRIVATE KEY"
+
+unset P12PW; rm -f /tmp/c.p12 /tmp/c.crt
+```
+
+Expect the issuer to be **`Developer ID Certification Authority`** — that
+intermediate is what carries the `1.2.840.113635.100.6.2.6` marker the designated
+requirement checks for.
+
+> **Do not validate by importing into your login keychain.** If you want to
+> rehearse the CI path locally, import into a throwaway keychain and remember that
+> `security list-keychains -d user -s <kc>` **replaces** your search list. Save it
+> first (`security list-keychains -d user`) and restore it afterwards — calling
+> `-s` with no arguments empties the list and breaks login-keychain lookups until
+> it is put back.
 
 ### Creating the Apple assets from scratch
 
