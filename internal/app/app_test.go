@@ -37,9 +37,32 @@ type capturedAnalyticsEvent struct {
 }
 
 type countingRunner struct {
-	base   testutil.FakeRunner
-	mu     sync.Mutex
-	counts map[string]int
+	base              testutil.FakeRunner
+	mu                sync.Mutex
+	counts            map[string]int
+	allowUnexpectedGH bool
+}
+
+type cleanupSequenceRunner struct {
+	base              testutil.FakeRunner
+	removeCommand     string
+	remainingFailures int
+	removeAttempts    int
+}
+
+func (r *cleanupSequenceRunner) Run(ctx context.Context, dir string, name string, args ...string) (string, error) {
+	if key := testutil.Key(name, args...); key == r.removeCommand {
+		r.removeAttempts++
+		if r.remainingFailures > 0 {
+			r.remainingFailures--
+			return "", errors.New("corrupt worktree gitdir")
+		}
+	}
+	return r.base.Run(ctx, dir, name, args...)
+}
+
+func (r *cleanupSequenceRunner) LookPath(file string) (string, error) {
+	return r.base.LookPath(file)
 }
 
 type blockingMaintenanceRunner struct {
@@ -57,7 +80,11 @@ func (r *countingRunner) Run(ctx context.Context, dir string, name string, args 
 	}
 	r.counts[testutil.Key(name, args...)]++
 	r.mu.Unlock()
-	return r.base.Run(ctx, dir, name, args...)
+	output, err := r.base.Run(ctx, dir, name, args...)
+	if err != nil && r.allowUnexpectedGH && name == "gh" {
+		return "ok", nil
+	}
+	return output, err
 }
 
 func (r *countingRunner) LookPath(file string) (string, error) {
@@ -7301,6 +7328,144 @@ func TestScanOnceCleansUpClosedIssueSession(t *testing.T) {
 	}
 	if sessions[0].Status != state.SessionStatusClosed {
 		t.Fatalf("expected session status to transition to closed after issue closure cleanup, got %q", sessions[0].Status)
+	}
+}
+
+func TestCleanupClosedIssueSessionsStopsAfterAutomaticCleanupLimit(t *testing.T) {
+	repoPath := t.TempDir()
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	runner := &countingRunner{allowUnexpectedGH: true, base: testutil.FakeRunner{
+		Outputs: map[string]string{
+			"git worktree prune":                          "ok",
+			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/issues/1":            `{"labels":[]}`,
+		},
+		Errors: map[string]error{
+			"git worktree remove --force " + worktreePath: errors.New("corrupt worktree gitdir"),
+		},
+	}}
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = runner
+	sessions := []state.Session{{
+		RepoPath: repoPath, Repo: "owner/repo", IssueNumber: 1, Branch: "vigilante/issue-1",
+		WorktreePath: worktreePath, Status: state.SessionStatusSuccess,
+	}}
+	issue := &ghcli.IssueDetails{State: "closed"}
+	cache := scanIssueDetailsCache{sessionKey("owner/repo", 1): {details: issue}}
+
+	for range maxAutomaticCleanupAttempts + 1 {
+		var err error
+		sessions, err = app.cleanupClosedIssueSessions(context.Background(), sessions, cache)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	session := sessions[0]
+	if got := runner.counts["git worktree remove --force "+worktreePath]; got != maxAutomaticCleanupAttempts {
+		t.Fatalf("cleanup attempts = %d, want %d", got, maxAutomaticCleanupAttempts)
+	}
+	if session.CleanupAttempts != maxAutomaticCleanupAttempts || session.Status != state.SessionStatusClosed || session.MonitoringStoppedAt == "" {
+		t.Fatalf("expected terminal capped session, got %#v", session)
+	}
+	if session.CleanupError != "corrupt worktree gitdir" {
+		t.Fatalf("CleanupError = %q, want verbatim git error", session.CleanupError)
+	}
+	commentCount := 0
+	gitFixLabelCount := 0
+	for command, count := range runner.counts {
+		if strings.HasPrefix(command, "gh issue comment --repo owner/repo 1 --body ") {
+			commentCount += count
+			if !strings.Contains(command, worktreePath) || !strings.Contains(command, "corrupt worktree gitdir") || !strings.Contains(command, "git worktree prune") {
+				t.Fatalf("cleanup comment is missing actionable details: %s", command)
+			}
+		}
+		if strings.Contains(command, "gh issue edit --repo owner/repo 1") && strings.Contains(command, "--add-label vigilante:needs-git-fix") {
+			gitFixLabelCount += count
+		}
+	}
+	if commentCount != 1 {
+		t.Fatalf("cleanup comments = %d, want 1", commentCount)
+	}
+	if gitFixLabelCount != 1 {
+		t.Fatalf("needs-git-fix applications = %d, want 1; commands=%#v", gitFixLabelCount, runner.counts)
+	}
+}
+
+func TestCleanupClosedIssueSessionsResetsAttemptsAfterTransientFailure(t *testing.T) {
+	repoPath := t.TempDir()
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runner := &cleanupSequenceRunner{
+		base: testutil.FakeRunner{Outputs: map[string]string{
+			"git worktree prune":                                         "ok",
+			"git worktree remove --force " + worktreePath:                "ok",
+			"git worktree list --porcelain":                              "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/main\n",
+			"git show-ref --verify --quiet refs/heads/vigilante/issue-1": "ok",
+			"git branch -D vigilante/issue-1":                            "ok",
+		}},
+		removeCommand:     "git worktree remove --force " + worktreePath,
+		remainingFailures: 2,
+	}
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = runner
+	sessions := []state.Session{{RepoPath: repoPath, Repo: "owner/repo", IssueNumber: 1, Branch: "vigilante/issue-1", WorktreePath: worktreePath, Status: state.SessionStatusSuccess}}
+	cache := scanIssueDetailsCache{sessionKey("owner/repo", 1): {details: &ghcli.IssueDetails{State: "closed"}}}
+
+	for range 3 {
+		var err error
+		sessions, err = app.cleanupClosedIssueSessions(context.Background(), sessions, cache)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if runner.removeAttempts != 3 || sessions[0].CleanupAttempts != 0 || sessions[0].CleanupError != "" || sessions[0].Status != state.SessionStatusClosed {
+		t.Fatalf("expected transient cleanup recovery, attempts=%d session=%#v", runner.removeAttempts, sessions[0])
+	}
+}
+
+func TestCleanupSessionRetriesCappedAutomaticCleanup(t *testing.T) {
+	repoPath := t.TempDir()
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-44")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VIGILANTE_HOME", filepath.Join(t.TempDir(), ".vigilante"))
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{Outputs: map[string]string{
+		"git worktree prune":                                          "ok",
+		"git worktree remove --force " + worktreePath:                 "ok",
+		"git worktree list --porcelain":                               "worktree " + repoPath + "\nHEAD abcdef\nbranch refs/heads/main\n",
+		"git show-ref --verify --quiet refs/heads/vigilante/issue-44": "ok",
+		"git branch -D vigilante/issue-44":                            "ok",
+	}}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{RepoPath: repoPath, Repo: "owner/repo", IssueNumber: 44, Branch: "vigilante/issue-44", WorktreePath: worktreePath, Status: state.SessionStatusClosed, BlockedStage: "automatic_worktree_cleanup", BlockedReason: state.BlockedReason{Kind: "dirty_worktree"}, CleanupAttempts: maxAutomaticCleanupAttempts, CleanupError: "corrupt worktree gitdir"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.CleanupSession(context.Background(), "owner/repo", 44, "cli"); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].CleanupAttempts != 0 || sessions[0].CleanupError != "" || sessions[0].CleanupCompletedAt == "" || sessions[0].BlockedStage != "" || sessions[0].BlockedReason != (state.BlockedReason{}) {
+		t.Fatalf("expected manual cleanup to clear capped failure, got %#v", sessions[0])
 	}
 }
 

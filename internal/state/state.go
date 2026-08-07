@@ -288,6 +288,7 @@ type Session struct {
 	RecoveredAt                    string              `json:"recovered_at,omitempty"`
 	MonitoringStoppedAt            string              `json:"monitoring_stopped_at,omitempty"`
 	CleanupCompletedAt             string              `json:"cleanup_completed_at,omitempty"`
+	CleanupAttempts                int                 `json:"cleanup_attempts,omitempty"`
 	CleanupError                   string              `json:"cleanup_error,omitempty"`
 	ProcessID                      int                 `json:"process_id,omitempty"`
 	StartedAt                      string              `json:"started_at,omitempty"`

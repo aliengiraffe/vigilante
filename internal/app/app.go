@@ -53,6 +53,7 @@ const defaultMaintenanceAutoRecoveryTimeout = 10 * time.Minute
 const defaultSuccessfulSessionPollInterval = 5 * time.Minute
 const issueDetailsCacheTTL = 3 * time.Minute
 const staleAutoRestartAttemptLimit = 3
+const maxAutomaticCleanupAttempts = 3
 const githubCoreLowQuotaThreshold = 5
 const unsetMaxParallel = -2147483648
 const autoRecoverySource = "auto_recovery"
@@ -2263,7 +2264,9 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				if strings.TrimSpace(wt.ReusedRemoteBranch) != "" {
 					diffSummary, err = summarizeIssueBranchDiff(issueCtx, a.env.Runner, target.Path, target.Branch, wt.Branch)
 					if err != nil {
-						_ = worktree.CleanupIssueArtifacts(issueCtx, a.env.Runner, target.Path, wt.Path, wt.Branch)
+						if cleanupErr := worktree.CleanupIssueArtifacts(issueCtx, a.env.Runner, target.Path, wt.Path, wt.Branch); cleanupErr != nil {
+							a.logger.Error("reused remote issue branch cleanup failed", "repo", target.Repo, "issue", next.Number, "branch", wt.Branch, "worktree", wt.Path, "err", cleanupErr)
+						}
 						session := blockedIssueSessionForDispatchFailure(*target, next, selectedProvider, fmt.Errorf("analyze reused remote issue branch %q against %q: %w", wt.Branch, target.Branch, err), a.clock())
 						session.Branch = wt.Branch
 						session.BaseBranch = target.Branch
@@ -2700,9 +2703,21 @@ func (a *App) cleanupClosedIssueSessions(ctx context.Context, sessions []state.S
 		if !strings.EqualFold(strings.TrimSpace(issue.State), "closed") {
 			continue
 		}
+		if session.CleanupAttempts >= maxAutomaticCleanupAttempts {
+			if err := a.stopAutomaticCleanupAfterLimit(sessionCtx, session); err != nil {
+				a.logger.Error("cleanup retry limit notification failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "worktree", session.WorktreePath, "err", err)
+			}
+			continue
+		}
 
 		if err := a.cleanupSessionArtifacts(sessionCtx, session, "issue_closed"); err != nil {
+			session.CleanupAttempts++
 			a.logger.Error("cleanup failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "worktree", session.WorktreePath, "err", err)
+			if session.CleanupAttempts >= maxAutomaticCleanupAttempts {
+				if notifyErr := a.stopAutomaticCleanupAfterLimit(sessionCtx, session); notifyErr != nil {
+					a.logger.Error("cleanup retry limit notification failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "worktree", session.WorktreePath, "err", notifyErr)
+				}
+			}
 			continue
 		}
 
@@ -2726,9 +2741,55 @@ func (a *App) cleanupSessionArtifacts(ctx context.Context, session *state.Sessio
 	}
 
 	session.CleanupCompletedAt = now
+	session.CleanupAttempts = 0
 	session.CleanupError = ""
+	if session.BlockedStage == "automatic_worktree_cleanup" {
+		session.BlockedStage = ""
+		session.BlockedReason = state.BlockedReason{}
+	}
 	session.LastMaintenanceError = ""
 	session.UpdatedAt = now
+	return nil
+}
+
+func (a *App) stopAutomaticCleanupAfterLimit(ctx context.Context, session *state.Session) error {
+	cleanupErr := session.CleanupError
+	session.BlockedStage = "automatic_worktree_cleanup"
+	session.BlockedReason = state.BlockedReason{
+		Kind:      "dirty_worktree",
+		Operation: "git worktree remove",
+		Summary:   fmt.Sprintf("automatic worktree cleanup failed after %d attempts", session.CleanupAttempts),
+		Detail:    cleanupErr,
+	}
+	body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Manual Git Repair Required",
+		Emoji:      "🛠️",
+		Percent:    100,
+		ETAMinutes: 5,
+		Items: []string{
+			fmt.Sprintf("Automatic cleanup for issue #%d on branch `%s` failed after %d attempts. Worktree: `%s`.", session.IssueNumber, session.Branch, session.CleanupAttempts, session.WorktreePath),
+			fmt.Sprintf("Git error:\n```text\n%s\n```", cleanupErr),
+			fmt.Sprintf("Repair the repository manually, then retry with `vigilante cleanup --repo %s --issue %d`:\n```bash\ncd %q\ngit worktree remove --force %q # or: rm -rf %q\ngit worktree prune\ngit branch -D %q\n```", session.Repo, session.IssueNumber, session.RepoPath, session.WorktreePath, session.WorktreePath, session.Branch),
+		},
+		Tagline: "Automatic retries stopped; the evidence remains.",
+	})
+	if err := a.commentBlockedIssue(ctx, session, body, "automatic_cleanup_limit"); err != nil {
+		return err
+	}
+
+	now := a.clock().Format(time.RFC3339)
+	previousStatus := session.Status
+	session.Status = state.SessionStatusClosed
+	session.MonitoringStoppedAt = now
+	session.ProcessID = 0
+	session.LastHeartbeatAt = ""
+	session.EndedAt = now
+	session.UpdatedAt = now
+	session.LastMaintenanceError = ""
+	session.LastError = session.BlockedReason.Summary
+	a.emitSessionTransition(previousStatus, *session, "automatic_cleanup_limit")
+	a.logger.Error("automatic cleanup retry limit reached", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "worktree", session.WorktreePath, "attempts", session.CleanupAttempts, "err", cleanupErr)
+	a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil, nil)
 	return nil
 }
 
@@ -3806,11 +3867,19 @@ func (a *App) CleanupSession(ctx context.Context, repo string, issue int, source
 	found := false
 	var cleanedSession *state.Session
 	for i := range sessions {
-		if sessions[i].Status != state.SessionStatusRunning || sessions[i].Repo != repo || sessions[i].IssueNumber != issue {
+		if sessions[i].Repo != repo || sessions[i].IssueNumber != issue {
 			continue
 		}
-		if err := a.cleanupRunningSession(ctx, &sessions[i], source); err != nil {
-			return err
+		if sessions[i].Status == state.SessionStatusRunning {
+			if err := a.cleanupRunningSession(ctx, &sessions[i], source); err != nil {
+				return err
+			}
+		} else if sessions[i].CleanupAttempts >= maxAutomaticCleanupAttempts {
+			if err := a.cleanupSessionArtifacts(ctx, &sessions[i], source); err != nil {
+				a.logger.Error("manual cleanup retry failed", "repo", sessions[i].Repo, "issue", sessions[i].IssueNumber, "source", source, "branch", sessions[i].Branch, "worktree", sessions[i].WorktreePath, "err", err)
+			}
+		} else {
+			continue
 		}
 		found = true
 		cleanedSession = &sessions[i]
@@ -5842,7 +5911,7 @@ func desiredSessionLabels(session state.Session, pr *ghcli.PullRequest) (string,
 	case state.SessionStatusBlocked:
 		return labelBlocked, blockedInterventionLabel(session.BlockedReason)
 	case state.SessionStatusClosed:
-		return labelDone, ""
+		return labelDone, blockedInterventionLabel(session.BlockedReason)
 	case state.SessionStatusSuccess:
 		if pr != nil && pr.MergedAt != nil {
 			return labelDone, ""
