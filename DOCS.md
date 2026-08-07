@@ -52,7 +52,7 @@ Watch targets carry explicit backend identity fields (`issue_backend`, `git_back
 Install with Homebrew:
 
 ```sh
-brew install vigilante
+brew install --cask aliengiraffe/spaceship/vigilante
 ```
 
 Prepare the local machine. `--provider` defaults to `claude`, so pass the flag only when you want a different coding agent:
@@ -231,13 +231,13 @@ vigilante clone --depth 1 https://github.com/owner/hello-world-app.git ~/src/hel
 Install `vigilante` with Homebrew:
 
 ```sh
-brew install vigilante
+brew install --cask aliengiraffe/spaceship/vigilante
 ```
 
 Upgrade later with:
 
 ```sh
-brew upgrade vigilante
+brew upgrade --cask vigilante
 ```
 
 ### `vigilante watch [--assignee <value>] [--max-parallel <value>] [--provider <codex|claude|gemini|opencode>] [--issue-tracker <github|linear>] [--issue-tracker-stage <value>] [--branch <name> | --track-default-branch] <path>`
@@ -546,7 +546,7 @@ Tagged releases are built and published with GoReleaser. Pushing a version tag t
 - `darwin/arm64`
 - `linux/amd64`
 - a `checksums.txt` file for the published archives
-- an updated Homebrew formula in `homebrew/core` so `brew install vigilante` installs the tagged release
+- an updated Homebrew cask in the `aliengiraffe/homebrew-spaceship` tap so `brew install --cask aliengiraffe/spaceship/vigilante` installs the tagged release
 
 The release workflow requires a GitHub App that can write to the tap repository:
 
@@ -561,13 +561,13 @@ Nightly install path:
 
 ```sh
 brew tap aliengiraffe/spaceship
-brew install vigilante-nightly
+brew install --cask vigilante-nightly
 ```
 
 Stable installs remain on the tagged release path:
 
 ```sh
-brew install vigilante
+brew install --cask aliengiraffe/spaceship/vigilante
 ```
 
 Recommended release flow:

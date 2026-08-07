@@ -67,7 +67,7 @@ See [SANDBOX.md](SANDBOX.md) for the design and current status.
 Install with Homebrew:
 
 ```sh
-brew install vigilante
+brew install --cask aliengiraffe/spaceship/vigilante
 ```
 
 Requirements:
@@ -93,7 +93,7 @@ vigilante watch ~/path/to/repo
 Typical first-run flow:
 
 ```sh
-brew install vigilante
+brew install --cask aliengiraffe/spaceship/vigilante
 vigilante setup -d
 vigilante watch ~/hello-world-app
 vigilante daemon run --once
