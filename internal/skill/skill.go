@@ -187,14 +187,6 @@ func BuildIssueCreatePrompt(runtime string, target state.WatchTarget, prompt str
 	return strings.Join(lines, "\n")
 }
 
-func BuildIssueCreatePromptDefault(target state.WatchTarget, prompt string) string {
-	return BuildIssueCreatePrompt(RuntimeCodex, target, prompt)
-}
-
-func BuildIssuePrompt(target state.WatchTarget, issue ghcli.Issue, session state.Session) string {
-	return BuildIssuePromptForRuntime(RuntimeCodex, target, issue, session)
-}
-
 func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue ghcli.Issue, session state.Session) string {
 	selectedSkill := IssueImplementationSkill(target)
 	lines := []string{}
@@ -629,10 +621,6 @@ func displayProviderName(name string) string {
 	return strings.Join(parts, " ")
 }
 
-func BuildConflictResolutionPrompt(target state.WatchTarget, session state.Session, pr ghcli.PullRequest) string {
-	return BuildConflictResolutionPromptForRuntime(RuntimeCodex, target, session, pr)
-}
-
 func BuildConflictResolutionPromptForRuntime(runtime string, target state.WatchTarget, session state.Session, pr ghcli.PullRequest) string {
 	lines := []string{}
 	if runtimeUsesInlineSkillHeader(runtime) {
@@ -686,10 +674,6 @@ func promptBaseBranch(target state.WatchTarget, session state.Session) string {
 		return baseBranch
 	}
 	return "main"
-}
-
-func BuildCIRemediationPrompt(target state.WatchTarget, session state.Session, pr ghcli.PullRequest, checks []ghcli.StatusCheckRoll) string {
-	return BuildCIRemediationPromptForRuntime(RuntimeCodex, target, session, pr, checks)
 }
 
 func BuildCIRemediationPromptForRuntime(runtime string, target state.WatchTarget, session state.Session, pr ghcli.PullRequest, checks []ghcli.StatusCheckRoll) string {

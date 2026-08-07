@@ -19,6 +19,7 @@ import (
 	githubbackend "github.com/nicobistolfi/vigilante/internal/backend/github"
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
+	"github.com/nicobistolfi/vigilante/internal/provider"
 	"github.com/nicobistolfi/vigilante/internal/repo"
 	"github.com/nicobistolfi/vigilante/internal/skill"
 	"github.com/nicobistolfi/vigilante/internal/state"
@@ -2282,26 +2283,21 @@ func TestSetupCreatesStateLayoutAndInstallsBundledSkillsForAllProviders(t *testi
 	app := New()
 	app.stdout = testutil.IODiscard{}
 	app.stderr = testutil.IODiscard{}
-	app.env.Runner = testutil.FakeRunner{
-		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
-		Outputs: map[string]string{
-			"codex --version": "codex 0.114.0",
-			"gh auth status":  "ok",
-		},
-	}
 
+	// Setup with no --provider must provision the default provider, Claude
+	// Code, so only the claude CLI is stubbed here.
 	app.env.OS = "linux"
 	app.env.Runner = testutil.FakeRunner{
-		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "claude": "/usr/bin/claude"},
 		Outputs: map[string]string{
-			"codex --version":                                                 "codex 0.114.0",
-			"gh auth status":                                                  "ok",
-			"systemctl --user daemon-reload":                                  "",
-			"systemctl --user enable --now vigilante.service":                 "",
-			`/bin/sh -lc PATH="` + os.Getenv("PATH") + `" command -v 'git'`:   "/usr/bin/git\n",
-			`/bin/sh -lc PATH="` + os.Getenv("PATH") + `" command -v 'gh'`:    "/usr/bin/gh\n",
-			`/bin/sh -lc PATH="` + os.Getenv("PATH") + `" command -v 'codex'`: "/usr/bin/codex\n",
-			`/bin/sh -lc PATH="` + os.Getenv("PATH") + `" 'codex' --version`:  "codex 0.114.0\n",
+			"claude --version":                                                 "claude 2.0.0",
+			"gh auth status":                                                   "ok",
+			"systemctl --user daemon-reload":                                   "",
+			"systemctl --user enable --now vigilante.service":                  "",
+			`/bin/sh -lc PATH="` + os.Getenv("PATH") + `" command -v 'git'`:    "/usr/bin/git\n",
+			`/bin/sh -lc PATH="` + os.Getenv("PATH") + `" command -v 'gh'`:     "/usr/bin/gh\n",
+			`/bin/sh -lc PATH="` + os.Getenv("PATH") + `" command -v 'claude'`: "/usr/bin/claude\n",
+			`/bin/sh -lc PATH="` + os.Getenv("PATH") + `" 'claude' --version`:  "claude 2.0.0\n",
 		},
 	}
 
@@ -2827,7 +2823,7 @@ func TestSetupFailsWhenProviderVersionIsIncompatible(t *testing.T) {
 		},
 	}
 
-	err := app.Setup(context.Background())
+	err := app.SetupWithProvider(context.Background(), provider.CodexID)
 	if err == nil || !strings.Contains(err.Error(), "codex CLI version 2.0.0 is incompatible") {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -9718,7 +9714,7 @@ func mergeStringMaps(maps ...map[string]string) map[string]string {
 }
 
 func issuePromptCommand(worktreePath string, repo string, repoPath string, issueNumber int, title string, issueURL string, branch string) string {
-	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePrompt(
+	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePromptForRuntime(skill.RuntimeCodex,
 		state.WatchTarget{Path: repoPath, Repo: repo},
 		ghcli.Issue{Number: issueNumber, Title: title, URL: issueURL},
 		state.Session{WorktreePath: worktreePath, Branch: branch, Provider: "codex"},
@@ -9726,7 +9722,7 @@ func issuePromptCommand(worktreePath string, repo string, repoPath string, issue
 }
 
 func issuePromptCommandForSession(worktreePath string, repo string, repoPath string, issueNumber int, title string, issueURL string, session state.Session) string {
-	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePrompt(
+	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePromptForRuntime(skill.RuntimeCodex,
 		state.WatchTarget{Path: repoPath, Repo: repo},
 		ghcli.Issue{Number: issueNumber, Title: title, URL: issueURL},
 		session,
@@ -9775,7 +9771,7 @@ func resumeDiagnosticSummaryCommandForProvider(worktreePath string, providerID s
 }
 
 func ciRemediationPromptCommand(worktreePath string, repo string, repoPath string, session state.Session, pr ghcli.PullRequest, checks []ghcli.StatusCheckRoll) string {
-	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildCIRemediationPrompt(
+	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildCIRemediationPromptForRuntime(skill.RuntimeCodex,
 		state.WatchTarget{Path: repoPath, Repo: repo},
 		session,
 		pr,
@@ -9784,7 +9780,7 @@ func ciRemediationPromptCommand(worktreePath string, repo string, repoPath strin
 }
 
 func conflictResolutionPromptCommand(worktreePath string, repo string, repoPath string, session state.Session, pr ghcli.PullRequest) string {
-	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildConflictResolutionPrompt(
+	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildConflictResolutionPromptForRuntime(skill.RuntimeCodex,
 		state.WatchTarget{Path: repoPath, Repo: repo, Branch: session.BaseBranch},
 		session,
 		pr,
@@ -10227,5 +10223,130 @@ func TestWriteSandboxGitconfigWritesSanitizedFile(t *testing.T) {
 	}
 	if strings.Contains(string(data), "[gpg]") {
 		t.Errorf("expected [gpg] stripped, got: %s", string(data))
+	}
+}
+
+// TestWatchWithoutProviderPersistsClaude covers the default watch path: with no
+// --provider flag the new watch target must be pinned to Claude Code.
+func TestWatchWithoutProviderPersistsClaude(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                  "true\n",
+			testutil.Key("git", "remote", "get-url", "origin"):                         "git@github.com:nicobistolfi/vigilante.git\n",
+			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): "origin/main\n",
+		},
+	}
+
+	if err := app.Watch(context.Background(), repoPath, nil, "", 0); err != nil {
+		t.Fatal(err)
+	}
+
+	targets, err := app.state.LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].Provider != provider.ClaudeID {
+		t.Fatalf("expected claude provider to persist: %#v", targets)
+	}
+}
+
+// TestWatchWithCodexProviderPersistsSelection keeps Codex explicitly
+// selectable now that it is no longer the default.
+func TestWatchWithCodexProviderPersistsSelection(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			testutil.Key("git", "rev-parse", "--is-inside-work-tree"):                  "true\n",
+			testutil.Key("git", "remote", "get-url", "origin"):                         "git@github.com:nicobistolfi/vigilante.git\n",
+			testutil.Key("git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"): "origin/main\n",
+		},
+	}
+
+	if err := app.WatchWithProvider(context.Background(), repoPath, nil, "", 0, provider.CodexID); err != nil {
+		t.Fatal(err)
+	}
+
+	targets, err := app.state.LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].Provider != provider.CodexID {
+		t.Fatalf("expected codex provider to persist: %#v", targets)
+	}
+}
+
+// TestBuildResumeFailureSummaryInvocationPerProvider asserts the default
+// dispatch path builds a claude invocation rather than falling through to
+// codex exec, while Codex keeps its own arm.
+func TestBuildResumeFailureSummaryInvocationPerProvider(t *testing.T) {
+	cases := map[string]string{
+		"":                  "claude",
+		provider.ClaudeID:   "claude",
+		provider.CodexID:    "codex",
+		provider.GeminiID:   "gemini",
+		provider.OpenCodeID: "opencode",
+	}
+
+	for id, wantName := range cases {
+		t.Run("provider="+id, func(t *testing.T) {
+			selectedProvider, err := provider.Resolve(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			invocation, err := buildResumeFailureSummaryInvocation(selectedProvider, "/tmp/worktree", "prompt")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if invocation.Name != wantName {
+				t.Fatalf("expected %q invocation, got %q", wantName, invocation.Name)
+			}
+		})
+	}
+}
+
+// TestResolveIssueProviderPrefersLabelOverDefault keeps label routing intact
+// now that the unlabeled default is Claude.
+func TestResolveIssueProviderPrefersLabelOverDefault(t *testing.T) {
+	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
+
+	selected, err := resolveIssueProvider(target, ghcli.Issue{Number: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != provider.ClaudeID {
+		t.Fatalf("expected unlabeled issue to default to claude, got %q", selected)
+	}
+
+	selected, err = resolveIssueProvider(target, ghcli.Issue{Number: 7, Labels: []ghcli.Label{{Name: provider.CodexID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != provider.CodexID {
+		t.Fatalf("expected codex label to override the default, got %q", selected)
+	}
+
+	if _, err := resolveIssueProvider(target, ghcli.Issue{Number: 7, Labels: []ghcli.Label{{Name: provider.CodexID}, {Name: provider.GeminiID}}}); err == nil {
+		t.Fatal("expected conflicting provider labels to error")
 	}
 }

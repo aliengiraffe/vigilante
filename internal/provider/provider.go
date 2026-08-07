@@ -9,10 +9,17 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/state"
 )
 
-const DefaultID = "codex"
+const CodexID = "codex"
 const ClaudeID = "claude"
 const GeminiID = "gemini"
 const OpenCodeID = "opencode"
+
+// DefaultID is the provider selected when no provider is specified by a flag,
+// an issue label, or a persisted watch target. It is deliberately an alias of
+// another provider's ID rather than its own literal, so "the default" and
+// "which provider" stay separate concepts and changing the default stays a
+// one-line edit.
+const DefaultID = ClaudeID
 
 type Invocation struct {
 	Dir  string
@@ -68,7 +75,7 @@ type Provider interface {
 }
 
 var registry = map[string]Provider{
-	DefaultID:  codexProvider{},
+	CodexID:    codexProvider{},
 	ClaudeID:   claudeProvider{},
 	GeminiID:   geminiProvider{},
 	OpenCodeID: opencodeProvider{},

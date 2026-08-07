@@ -477,6 +477,11 @@ func (s *Store) LoadWatchTargets() ([]WatchTarget, error) {
 		return nil, err
 	}
 	for i := range targets {
+		// Legacy migration shim, deliberately pinned to Codex: watch targets
+		// written before Vigilante persisted a provider were all running on
+		// Codex. Do not replace this with provider.DefaultID — that would
+		// silently migrate every pre-existing repository onto the current
+		// default provider on upgrade.
 		if strings.TrimSpace(targets[i].Provider) == "" {
 			targets[i].Provider = "codex"
 		}
@@ -498,6 +503,10 @@ func (s *Store) LoadSessions() ([]Session, error) {
 		return nil, err
 	}
 	for i := range sessions {
+		// Legacy migration shim, deliberately pinned to Codex; see the matching
+		// note in LoadWatchTargets. In-flight sessions recorded before the
+		// provider field existed must keep running on the agent that started
+		// them, so this must not become provider.DefaultID.
 		if strings.TrimSpace(sessions[i].Provider) == "" {
 			sessions[i].Provider = "codex"
 		}

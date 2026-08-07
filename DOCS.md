@@ -55,10 +55,10 @@ Install with Homebrew:
 brew install vigilante
 ```
 
-Prepare the local machine with your preferred coding-agent provider:
+Prepare the local machine. `--provider` defaults to `claude`, so pass the flag only when you want a different coding agent:
 
 ```sh
-vigilante setup -d --provider codex
+vigilante setup -d
 ```
 
 Register a repository after setup installs the background service:
@@ -81,7 +81,7 @@ Quickstart requirements:
 
 - `git`
 - `gh` authenticated against the GitHub account you want Vigilante to operate with
-- one supported coding-agent CLI installed locally: `codex`, `claude`, `gemini`, or `opencode`
+- one supported coding-agent CLI installed locally: `claude` (the default), or `codex`, `gemini`, or `opencode` selected with `--provider`
 
 ## Product Goal
 
@@ -254,7 +254,7 @@ Expected behavior:
 - switches an existing target back to default-branch tracking when `--track-default-branch` is supplied
 - defaults the assignee filter to `me` unless overridden
 - defaults `--max-parallel` to `0` when not configured, where `0` means unlimited
-- defaults `--provider` to `codex` unless overridden
+- defaults `--provider` to `claude` unless overridden; already-watched repositories keep the provider already recorded in `watchlist.json`
 - defaults `--issue-tracker` to `github` unless overridden
 - when `--issue-tracker linear` is selected, verifies the local `linear` CLI is installed and authenticated before saving the watch target
 - accepts an optional `--issue-tracker-stage` filter; Linear defaults to `Todo` when the flag is omitted
@@ -401,6 +401,7 @@ Prepare the machine for autonomous execution.
 
 Expected behavior:
 
+- defaults `--provider` to `claude` unless overridden
 - creates `~/.vigilante/`
 - initializes `watchlist.json`
 - verifies `git`, `gh`, and the selected coding-agent provider CLI

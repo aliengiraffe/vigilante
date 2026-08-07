@@ -77,7 +77,7 @@ func TestBuildConfigUsesShellPath(t *testing.T) {
 		},
 	}
 
-	selectedProvider, err := provider.Resolve(provider.DefaultID)
+	selectedProvider, err := provider.Resolve(provider.CodexID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestBuildConfigFailsWhenDaemonPathCannotResolveTools(t *testing.T) {
 		},
 	}
 
-	selectedProvider, err := provider.Resolve(provider.DefaultID)
+	selectedProvider, err := provider.Resolve(provider.CodexID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestBuildConfigFailsWhenProviderVersionIsIncompatible(t *testing.T) {
 		},
 	}
 
-	selectedProvider, err := provider.Resolve(provider.DefaultID)
+	selectedProvider, err := provider.Resolve(provider.CodexID)
 	if err != nil {
 		t.Fatal(err)
 	}
