@@ -325,7 +325,7 @@ func formatLastScan(raw string) string {
 	if err != nil {
 		return "last scan unknown"
 	}
-	return fmt.Sprintf("last scan %s", t.UTC().Format("2006-01-02 15:04 UTC"))
+	return fmt.Sprintf("last scan %s", t.In(time.Local).Format("2006-01-02 15:04 MST"))
 }
 
 func valueOrUnknown(value string) string {
