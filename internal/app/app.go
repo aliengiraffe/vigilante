@@ -92,6 +92,10 @@ var automergeLabels = []string{"vigilante:automerge", "automerge"}
 
 var supportedCompletionShells = []string{"bash", "fish", "zsh"}
 var errHelpHandled = errors.New("help handled")
+
+// statusCommandUsage is the single source of truth for the `status` usage line.
+const statusCommandUsage = "usage: vigilante status [--plain] [-w]"
+
 var cloneIntoPattern = regexp.MustCompile(`Cloning into (?:bare repository )?'([^']+)'`)
 
 type App struct {
@@ -1573,29 +1577,44 @@ func (a *App) runLogsCommand(ctx context.Context, args []string) error {
 	return nil
 }
 
+// Status renders the live dashboard on a terminal, or the plain-text view
+// when stdout is not a terminal.
 func (a *App) Status(ctx context.Context) error {
 	return a.StatusWithOptions(ctx, false)
 }
 
+// StatusWithOptions renders the status view, refreshing the plain-text view
+// about once per second when watch is set. The dashboard is always live, so
+// watch has no effect on it.
 func (a *App) StatusWithOptions(ctx context.Context, watch bool) error {
-	if !watch {
-		return a.statusExpanded(ctx)
+	return a.statusWithOptions(ctx, watch, false)
+}
+
+func (a *App) statusWithOptions(ctx context.Context, watch, plain bool) error {
+	if a.statusUsesDashboard(plain) {
+		return a.statusDashboard(ctx)
 	}
-	return a.statusWatch(ctx, time.Second)
+	if watch {
+		return a.statusWatch(ctx, time.Second)
+	}
+	return a.statusExpanded(ctx)
 }
 
 func (a *App) runStatusCommand(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	configureFlagSet(fs, func(w io.Writer) {
-		fmt.Fprintln(w, "usage: vigilante status [-w]")
+		fmt.Fprintln(w, statusCommandUsage)
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Show service, watch target, and session status.")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "On a terminal this renders a live dashboard; piped or redirected output is plain text.")
 		fmt.Fprintln(w)
 		fs.SetOutput(w)
 		fs.PrintDefaults()
 	})
-	watch := fs.Bool("w", false, "refresh the status view about once per second")
-	fs.BoolVar(watch, "watch", false, "refresh the status view about once per second")
+	watch := fs.Bool("w", false, "refresh the plain-text view about once per second (the dashboard is always live)")
+	fs.BoolVar(watch, "watch", false, "refresh the plain-text view about once per second (the dashboard is always live)")
+	plain := fs.Bool("plain", false, "print the plain-text view instead of the live dashboard")
 	if err := parseFlagSet(fs, args, a.stdout); err != nil {
 		if errors.Is(err, errHelpHandled) {
 			return nil
@@ -1603,9 +1622,9 @@ func (a *App) runStatusCommand(ctx context.Context, args []string) error {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: vigilante status [-w]")
+		return errors.New(statusCommandUsage)
 	}
-	return a.StatusWithOptions(ctx, *watch)
+	return a.statusWithOptions(ctx, *watch, *plain)
 }
 
 func (a *App) statusServiceSection(ctx context.Context) (serviceStatusInfo, error) {
@@ -6591,7 +6610,7 @@ func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] [--fork [--fork-owner value]] <path>")
 	fmt.Fprintln(w, "  vigilante unwatch <path>")
 	fmt.Fprintln(w, "  vigilante list [--blocked | --running]")
-	fmt.Fprintln(w, "  vigilante status [-w]")
+	fmt.Fprintln(w, "  vigilante status [--plain] [-w]")
 	fmt.Fprintln(w, "  vigilante logs [--access] [--repo <owner/name>] [--issue <n>]")
 	fmt.Fprintln(w, "  vigilante cleanup --repo <owner/name> [--issue <n>]")
 	fmt.Fprintln(w, "  vigilante cleanup --all")
@@ -6661,6 +6680,7 @@ _vigilante()
             return
             ;;
         status)
+            COMPREPLY=( $(compgen -W "--plain -w --watch" -- "$cur") )
             return
             ;;
         cleanup)
@@ -6715,6 +6735,8 @@ complete -c vigilante -f -n '__fish_use_subcommand' -a 'watch' -d 'Register a lo
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'unwatch' -d 'Remove a repository from the watchlist'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'list' -d 'Show watched repositories or sessions'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'status' -d 'Show installed service state'
+complete -c vigilante -f -n '__fish_seen_subcommand_from status' -l plain -d 'Print the plain-text view instead of the live dashboard'
+complete -c vigilante -f -n '__fish_seen_subcommand_from status' -l watch -d 'Refresh the plain-text view about once per second'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'cleanup' -d 'Clean up running sessions'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'redispatch' -d 'Restart one watched issue in a fresh local worktree'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'recreate' -d 'Recreate a stuck issue as a fresh duplicate'
@@ -6793,6 +6815,7 @@ _vigilante() {
       compadd -- --blocked --running
       ;;
     status)
+      compadd -- --plain -w --watch
       ;;
     cleanup)
       compadd -- --repo --issue --all

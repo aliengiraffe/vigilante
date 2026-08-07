@@ -115,7 +115,7 @@ vigilante service restart
 - `vigilante watch <path>`: register a local repository for issue monitoring
 - `vigilante clone <repo> [<path>]`: clone a repository and auto-add it to the watch list
 - `vigilante list`: show watched repositories and optionally active runs
-- `vigilante status`: show service health, watched repos, sessions, and rate-limit state
+- `vigilante status`: show service health, watched repos, sessions, and rate-limit state as a live dashboard on a terminal (`--plain` for plain text; piped and redirected output is plain text automatically)
 - `vigilante logs`: inspect daemon and per-issue logs
 - `vigilante resume`, `vigilante redispatch`, `vigilante cleanup`: recover or restart stuck work safely
 - `vigilante daemon run`: run the watcher loop in the foreground
