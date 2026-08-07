@@ -12,6 +12,8 @@
 
 `vigilante` is a sandbox-first orchestration layer for coding agents.
 
+It keeps the robots on a short leash, even when they insist the bug is a feature.
+
 Treat the model as untrusted by default. Vigilante is the control plane that turns GitHub issues into a guarded issue-to-PR pipeline: one git worktree per task, deterministic lifecycle management, scoped execution, and a durable operator trail through issue comments, session state, and pull requests.
 
 It is not the model itself. Vigilante schedules work, prepares isolated worktrees, launches a supported coding-agent CLI, tracks progress, and recovers or cleans up stalled sessions so a repository behaves like a controlled worker instead of a loose collection of scripts.
