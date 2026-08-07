@@ -133,7 +133,7 @@ func TestBuildIssuePrompt(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
-	prompt := BuildIssuePrompt(target, issue, session)
+	prompt := BuildIssuePromptForRuntime(RuntimeCodex, target, issue, session)
 	for _, text := range []string{"Use the `vigilante-issue-implementation` skill", "Detected repo shape: traditional", `Repo process context JSON: {"shape":"traditional"}`, "Selected issue implementation skill: vigilante-issue-implementation", "Issue: #12 - Fix bug", "Worktree path: /tmp/worktree", "vigilante gh issue comment", "vigilante commit", "vigilante git push", "vigilante gh pr create", "Closes #12", "Coding Agent Launched: Codex", "@vigilanteai resume", "@vigilanteai cleanup", "issue-comment commands rather than shell commands", "10-cell progress bar", "ETA: ~N minutes", "Use `vigilante commit` for all commit-producing operations", "Do not use `git commit` or GitHub CLI commit flows directly", "preserve the user's existing git author, committer, and signing configuration", "Do not add `Co-authored by:` trailers"} {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q: %s", text, prompt)
@@ -152,7 +152,7 @@ func TestBuildIssuePromptIncludesReusedRemoteBranchContext(t *testing.T) {
 		BranchDiffSummary:  "README.md | 2 ++",
 		Provider:           "Codex",
 	}
-	prompt := BuildIssuePrompt(target, issue, session)
+	prompt := BuildIssuePromptForRuntime(RuntimeCodex, target, issue, session)
 	for _, text := range []string{
 		"Existing remote issue branch detected: origin/vigilante/issue-12-fix-bug",
 		"Base branch for comparison: main",
@@ -176,7 +176,7 @@ func TestBuildIssuePromptIncludesIssueBodyAndIterationContext(t *testing.T) {
 		IterationPromptContext: "Iteration context for this pass:\nPrimary focus comment:\n@vigilanteai tighten the validation path",
 	}
 
-	prompt := BuildIssuePrompt(target, issue, session)
+	prompt := BuildIssuePromptForRuntime(RuntimeCodex, target, issue, session)
 
 	for _, text := range []string{
 		"Full issue body:",
@@ -204,7 +204,7 @@ func TestBuildIssuePromptIncludesForkInstructions(t *testing.T) {
 		PushRepo:     "forker/repo",
 	}
 
-	prompt := BuildIssuePrompt(target, issue, session)
+	prompt := BuildIssuePromptForRuntime(RuntimeCodex, target, issue, session)
 	for _, text := range []string{
 		"Fork mode is enabled for this run.",
 		"Push the branch to remote `fork` (repo `forker/repo`) rather than `origin`.",
@@ -290,7 +290,7 @@ func TestBuildIssuePromptSelectsMonorepoSkill(t *testing.T) {
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 
-	prompt := BuildIssuePrompt(target, issue, session)
+	prompt := BuildIssuePromptForRuntime(RuntimeCodex, target, issue, session)
 
 	for _, text := range []string{
 		"Use the `vigilante-issue-implementation-on-turborepo` skill",
@@ -323,7 +323,7 @@ func TestBuildIssuePromptFallsBackForUnknownMonorepoStack(t *testing.T) {
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 
-	prompt := BuildIssuePrompt(target, issue, session)
+	prompt := BuildIssuePromptForRuntime(RuntimeCodex, target, issue, session)
 
 	for _, text := range []string{
 		"Use the `vigilante-issue-implementation-on-monorepo` skill",
@@ -352,7 +352,7 @@ func TestBuildIssuePromptSelectsTurborepoSkill(t *testing.T) {
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 
-	prompt := BuildIssuePrompt(target, issue, session)
+	prompt := BuildIssuePromptForRuntime(RuntimeCodex, target, issue, session)
 
 	for _, text := range []string{
 		"Use the `vigilante-issue-implementation-on-turborepo` skill",
@@ -383,7 +383,7 @@ func TestBuildIssuePromptSelectsGradleMultiProjectSkill(t *testing.T) {
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 
-	prompt := BuildIssuePrompt(target, issue, session)
+	prompt := BuildIssuePromptForRuntime(RuntimeCodex, target, issue, session)
 
 	for _, text := range []string{
 		"Use the `vigilante-issue-implementation-on-gradle-multi-project` skill",
@@ -414,7 +414,7 @@ func TestBuildIssuePromptSelectsNxSkill(t *testing.T) {
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 
-	prompt := BuildIssuePrompt(target, issue, session)
+	prompt := BuildIssuePromptForRuntime(RuntimeCodex, target, issue, session)
 
 	for _, text := range []string{
 		"Use the `vigilante-issue-implementation-on-nx` skill",
@@ -448,7 +448,7 @@ func TestBuildIssuePromptSelectsRushMonorepoSkill(t *testing.T) {
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 
-	prompt := BuildIssuePrompt(target, issue, session)
+	prompt := BuildIssuePromptForRuntime(RuntimeCodex, target, issue, session)
 
 	for _, text := range []string{
 		"Use the `vigilante-issue-implementation-on-rush-monorepo` skill",
@@ -481,7 +481,7 @@ func TestBuildIssuePromptSelectsBazelMonorepoSkill(t *testing.T) {
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 
-	prompt := BuildIssuePrompt(target, issue, session)
+	prompt := BuildIssuePromptForRuntime(RuntimeCodex, target, issue, session)
 
 	for _, text := range []string{
 		"Use the `vigilante-issue-implementation-on-bazel-monorepo` skill",
@@ -536,7 +536,7 @@ func TestBuildConflictResolutionPrompt(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
 	session := state.Session{IssueNumber: 12, IssueTitle: "Fix bug", IssueBody: "Preserve the original validation behavior.", IssueURL: "https://example.com/issues/12", BaseBranch: "main", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", BranchDiffSummary: "Keep the error-state form inputs intact."}
 	pr := ghcli.PullRequest{Number: 88, URL: "https://example.com/pull/88", Title: "Fix bug", Body: "This PR keeps the original UX behavior.", Mergeable: "CONFLICTING", MergeStateStatus: "DIRTY"}
-	prompt := BuildConflictResolutionPrompt(target, session, pr)
+	prompt := BuildConflictResolutionPromptForRuntime(RuntimeCodex, target, session, pr)
 	for _, text := range []string{"Use the `vigilante-conflict-resolution` skill", "Issue specification: Preserve the original validation behavior.", "Pull Request title: Fix bug", "GitHub mergeability: mergeable=CONFLICTING mergeStateStatus=DIRTY", "Work through the rebase commit by commit.", "Use `vigilante commit` for all commit-producing operations", "Do not use `git commit` or GitHub CLI commit flows directly", "preserve the user's existing git author, committer, and signing configuration", "Do not add `Co-authored by:` trailers", "vigilante logs --repo <owner/name> --issue <n>", "go test ./...", "Existing branch summary: Keep the error-state form inputs intact."} {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q: %s", text, prompt)
@@ -548,7 +548,7 @@ func TestBuildCIRemediationPrompt(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
 	session := state.Session{IssueNumber: 12, IssueTitle: "Fix bug", IssueURL: "https://example.com/issues/12", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12"}
 	pr := ghcli.PullRequest{Number: 88, URL: "https://example.com/pull/88"}
-	prompt := BuildCIRemediationPrompt(target, session, pr, []ghcli.StatusCheckRoll{{Context: "test", Conclusion: "FAILURE"}})
+	prompt := BuildCIRemediationPromptForRuntime(RuntimeCodex, target, session, pr, []ghcli.StatusCheckRoll{{Context: "test", Conclusion: "FAILURE"}})
 	for _, text := range []string{"Use the `vigilante-issue-implementation` skill", "Pull Request: #88", "CI remediation context", "Failing check: test", "Use `vigilante commit` for all commit-producing operations", "Do not use `git commit` or GitHub CLI commit flows directly", "preserve the user's existing git author, committer, and signing configuration", "Do not add `Co-authored by:` trailers", "do not open a new pull request", "exit with a non-zero status"} {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q: %s", text, prompt)
@@ -1153,7 +1153,7 @@ func TestBuildIssuePromptIncludesSecurityGuidanceForNodeJSRepo(t *testing.T) {
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 
-	prompt := BuildIssuePrompt(target, issue, session)
+	prompt := BuildIssuePromptForRuntime(RuntimeCodex, target, issue, session)
 
 	for _, text := range []string{
 		"JS/TS/Node security guidance",
@@ -1179,7 +1179,7 @@ func TestBuildIssuePromptExcludesSecurityGuidanceForNonNodeRepo(t *testing.T) {
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 
-	prompt := BuildIssuePrompt(target, issue, session)
+	prompt := BuildIssuePromptForRuntime(RuntimeCodex, target, issue, session)
 
 	if strings.Contains(prompt, "JS/TS/Node security guidance") {
 		t.Fatalf("prompt should not include JS security guidance for non-Node repo")
@@ -1205,7 +1205,7 @@ func TestBuildIssuePromptIncludesSecurityGuidanceForMonorepoNodeJS(t *testing.T)
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
 	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12", Provider: "Codex"}
 
-	prompt := BuildIssuePrompt(target, issue, session)
+	prompt := BuildIssuePromptForRuntime(RuntimeCodex, target, issue, session)
 
 	for _, text := range []string{
 		"JS/TS/Node security guidance",
@@ -1266,14 +1266,14 @@ func TestBuildIssueCreatePromptUsesInlineHeaderForClaudeAndGemini(t *testing.T) 
 	}
 }
 
-func TestBuildIssueCreatePromptDefaultUsesCodexRuntime(t *testing.T) {
+func TestBuildIssueCreatePromptForCodexReferencesSkillByName(t *testing.T) {
 	target := state.WatchTarget{
 		Repo: "owner/repo",
 		Path: "/tmp/repo",
 	}
-	result := BuildIssueCreatePromptDefault(target, "test prompt")
+	result := BuildIssueCreatePrompt(RuntimeCodex, target, "test prompt")
 	if !strings.Contains(result, "Use the `vigilante-create-issue` skill") {
-		t.Fatalf("expected default to use codex runtime")
+		t.Fatalf("expected the codex runtime to reference the skill by name")
 	}
 }
 

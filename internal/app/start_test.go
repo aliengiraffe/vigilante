@@ -12,6 +12,7 @@ import (
 	"time"
 
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
+	"github.com/nicobistolfi/vigilante/internal/provider"
 	"github.com/nicobistolfi/vigilante/internal/skill"
 	"github.com/nicobistolfi/vigilante/internal/state"
 	"github.com/nicobistolfi/vigilante/internal/testutil"
@@ -95,7 +96,7 @@ func TestStartOneOffSessionSuccess(t *testing.T) {
 		t.Fatal("expected no watch targets")
 	}
 
-	err = app.StartOneOffSession(context.Background(), repoPath, 10, "", false)
+	err = app.StartOneOffSession(context.Background(), repoPath, 10, provider.CodexID, false)
 	// Without a tracked PR the session is incomplete, which StartOneOffSession reports as an error.
 	if err == nil {
 		t.Fatal("expected error for incomplete session without PR")
@@ -334,7 +335,7 @@ func TestStartOneOffSessionReusesExistingSessionOrchestration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := app.StartOneOffSession(context.Background(), repoPath, 7, "", false)
+	err := app.StartOneOffSession(context.Background(), repoPath, 7, provider.CodexID, false)
 	if err == nil {
 		t.Fatal("expected error for blocked session")
 	}

@@ -8,7 +8,7 @@ import (
 type codexProvider struct{}
 
 func (codexProvider) ID() string {
-	return DefaultID
+	return CodexID
 }
 
 func (codexProvider) DisplayName() string {
@@ -42,7 +42,7 @@ func (codexProvider) BuildIssueInvocation(task IssueTask) (Invocation, error) {
 			"exec",
 			"--cd", task.Session.WorktreePath,
 			"--dangerously-bypass-approvals-and-sandbox",
-			skill.BuildIssuePrompt(task.Target, task.Issue, task.Session),
+			skill.BuildIssuePromptForRuntime(skill.RuntimeCodex, task.Target, task.Issue, task.Session),
 		},
 	}, nil
 }
@@ -54,7 +54,7 @@ func (codexProvider) BuildConflictResolutionInvocation(task ConflictTask) (Invoc
 			"exec",
 			"--cd", task.Session.WorktreePath,
 			"--dangerously-bypass-approvals-and-sandbox",
-			skill.BuildConflictResolutionPrompt(task.Target, task.Session, task.PR),
+			skill.BuildConflictResolutionPromptForRuntime(skill.RuntimeCodex, task.Target, task.Session, task.PR),
 		},
 	}, nil
 }
@@ -66,7 +66,7 @@ func (codexProvider) BuildCIRemediationInvocation(task CIRemediationTask) (Invoc
 			"exec",
 			"--cd", task.Session.WorktreePath,
 			"--dangerously-bypass-approvals-and-sandbox",
-			skill.BuildCIRemediationPrompt(task.Target, task.Session, task.PR, task.FailingChecks),
+			skill.BuildCIRemediationPromptForRuntime(skill.RuntimeCodex, task.Target, task.Session, task.PR, task.FailingChecks),
 		},
 	}, nil
 }
@@ -78,7 +78,7 @@ func (codexProvider) BuildIssueCreateInvocation(task IssueCreateTask) (Invocatio
 			"exec",
 			"--cd", task.Target.Path,
 			"--dangerously-bypass-approvals-and-sandbox",
-			skill.BuildIssueCreatePromptDefault(task.Target, task.Prompt),
+			skill.BuildIssueCreatePrompt(skill.RuntimeCodex, task.Target, task.Prompt),
 		},
 	}, nil
 }

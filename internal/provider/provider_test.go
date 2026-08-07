@@ -9,13 +9,74 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/state"
 )
 
-func TestResolveDefaultsToCodex(t *testing.T) {
+func TestResolveDefaultsToClaude(t *testing.T) {
 	selectedProvider, err := Resolve("")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if selectedProvider.ID() != DefaultID {
+	if selectedProvider.ID() != ClaudeID {
 		t.Fatalf("unexpected provider id: %s", selectedProvider.ID())
+	}
+}
+
+// TestDefaultIDIsNotCodexID guards the decoupling of "the provider used when
+// none is specified" from "the Codex provider's identity". Re-merging the two
+// silently reroutes Codex dispatch and Codex's CLI version contract.
+func TestDefaultIDIsNotCodexID(t *testing.T) {
+	if DefaultID == CodexID {
+		t.Fatalf("DefaultID must stay distinct from CodexID, both are %q", DefaultID)
+	}
+	if DefaultID != ClaudeID {
+		t.Fatalf("unexpected default provider id: %s", DefaultID)
+	}
+}
+
+// TestRegisteredProviderIDsMatchRegistryKeys ensures no provider reports an ID
+// that disagrees with the key it is registered under.
+func TestRegisteredProviderIDsMatchRegistryKeys(t *testing.T) {
+	for _, id := range RegisteredIDs() {
+		selectedProvider, err := Resolve(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if selectedProvider.ID() != id {
+			t.Fatalf("provider registered as %q reports id %q", id, selectedProvider.ID())
+		}
+	}
+}
+
+func TestCompatibilityContractsStayBoundToTheirProvider(t *testing.T) {
+	cases := map[string]compatibilityContract{
+		CodexID:    {minInclusive: "0.114.0", maxExclusive: "2.0.0"},
+		ClaudeID:   {minInclusive: "2.0.0", maxExclusive: "3.0.0"},
+		GeminiID:   {minInclusive: "0.34.0", maxExclusive: "1.0.0"},
+		OpenCodeID: {minInclusive: "1.0.0", maxExclusive: "2.0.0"},
+	}
+	for id, want := range cases {
+		got, err := compatibilityFor(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("unexpected contract for %q: %#v", id, got)
+		}
+	}
+}
+
+func TestRequiredToolsetForCodexProvider(t *testing.T) {
+	selectedProvider, err := Resolve(CodexID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := RequiredToolset(selectedProvider)
+	want := []string{"codex", "gh", "git"}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected tool count: %#v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected toolset: %#v", got)
+		}
 	}
 }
 
@@ -25,7 +86,7 @@ func TestRequiredToolsetIncludesSharedAndProviderTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := RequiredToolset(selectedProvider)
-	want := []string{"codex", "gh", "git"}
+	want := []string{"claude", "gh", "git"}
 	if len(got) != len(want) {
 		t.Fatalf("unexpected tool count: %#v", got)
 	}
@@ -235,8 +296,8 @@ func TestClaudeInvocationUsesWorktreeDirForHeadlessRuns(t *testing.T) {
 func TestResolveIssueLabelUsesRegisteredProviderIDs(t *testing.T) {
 	original := registry
 	registry = map[string]Provider{
-		DefaultID: codexProvider{},
-		"cursor":  testProvider{id: "cursor"},
+		CodexID:  codexProvider{},
+		"cursor": testProvider{id: "cursor"},
 	}
 	t.Cleanup(func() {
 		registry = original
@@ -254,14 +315,14 @@ func TestResolveIssueLabelUsesRegisteredProviderIDs(t *testing.T) {
 func TestResolveIssueLabelRejectsConflictingProviderLabels(t *testing.T) {
 	original := registry
 	registry = map[string]Provider{
-		DefaultID: codexProvider{},
-		"cursor":  testProvider{id: "cursor"},
+		CodexID:  codexProvider{},
+		"cursor": testProvider{id: "cursor"},
 	}
 	t.Cleanup(func() {
 		registry = original
 	})
 
-	_, err := ResolveIssueLabel([]ghcli.Label{{Name: DefaultID}, {Name: "cursor"}})
+	_, err := ResolveIssueLabel([]ghcli.Label{{Name: CodexID}, {Name: "cursor"}})
 	if err == nil {
 		t.Fatal("expected conflict error")
 	}
@@ -276,8 +337,8 @@ func TestValidateVersionOutputAcceptsSupportedVersions(t *testing.T) {
 		provider string
 		output   string
 	}{
-		{name: "codex current supported 0.x", provider: DefaultID, output: "codex 0.114.0"},
-		{name: "codex", provider: DefaultID, output: "codex 1.2.3"},
+		{name: "codex current supported 0.x", provider: CodexID, output: "codex 0.114.0"},
+		{name: "codex", provider: CodexID, output: "codex 1.2.3"},
 		{name: "claude 2.x", provider: ClaudeID, output: "Claude Code v2.1.3"},
 		{name: "gemini current supported 0.x", provider: GeminiID, output: "gemini-cli 0.34.0"},
 		{name: "opencode 1.x minimum", provider: OpenCodeID, output: "opencode 1.0.0"},
@@ -298,7 +359,7 @@ func TestValidateVersionOutputAcceptsSupportedVersions(t *testing.T) {
 }
 
 func TestValidateVersionOutputRejectsTooOldVersion(t *testing.T) {
-	selectedProvider, err := Resolve(DefaultID)
+	selectedProvider, err := Resolve(CodexID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,7 +550,7 @@ func TestBuildIssueCreateInvocationForAllProviders(t *testing.T) {
 				t.Fatal("expected non-empty invocation name")
 			}
 			// Codex uses --cd flag instead of Dir
-			if id != DefaultID && inv.Dir != "/tmp/repo" {
+			if id != CodexID && inv.Dir != "/tmp/repo" {
 				t.Fatalf("expected dir %q, got %q", "/tmp/repo", inv.Dir)
 			}
 			// Verify the prompt text is somewhere in the args

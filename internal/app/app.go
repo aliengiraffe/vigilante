@@ -6250,13 +6250,13 @@ func (a *App) generateResumeFailureDiagnostic(ctx context.Context, session state
 
 func buildResumeFailureSummaryInvocation(selectedProvider provider.Provider, workdir string, prompt string) (provider.Invocation, error) {
 	switch selectedProvider.ID() {
-	case provider.ClaudeID:
+	case provider.CodexID:
 		return provider.Invocation{
-			Dir:  workdir,
-			Name: "claude",
+			Name: "codex",
 			Args: []string{
-				"--print",
-				"--dangerously-skip-permissions",
+				"exec",
+				"--cd", workdir,
+				"--dangerously-bypass-approvals-and-sandbox",
 				prompt,
 			},
 		}, nil
@@ -6280,15 +6280,15 @@ func buildResumeFailureSummaryInvocation(selectedProvider provider.Provider, wor
 				prompt,
 			},
 		}, nil
-	case provider.DefaultID:
+	case provider.ClaudeID:
 		fallthrough
 	default:
 		return provider.Invocation{
-			Name: "codex",
+			Dir:  workdir,
+			Name: "claude",
 			Args: []string{
-				"exec",
-				"--cd", workdir,
-				"--dangerously-bypass-approvals-and-sandbox",
+				"--print",
+				"--dangerously-skip-permissions",
 				prompt,
 			},
 		}, nil

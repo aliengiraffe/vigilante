@@ -74,12 +74,12 @@ Requirements:
 
 - `git`
 - `gh` authenticated against the GitHub account Vigilante should operate with
-- one supported coding-agent CLI installed locally: `codex`, `claude`, `gemini`, or `opencode`
+- one supported coding-agent CLI installed locally: `claude` (the default), or `codex`, `gemini`, or `opencode` selected with `--provider`
 
-Bootstrap the local machine and install the managed service:
+Bootstrap the local machine and install the managed service. `--provider` defaults to `claude`:
 
 ```sh
-vigilante setup -d --provider codex
+vigilante setup -d
 ```
 
 ## Quick Start
@@ -94,7 +94,7 @@ Typical first-run flow:
 
 ```sh
 brew install vigilante
-vigilante setup -d --provider codex
+vigilante setup -d
 vigilante watch ~/hello-world-app
 vigilante daemon run --once
 ```

@@ -305,3 +305,80 @@ func TestServiceConfigPackageHardeningPersistence(t *testing.T) {
 		t.Error("expected package hardening to be disabled after save/load")
 	}
 }
+
+// TestLoadWatchTargetsBackfillsLegacyProviderAsCodex pins the legacy migration
+// shim. Watch targets written before Vigilante persisted a provider were all
+// running on Codex, so they must keep loading as Codex even though the default
+// provider for new targets is now Claude.
+func TestLoadWatchTargetsBackfillsLegacyProviderAsCodex(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+
+	store := NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.watchlistPath(), []byte(`[{"path":"/tmp/repo","repo":"owner/repo"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	targets, err := store.LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("unexpected targets: %#v", targets)
+	}
+	if targets[0].Provider != "codex" {
+		t.Fatalf("legacy watch target must stay on codex, got %q", targets[0].Provider)
+	}
+}
+
+// TestLoadWatchTargetsPreservesExplicitProvider makes sure the legacy backfill
+// only fills empty values.
+func TestLoadWatchTargetsPreservesExplicitProvider(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+
+	store := NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.watchlistPath(), []byte(`[{"path":"/tmp/repo","repo":"owner/repo","provider":"claude"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	targets, err := store.LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].Provider != "claude" {
+		t.Fatalf("unexpected targets: %#v", targets)
+	}
+}
+
+// TestLoadSessionsBackfillsLegacyProviderAsCodex keeps in-flight sessions on
+// the agent that started them. See the LoadWatchTargets counterpart.
+func TestLoadSessionsBackfillsLegacyProviderAsCodex(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+
+	store := NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.sessionsPath(), []byte(`[{"repo":"owner/repo","issue_number":7}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions, err := store.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("unexpected sessions: %#v", sessions)
+	}
+	if sessions[0].Provider != "codex" {
+		t.Fatalf("legacy session must stay on codex, got %q", sessions[0].Provider)
+	}
+}
