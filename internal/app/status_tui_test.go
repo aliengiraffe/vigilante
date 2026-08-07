@@ -288,8 +288,14 @@ func TestStatusModelQuitKeys(t *testing.T) {
 }
 
 func TestStatusModelRendersLoadedData(t *testing.T) {
-	view := loadedStatusModel().View()
-	for _, want := range []string{"Service", "running", "owner/repo", "Actively working", "Issue #42", "GitHub rate limits", "4000/5000"} {
+	originalLocal := time.Local
+	time.Local = time.FixedZone("PDT", -7*60*60)
+	t.Cleanup(func() { time.Local = originalLocal })
+
+	model := loadedStatusModel()
+	model.sessions.Repos[0].Target.LastScanAt = "2026-08-07T19:25:00Z"
+	view := model.View()
+	for _, want := range []string{"Service", "running", "owner/repo", "last scan 2026-08-07 12:25 PDT", "Actively working", "Issue #42", "GitHub rate limits", "4000/5000"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("expected view to contain %q, got:\n%s", want, view)
 		}

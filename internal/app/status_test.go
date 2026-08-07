@@ -492,6 +492,10 @@ func TestWriteSessionGroupsCompletedFailedShowsTotalsOnly(t *testing.T) {
 }
 
 func TestStatusCommandShowsWatchedRepositories(t *testing.T) {
+	originalLocal := time.Local
+	time.Local = time.FixedZone("TEST", -8*60*60)
+	t.Cleanup(func() { time.Local = originalLocal })
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
@@ -560,14 +564,39 @@ func TestStatusCommandShowsWatchedRepositories(t *testing.T) {
 	output := stdout.String()
 	for _, want := range []string{
 		"Watched repositories (2)",
-		"owner/alpha (branch main (pinned), provider codex, assignee me, max 2, 1 active, 1 blocked, last scan 2026-03-19 11:55 UTC)",
+		"owner/alpha (branch main (pinned), provider codex, assignee me, max 2, 1 active, 1 blocked, last scan 2026-03-19 03:55 TEST)",
 		"path: /repos/alpha",
-		"owner/beta (branch develop (pinned), provider claude, labels to-do,bug, idle, last scan 2026-03-19 11:40 UTC)",
+		"owner/beta (branch develop (pinned), provider claude, labels to-do,bug, idle, last scan 2026-03-19 03:40 TEST)",
 		"path: /repos/beta",
 	} {
 		if !strings.Contains(output, want) {
 			t.Errorf("expected output to contain %q, got:\n%s", want, output)
 		}
+	}
+}
+
+func TestFormatLastScan(t *testing.T) {
+	originalLocal := time.Local
+	t.Cleanup(func() { time.Local = originalLocal })
+
+	tests := []struct {
+		name  string
+		local *time.Location
+		raw   string
+		want  string
+	}{
+		{name: "local timezone", local: time.FixedZone("PDT", -7*60*60), raw: "2026-08-07T19:25:00Z", want: "last scan 2026-08-07 12:25 PDT"},
+		{name: "UTC timezone", local: time.UTC, raw: "2026-08-07T19:25:00Z", want: "last scan 2026-08-07 19:25 UTC"},
+		{name: "empty", local: time.UTC, raw: "", want: "last scan never"},
+		{name: "malformed", local: time.UTC, raw: "not-a-time", want: "last scan unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			time.Local = tt.local
+			if got := formatLastScan(tt.raw); got != tt.want {
+				t.Fatalf("formatLastScan(%q) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
 	}
 }
 
