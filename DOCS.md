@@ -318,9 +318,28 @@ Expected fields:
 
 Show currently running sessions with their repository, issue number, branch, and worktree path.
 
-### `vigilante status`
+### `vigilante status [--plain] [-w]`
 
 Show a compact operational overview of the Vigilante OS-managed user service, watched repositories, sessions, and GitHub rate limits.
+
+On a terminal this renders a live dashboard that refreshes in place; `q`, `Esc`, and `Ctrl+C` exit. Anywhere else — a pipe, a redirect, a CI log — it prints the same information as plain text with no ANSI escape sequences, so existing scripts keep working unchanged.
+
+Output modes:
+
+| Command | Behavior |
+|---|---|
+| `vigilante status` | live dashboard on a terminal, plain text otherwise |
+| `vigilante status --plain` | plain text, even on a terminal |
+| `vigilante status --plain -w` | plain text refreshed in place about once per second |
+| `vigilante status -w` | accepted; the dashboard is already live, so it has no additional effect |
+| `vigilante status \| cat`, `vigilante status > file` | plain text |
+
+Dashboard behavior:
+
+- four panes — service, watched repositories, sessions, and GitHub rate limits — refresh in place without growing the scrollback
+- the arrow keys, `j`/`k`, `PgUp`/`PgDn`, and `Home`/`End` scroll when the content is taller than the terminal
+- session and watch-target data refreshes every second, service state every five seconds, and the GitHub rate-limit snapshot every minute, so the dashboard does not consume the rate limit it reports
+- `NO_COLOR`, `TERM=dumb`, and low-color terminals degrade to uncolored output
 
 Expected behavior:
 

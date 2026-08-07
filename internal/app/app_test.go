@@ -2094,7 +2094,7 @@ func TestStatusCommandRejectsUnexpectedArgs(t *testing.T) {
 	if exitCode != 1 {
 		t.Fatalf("expected failure exit code, got %d", exitCode)
 	}
-	if !strings.Contains(stderr.String(), "error: usage: vigilante status [-w]") {
+	if !strings.Contains(stderr.String(), "error: usage: vigilante status [--plain] [-w]") {
 		t.Fatalf("unexpected stderr: %q", stderr.String())
 	}
 }
@@ -2110,7 +2110,7 @@ func TestStatusCommandHelpIncludesWatchFlag(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("expected success exit code, got %d", exitCode)
 	}
-	if !strings.Contains(stdout.String(), "usage: vigilante status [-w]") {
+	if !strings.Contains(stdout.String(), "usage: vigilante status [--plain] [-w]") {
 		t.Fatalf("unexpected help output: %q", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), "-watch") && !strings.Contains(stdout.String(), "--watch") {

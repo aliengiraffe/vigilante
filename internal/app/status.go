@@ -223,16 +223,18 @@ func writeRateLimitResource(w io.Writer, label string, r ghcli.RateLimitResource
 	if r.Limit == 0 {
 		return
 	}
-	resetLabel := "unknown"
-	if !r.ResetAt.IsZero() {
-		remaining := time.Until(r.ResetAt).Round(time.Second)
-		if remaining < 0 {
-			resetLabel = "now"
-		} else {
-			resetLabel = fmt.Sprintf("in %s", remaining)
-		}
+	fmt.Fprintf(w, "%s: %d/%d remaining, resets %s\n", label, r.Remaining, r.Limit, formatRateLimitReset(r))
+}
+
+func formatRateLimitReset(r ghcli.RateLimitResource) string {
+	if r.ResetAt.IsZero() {
+		return "unknown"
 	}
-	fmt.Fprintf(w, "%s: %d/%d remaining, resets %s\n", label, r.Remaining, r.Limit, resetLabel)
+	remaining := time.Until(r.ResetAt).Round(time.Second)
+	if remaining < 0 {
+		return "now"
+	}
+	return fmt.Sprintf("in %s", remaining)
 }
 
 func writeRateLimitUnavailable(w io.Writer) {
