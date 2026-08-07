@@ -387,6 +387,14 @@ Expected behavior:
 - `--repo <owner/name>` cleans up all running sessions for one repository
 - removes the running-session blockage from local state
 - removes the local worktree and issue branch when those artifacts are present and safe to delete
+- retries cleanup even when automatic closed-issue cleanup already reached its three-attempt cap
+
+When an issue is closed, the daemon automatically attempts to remove its local
+worktree and branch up to three times. If all three attempts fail, Vigilante
+comments with the concrete git error and recovery commands, applies the
+`vigilante:needs-git-fix` label, and stops monitoring the terminal session while
+preserving the cleanup error. After repairing the repository state by hand, run
+`vigilante cleanup --repo <owner/name> --issue <n>` to force an uncapped retry.
 
 ### `vigilante cleanup --all`
 

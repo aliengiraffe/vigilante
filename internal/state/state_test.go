@@ -1,12 +1,23 @@
 package state
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestSessionJSONWithoutCleanupAttemptsDefaultsToZero(t *testing.T) {
+	var session Session
+	if err := json.Unmarshal([]byte(`{"repo_path":"/tmp/repo","repo":"owner/repo","issue_number":1}`), &session); err != nil {
+		t.Fatal(err)
+	}
+	if session.CleanupAttempts != 0 {
+		t.Fatalf("CleanupAttempts = %d, want 0", session.CleanupAttempts)
+	}
+}
 
 func TestTryWithScanLockIsExclusive(t *testing.T) {
 	home := t.TempDir()
