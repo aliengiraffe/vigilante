@@ -6,10 +6,12 @@
 # not there yet, so this starts at the measured baseline and only moves up. See
 # docs/awesome-go-submission.md and CONTRIBUTING.md.
 #
-# 70.9 is 6811 covered of 9602 statements, as computed by scripts/coverage.sh.
-# `go tool cover -func` reports 71.0% for the same profile: it attributes blocks
-# to declared functions and drops what it cannot place, so its denominator is
-# slightly smaller. The 0.1pp gap is methodology, not a coverage change. The
+# Computed by scripts/coverage.sh, which counts every block in the profile.
+# `go tool cover -func` reports a slightly higher number for the same profile: it
+# attributes blocks to declared functions and drops what it cannot place, so its
+# denominator is smaller. That gap is methodology, not a coverage change. The
 # ratchet has to be enforced against the number this script actually produces, and
 # the per-package figures it prints match `go test`'s own per-package output.
-70.9
+#
+# Codecov reports lower still (line coverage, not statements). See codecov.yml.
+72.8
