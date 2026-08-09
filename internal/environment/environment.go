@@ -1,3 +1,10 @@
+// Package environment is the boundary between vigilante and the host: process
+// execution, executable lookup, platform detection, and the access log that
+// records every external command a session ran.
+//
+// Everything that shells out goes through a Runner here rather than calling
+// os/exec directly. That indirection is what makes command execution auditable
+// and lets tests substitute a fake runner instead of touching the real system.
 package environment
 
 import (

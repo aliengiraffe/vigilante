@@ -10,6 +10,13 @@ tasks:
     cmds:
       - go test ./...
 
+  coverage:
+    desc: Run the test suite with coverage and enforce the committed threshold
+    # Delegates to the script so this and CI cannot measure differently. The
+    # threshold lives in scripts/coverage-threshold.
+    cmds:
+      - ./scripts/coverage.sh
+
   build:
     desc: Build the repo-local vigilante binary
     cmds:

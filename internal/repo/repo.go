@@ -1,3 +1,7 @@
+// Package repo inspects a local git checkout: discovering its remote and default
+// branch, parsing GitHub remotes into owner/name slugs, and classifying the
+// repository's build tooling so vigilante can pick the matching implementation
+// skill.
 package repo
 
 import (

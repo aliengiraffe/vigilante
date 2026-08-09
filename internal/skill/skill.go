@@ -1,3 +1,9 @@
+// Package skill installs and resolves the coding-agent skills that tell an agent
+// how to implement an issue in a given repository shape.
+//
+// Skills ship embedded in the binary (see the module root package) and are
+// materialized into the agent's skill directory at runtime, so an installed
+// vigilante carries a matching skill set without a separate download step.
 package skill
 
 import (

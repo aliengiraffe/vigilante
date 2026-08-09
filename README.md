@@ -5,8 +5,8 @@
 # vigilante
 
 [![Release](https://img.shields.io/github/v/release/aliengiraffe/vigilante?display_name=tag)](https://github.com/aliengiraffe/vigilante/releases/latest)
-[![Go Report Card](https://goreportcard.com/badge/github.com/nicobistolfi/vigilante)](https://goreportcard.com/report/github.com/nicobistolfi/vigilante)
-[![Go Package Search](https://img.shields.io/badge/go-package%20search-00ADD8?logo=go&logoColor=white)](https://pkg.go.dev/search?q=github.com%2Fnicobistolfi%2Fvigilante)
+[![Go Reference](https://pkg.go.dev/badge/github.com/nicobistolfi/vigilante.svg)](https://pkg.go.dev/github.com/nicobistolfi/vigilante)
+[![codecov](https://codecov.io/gh/aliengiraffe/vigilante/branch/main/graph/badge.svg)](https://app.codecov.io/gh/aliengiraffe/vigilante)
 [![License](https://img.shields.io/github/license/aliengiraffe/vigilante)](https://github.com/aliengiraffe/vigilante/blob/main/LICENSE)
 [![Release Workflow](https://img.shields.io/github/actions/workflow/status/aliengiraffe/vigilante/release.yml?label=release)](https://github.com/aliengiraffe/vigilante/actions/workflows/release.yml)
 

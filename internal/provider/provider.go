@@ -1,3 +1,9 @@
+// Package provider describes the coding-agent CLIs vigilante can launch — Claude
+// Code, Codex, Gemini, and OpenCode — and how to invoke each one for a given task.
+//
+// A Provider owns the command line, required toolset, and prompt shape for its
+// agent, so adding support for another agent means adding a Provider here rather
+// than threading conditionals through the runner.
 package provider
 
 import (

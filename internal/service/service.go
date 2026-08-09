@@ -1,3 +1,8 @@
+// Package service installs and controls the vigilante daemon as a native
+// operating-system service: a launchd job on macOS and a systemd unit on Linux.
+//
+// The unit definitions are rendered from templates here so `vigilante setup` can
+// produce and refresh them without the operator hand-editing platform config.
 package service
 
 import (

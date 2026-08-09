@@ -1,3 +1,9 @@
+// Package ghcli wraps the GitHub CLI. Every GitHub interaction vigilante
+// performs — issue comments and labels, pull request creation and review state,
+// deploy keys, reactions — is a `gh` invocation routed through here.
+//
+// Driving `gh` instead of the REST API means vigilante uses the operator's
+// existing GitHub authentication and never has to hold a token of its own.
 package ghcli
 
 import (
@@ -14,19 +20,32 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/state"
 )
 
-// Type aliases for backward compatibility. The canonical types live in
-// internal/backend so the orchestration loop can depend on backend-neutral
-// definitions while existing callers continue to use ghcli names.
-type Issue = backend.WorkItem
-type Label = backend.Label
-type PullRequest = backend.PullRequest
-type StatusCheckRoll = backend.StatusCheck
-type IssueComment = backend.WorkItemComment
-type IssueDetails = backend.WorkItemDetails
-type IssueUserRef = backend.UserRef
-type RepositoryLabelDetails = backend.RepositoryLabelDetails
-type RateLimitResource = backend.RateLimitResource
-type RateLimitSnapshot = backend.RateLimitSnapshot
+// The canonical definitions live in internal/backend so the orchestration loop can
+// depend on backend-neutral types. These aliases keep the established ghcli names
+// working for existing callers.
+
+type (
+	// Issue is a tracker work item surfaced through the GitHub backend.
+	Issue = backend.WorkItem
+	// Label is a repository label.
+	Label = backend.Label
+	// PullRequest is a pull request and its review-relevant state.
+	PullRequest = backend.PullRequest
+	// StatusCheckRoll is the aggregated status-check result for a commit.
+	StatusCheckRoll = backend.StatusCheck
+	// IssueComment is a single comment on a work item.
+	IssueComment = backend.WorkItemComment
+	// IssueDetails is a work item together with its comments and metadata.
+	IssueDetails = backend.WorkItemDetails
+	// IssueUserRef identifies the user an issue or comment is attributed to.
+	IssueUserRef = backend.UserRef
+	// RepositoryLabelDetails describes a label as configured on a repository.
+	RepositoryLabelDetails = backend.RepositoryLabelDetails
+	// RateLimitResource is the quota state for one rate-limited API resource.
+	RateLimitResource = backend.RateLimitResource
+	// RateLimitSnapshot is the rate-limit state across all resources at a moment.
+	RateLimitSnapshot = backend.RateLimitSnapshot
+)
 
 type rateLimitAPIResponse struct {
 	Resources struct {

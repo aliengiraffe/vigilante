@@ -1,3 +1,10 @@
+// Package state is vigilante's durable record: watch targets, per-issue sessions,
+// and the configuration the daemon reads on every scan.
+//
+// The daemon is expected to be restarted, upgraded, and killed mid-session, so
+// this package is the source of truth for what work exists and how far it got.
+// Types here are persisted, which makes them the part of the codebase most
+// sensitive to backward-incompatible change.
 package state
 
 import (

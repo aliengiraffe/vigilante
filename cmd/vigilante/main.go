@@ -1,3 +1,10 @@
+// Command vigilante is the sandbox-first orchestration CLI and daemon for coding
+// agents. It watches repositories for dispatchable issues, prepares an isolated
+// git worktree per task, launches a supported coding-agent CLI under scoped
+// credentials, and tracks the resulting session through to a pull request.
+//
+// Run `vigilante --help` for the command surface; DOCS.md covers configuration
+// and the daemon lifecycle in full.
 package main
 
 import (

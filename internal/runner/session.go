@@ -1,3 +1,9 @@
+// Package runner drives a single coding-agent session end to end: issue
+// implementation, conflict resolution, and CI remediation.
+//
+// It also decides whether a session actually made progress. That judgement is
+// what lets the daemon distinguish a session worth resuming from one that stalled
+// and needs to be reported as blocked.
 package runner
 
 import (

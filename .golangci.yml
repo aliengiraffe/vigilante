@@ -1,0 +1,133 @@
+# golangci-lint configuration.
+#
+# Deliberately minimal. goreportcard.com — which awesome-go's checklist points at
+# for the static-analysis signal — was sunset in 2026 and no longer publishes a
+# grade, so this config is the durable replacement for the handful of checks that
+# badge used to carry (gofmt, vet, ineffassign, misspell, exported-doc comments).
+#
+# This is not an invitation to enable a broad ruleset. Anything added here must be
+# something a reviewer would genuinely block a pull request on.
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet
+    - ineffassign
+    - misspell
+    # awesome-go requires a Go-style doc comment on every exported identifier;
+    # revive's exported rule is what keeps that true as new code lands.
+    - revive
+
+  settings:
+    revive:
+      rules:
+        - name: exported
+          # Only the missing-comment and malformed-comment checks. The rule's
+          # other opinions (stuttering names, disabled-by-default extras) would
+          # mean renaming existing public API, which is out of scope.
+          arguments:
+            - "disableStutteringCheck"
+            - "sayRepetitiveInsteadOfStutters"
+
+  exclusions:
+    generated: lax
+    rules:
+      # Test files do not need doc comments on exported helpers.
+      - path: _test\.go
+        linters:
+          - revive
+
+      # Baseline, not an exemption.
+      #
+      # Turning the exported rule on found 289 pre-existing undocumented symbols
+      # across these files. Writing 289 doc comments in the same change that adds
+      # the linter would be a repo-wide edit made to satisfy a tool, and the
+      # comments would be filler rather than documentation. Every package now has
+      # a package-level doc comment (the part awesome-go reviewers actually read on
+      # pkg.go.dev); the per-symbol backlog is tracked separately.
+      #
+      # The rule is fully enforced everywhere else, so new files and new packages
+      # are covered from the moment they are added. This list is append-never:
+      # entries come off it as files get documented, and a file may only be added
+      # back if it is deleted and reintroduced. The counts are the burn-down.
+      - path: internal/github/github\.go
+        linters: [revive]
+        text: "should have comment"      # 47
+      - path: internal/skill/skill\.go
+        linters: [revive]
+        text: "should have comment"      # 38
+      - path: internal/state/state\.go
+        linters: [revive]
+        text: "should have comment"      # 33
+      - path: internal/backend/github/github\.go
+        linters: [revive]
+        text: "should have comment"      # 28
+      - path: internal/app/app\.go
+        linters: [revive]
+        text: "should have comment"      # 20
+      - path: internal/backend/linear/linear\.go
+        linters: [revive]
+        text: "should have comment"      # 16
+      - path: internal/telemetry/telemetry\.go
+        linters: [revive]
+        text: "should have comment"      # 15
+      - path: internal/repo/repo\.go
+        linters: [revive]
+        text: "should have comment"      # 15
+      - path: internal/provider/provider\.go
+        linters: [revive]
+        text: "should have comment"      # 14
+      - path: internal/worktree/worktree\.go
+        linters: [revive]
+        text: "should have comment"      # 12
+      - path: internal/service/service\.go
+        linters: [revive]
+        text: "should have comment"      # 10
+      - path: internal/environment/environment\.go
+        linters: [revive]
+        text: "should have comment"      # 10
+      - path: internal/github/comment_format\.go
+        linters: [revive]
+        text: "should have comment"      # 6
+      - path: internal/testutil/testutil\.go
+        linters: [revive]
+        text: "should have comment"      # 5
+      - path: internal/runner/session\.go
+        linters: [revive]
+        text: "should have comment"      # 3
+      - path: internal/fork/fork\.go
+        linters: [revive]
+        text: "should have comment"      # 3
+      - path: internal/environment/accesslog\.go
+        linters: [revive]
+        text: "should have comment"      # 3
+      - path: internal/blocking/reason\.go
+        linters: [revive]
+        text: "should have comment"      # 3
+      - path: internal/provider/compatibility\.go
+        linters: [revive]
+        text: "should have comment"      # 2
+      - path: internal/github/sanitize\.go
+        linters: [revive]
+        text: "should have comment"      # 2
+      - path: internal/github/labels_manifest\.go
+        linters: [revive]
+        text: "should have comment"      # 2
+      - path: internal/hardening/hardening\.go
+        linters: [revive]
+        text: "should have comment"      # 1
+      - path: internal/build/build\.go
+        linters: [revive]
+        text: "should have comment"      # 1
+
+issues:
+  # Defaults cap output at 50 per linter and 3 per identical message, which
+  # silently hides findings and makes a truncated run look clean. Report all of
+  # them: a lint gate that under-reports is worse than none.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt
