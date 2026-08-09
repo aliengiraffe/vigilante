@@ -1,3 +1,10 @@
+// Package backend defines the issue-tracker abstraction vigilante orchestrates
+// against: the IssueTracker and LabelManager interfaces plus the tracker-neutral
+// types (work items, labels, progress comments) that cross that boundary.
+//
+// Concrete implementations live in the subpackages, one per tracker. Keeping the
+// interfaces here lets the rest of vigilante depend on the contract instead of on
+// GitHub or Linear specifics.
 package backend
 
 import "time"

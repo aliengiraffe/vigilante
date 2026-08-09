@@ -1,0 +1,55 @@
+# Codecov configuration.
+#
+# awesome-go's quality standard asks for >=80% coverage on non-data packages, and
+# its automated check requires a reachable Codecov (or Coveralls) report link —
+# that check accepts only codecov.io or coveralls.io URLs, which is why this
+# integration exists rather than a self-generated badge.
+#
+# The percentages here will NOT match `task coverage`, and that is expected.
+# Codecov reports LINE coverage converted from the Go profile (13332 lines at the
+# 70.9% baseline), while Go tooling reports STATEMENT coverage (9602 statements).
+# The same profile therefore reads ~67% here and ~71% locally. The targets below
+# are line-based; the 80% figure the project is aiming for, and the ratchet in
+# scripts/coverage-threshold, are statement-based. Compare like with like before
+# concluding coverage moved.
+
+codecov:
+  require_ci_to_pass: true
+  notify:
+    # Report as soon as the single CI upload lands. The default waits for every
+    # expected upload, which on a Markdown-only pull request never arrives — the
+    # coverage steps are skipped by design — and leaves a permanently pending
+    # status on docs PRs.
+    after_n_builds: 1
+
+coverage:
+  precision: 1
+  round: down
+  range: "70...80"
+
+  status:
+    # Informational while the repo climbs from its ~71% baseline: a hard 80% gate
+    # on the overall number would fail every pull request today. The floor is
+    # enforced instead by scripts/coverage.sh, which fails the build below the
+    # threshold committed in scripts/coverage-threshold.
+    project:
+      default:
+        target: 80%
+        informational: true
+
+    # New and changed code is held to the awesome-go bar immediately. This is
+    # what actually moves the total up, rather than waiting on a bulk backfill.
+    patch:
+      default:
+        target: 80%
+
+comment:
+  layout: "condensed_header, diff, flags, components"
+  require_changes: true
+
+ignore:
+  - "internal/testutil/**"     # test helpers, exercised only by other tests
+  - "scripts/**"               # shell scripts under Go test harnesses, no Go statements
+  - "dist/**"                  # GoReleaser build output
+  - ".worktrees/**"            # Vigilante per-issue worktrees
+  - "website/**"               # docs site, not Go

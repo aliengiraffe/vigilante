@@ -1,3 +1,8 @@
+// Package telemetry exports vigilante's operational events over OpenTelemetry:
+// command invocations, workflow milestones, and downstream rate limiting.
+//
+// Every capture path is a no-op unless an exporter has been configured, so the
+// CLI stays usable — and silent — when no collector is set up.
 package telemetry
 
 import (

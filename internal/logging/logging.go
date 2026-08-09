@@ -1,3 +1,9 @@
+// Package logging provides the daemon's structured logger and the size-bounded
+// rotation that keeps long-running daemon logs from filling the disk.
+//
+// Rotation is enforced here rather than delegated to an external logrotate so a
+// vigilante daemon has the same log-retention behavior on every platform it
+// supports.
 package logging
 
 import (

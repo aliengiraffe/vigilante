@@ -1,3 +1,8 @@
+// Package testutil provides the shared fakes vigilante's tests use in place of
+// the host: a scripted environment.Runner that answers commands from a fixture
+// map, and a discarding writer.
+//
+// It is test support only and is excluded from coverage reporting; see codecov.yml.
 package testutil
 
 import (

@@ -1,3 +1,9 @@
+// Package app implements the vigilante command surface: argument parsing, the
+// subcommand handlers behind the CLI, and the operator-facing reporting such as
+// `vigilante status` and `vigilante logs`.
+//
+// It is the composition layer. Business logic belongs in the packages it calls
+// into (state, runner, worktree, github, and so on) rather than here.
 package app
 
 import (

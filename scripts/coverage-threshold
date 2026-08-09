@@ -1,0 +1,17 @@
+# Minimum total statement coverage, in percent, that `scripts/coverage.sh`
+# enforces. This is the single source of truth: `task coverage` and CI both read
+# it from here, so raising the ratchet is a one-line change in one file.
+#
+# awesome-go's quality standard asks for >=80% per non-data package. The repo is
+# not there yet, so this starts at the measured baseline and only moves up. See
+# CONTRIBUTING.md.
+#
+# Computed by scripts/coverage.sh, which counts every block in the profile.
+# `go tool cover -func` reports a slightly higher number for the same profile: it
+# attributes blocks to declared functions and drops what it cannot place, so its
+# denominator is smaller. That gap is methodology, not a coverage change. The
+# ratchet has to be enforced against the number this script actually produces, and
+# the per-package figures it prints match `go test`'s own per-package output.
+#
+# Codecov reports lower still (line coverage, not statements). See codecov.yml.
+77.3

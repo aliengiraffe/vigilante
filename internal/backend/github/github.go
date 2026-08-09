@@ -1,3 +1,7 @@
+// Package github implements the backend.IssueTracker and backend.LabelManager
+// interfaces for GitHub, driving the authenticated `gh` CLI rather than talking
+// to the REST API directly so vigilante inherits the operator's existing gh
+// credentials and configuration.
 package github
 
 import (

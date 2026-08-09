@@ -2,13 +2,21 @@ name: CI
 
 on:
   pull_request:
+  # Codecov needs a base commit on the default branch to diff pull requests
+  # against. Without a `main` run, every PR comparison is against nothing and the
+  # patch status is meaningless.
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  # Superseded PR runs are disposable, but a cancelled `main` run leaves Codecov
+  # without a base report for that commit, so let pushes finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   verify:
@@ -23,9 +31,19 @@ jobs:
       - name: Detect Markdown-only pull request
         id: changes
         env:
+          EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          # Only pull requests have a base/head pair to diff. On a push to main
+          # these are empty, and an empty diff would look Markdown-only and skip
+          # every Go step — including the coverage upload Codecov needs.
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "markdown_only=false" >> "$GITHUB_OUTPUT"
+            echo "Event is $EVENT_NAME, not a pull request; running full CI."
+            exit 0
+          fi
+
           mapfile -t changed_files < <(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
 
           if [ "${#changed_files[@]}" -eq 0 ]; then
@@ -80,9 +98,30 @@ jobs:
         if: steps.changes.outputs.markdown_only != 'true'
         run: go vet ./...
 
-      - name: Run tests
+      - name: Lint with golangci-lint
         if: steps.changes.outputs.markdown_only != 'true'
-        run: go test ./...
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.12.2
+
+      - name: Run tests with coverage
+        if: steps.changes.outputs.markdown_only != 'true'
+        # Same script `task coverage` runs, so the enforced threshold and the
+        # reported number cannot drift between local and CI.
+        run: ./scripts/coverage.sh
+
+      - name: Upload coverage to Codecov
+        if: steps.changes.outputs.markdown_only != 'true'
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
+        with:
+          files: ./coverage.out
+          disable_search: true
+          slug: ${{ github.repository }}
+          token: ${{ secrets.CODECOV_TOKEN }}
+          # A missing or expired upload token must not fail the build. Coverage
+          # is already enforced locally by scripts/coverage.sh; Codecov is the
+          # public report awesome-go asks for, not the gate.
+          fail_ci_if_error: false
 
       - name: Verify build
         if: steps.changes.outputs.markdown_only != 'true'

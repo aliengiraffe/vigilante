@@ -1,3 +1,6 @@
+// Package linear implements the backend.IssueTracker interface for Linear,
+// mapping Linear issues onto the tracker-neutral work-item types vigilante
+// dispatches against.
 package linear
 
 import (

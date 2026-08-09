@@ -1,3 +1,9 @@
+// Package blocking classifies why a session stopped making progress and turns
+// that into the structured blocked reason vigilante records in session state and
+// reports back on the issue.
+//
+// The point of classifying rather than passing raw command output through is that
+// an operator reading an issue comment needs the cause, not a transcript.
 package blocking
 
 import (

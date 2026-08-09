@@ -1,3 +1,10 @@
+// Package fork implements vigilante's fork-based workflow, where the
+// authenticated identity opens pull requests from a fork instead of pushing
+// branches to the watched upstream repository.
+//
+// The invariant it maintains: origin keeps pointing at upstream so issue
+// selection, comments, and pull request targeting stay upstream-relative, while a
+// separate "fork" remote receives the implementation branches.
 package fork
 
 import (

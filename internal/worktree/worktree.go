@@ -1,3 +1,11 @@
+// Package worktree manages the per-issue git worktrees that isolate one task from
+// another, along with the deterministic branch names and paths derived from an
+// issue number and title.
+//
+// Isolation is the reason vigilante uses worktrees at all: an agent that goes
+// wrong corrupts one disposable checkout rather than the operator's working tree.
+// Cleanup therefore has to tolerate partial state left behind by an interrupted
+// session.
 package worktree
 
 import (
