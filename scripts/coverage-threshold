@@ -14,4 +14,4 @@
 # the per-package figures it prints match `go test`'s own per-package output.
 #
 # Codecov reports lower still (line coverage, not statements). See codecov.yml.
-75.3
+76.0
