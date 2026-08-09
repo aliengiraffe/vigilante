@@ -1,8 +1,9 @@
 # Codecov configuration.
 #
 # awesome-go's quality standard asks for >=80% coverage on non-data packages, and
-# its automated check requires a reachable Codecov (or Coveralls) report link.
-# See docs/awesome-go-submission.md.
+# its automated check requires a reachable Codecov (or Coveralls) report link —
+# that check accepts only codecov.io or coveralls.io URLs, which is why this
+# integration exists rather than a self-generated badge.
 #
 # The percentages here will NOT match `task coverage`, and that is expected.
 # Codecov reports LINE coverage converted from the Go profile (13332 lines at the

@@ -4,7 +4,7 @@
 #
 # awesome-go's quality standard asks for >=80% per non-data package. The repo is
 # not there yet, so this starts at the measured baseline and only moves up. See
-# docs/awesome-go-submission.md and CONTRIBUTING.md.
+# CONTRIBUTING.md.
 #
 # Computed by scripts/coverage.sh, which counts every block in the profile.
 # `go tool cover -func` reports a slightly higher number for the same profile: it
