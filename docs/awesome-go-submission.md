@@ -12,11 +12,14 @@ gets closed and resubmitting is not always welcome.
 - [ ] **Repository age.** awesome-go requires 5+ months of history since the first
       commit. First commit is 2026-03-10, so the repository qualifies from
       **2026-08-10**. Do not submit before that date.
-- [ ] **Codecov report is live.** `https://app.codecov.io/gh/aliengiraffe/vigilante`
-      must load and show a report. This requires `CODECOV_TOKEN` in repository
-      secrets and at least one completed CI run on `main`. The coverage link is a
-      non-blocking check, but a dead link invites a reviewer to look harder at
-      everything else.
+- [x] **`CODECOV_TOKEN` is configured** as a repository secret (added 2026-08-09).
+- [ ] **Codecov shows a report on `main`.** `https://app.codecov.io/gh/aliengiraffe/vigilante`
+      loads, but the README badge reads "unknown" until a CI run on `main` uploads
+      a report for that branch — the badge URL is branch-scoped. That happens on
+      the first push to `main` after the Codecov integration merges. Confirm the
+      badge renders a percentage before submitting; the coverage link is only a
+      non-blocking check, but a dead link or an "unknown" badge invites a reviewer
+      to look harder at everything else.
 - [ ] **Coverage is defensible.** awesome-go's standard is ≥80% per non-data
       package and coverage is reviewed *manually*. The total is well under that
       (see `task coverage`), so decide deliberately whether to submit now or after

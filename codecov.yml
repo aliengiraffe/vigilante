@@ -3,6 +3,14 @@
 # awesome-go's quality standard asks for >=80% coverage on non-data packages, and
 # its automated check requires a reachable Codecov (or Coveralls) report link.
 # See docs/awesome-go-submission.md.
+#
+# The percentages here will NOT match `task coverage`, and that is expected.
+# Codecov reports LINE coverage converted from the Go profile (13332 lines at the
+# 70.9% baseline), while Go tooling reports STATEMENT coverage (9602 statements).
+# The same profile therefore reads ~67% here and ~71% locally. The targets below
+# are line-based; the 80% figure the project is aiming for, and the ratchet in
+# scripts/coverage-threshold, are statement-based. Compare like with like before
+# concluding coverage moved.
 
 codecov:
   require_ci_to_pass: true

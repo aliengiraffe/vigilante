@@ -30,6 +30,12 @@ by covering what you touch rather than by bulk backfill.
 Coverage reports are published to [Codecov][cc]. `internal/testutil` and the
 non-Go directories are excluded; see `codecov.yml`.
 
+Codecov's percentage is lower than `task coverage`'s and both are correct: Codecov
+converts the Go profile to **line** coverage, while Go tooling reports **statement**
+coverage. The same profile reads about 67% on Codecov and about 71% locally. The
+80% goal and the committed ratchet are statement-based, so compare against
+`task coverage` when judging whether coverage moved.
+
 [ag]: https://github.com/avelino/awesome-go/blob/main/CONTRIBUTING.md
 [cc]: https://app.codecov.io/gh/aliengiraffe/vigilante
 
