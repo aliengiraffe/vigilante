@@ -9743,7 +9743,7 @@ func TestRecreateCommandParsing(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("expected exit code 0 for --help, got %d", exitCode)
 	}
-	if !strings.Contains(stdout.String(), "vigilante recreate --repo") {
+	if !strings.Contains(stdout.String(), "vigilante recreate [--repo") || !strings.Contains(stdout.String(), "inferred from the current watched checkout") {
 		t.Fatalf("expected usage text in help output, got: %s", stdout.String())
 	}
 }
@@ -9764,6 +9764,127 @@ func TestRecreateCommandMissingFlags(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "usage: vigilante recreate") {
 		t.Fatalf("expected usage error, got: %s", stderr.String())
+	}
+}
+
+func TestRecreateCommandInfersWatchedRepoFromCWD(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Chdir(home)
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{Outputs: mergeStringMaps(
+		map[string]string{
+			"git rev-parse --is-inside-work-tree": "true\n",
+			"git remote get-url origin":           "git@github.com:owner/repo.git\n",
+		},
+		recreateCommandOutputs("Owner/Repo", 70, 71),
+	)}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: home, Repo: "Owner/Repo"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if exitCode := app.Run(context.Background(), []string{"recreate", "--issue", "70"}); exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+	if !strings.Contains(stdout.String(), "recreated Owner/Repo issue #70 as #71") {
+		t.Fatalf("unexpected output: %s", stdout.String())
+	}
+}
+
+func TestRecreateCommandRejectsUnwatchedInferredRepo(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Chdir(home)
+
+	app := New()
+	var stderr bytes.Buffer
+	app.stdout = testutil.IODiscard{}
+	app.stderr = &stderr
+	app.env.Runner = testutil.FakeRunner{Outputs: map[string]string{
+		"git rev-parse --is-inside-work-tree": "true\n",
+		"git remote get-url origin":           "git@github.com:owner/unwatched.git\n",
+	}}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets(nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if exitCode := app.Run(context.Background(), []string{"recreate", "--issue", "70"}); exitCode != 1 {
+		t.Fatalf("expected exit code 1, got %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "repository owner/unwatched") || !strings.Contains(stderr.String(), "not watched by Vigilante") {
+		t.Fatalf("unexpected error: %s", stderr.String())
+	}
+}
+
+func TestRecreateCommandRejectsNonGitCWD(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Chdir(home)
+
+	app := New()
+	var stderr bytes.Buffer
+	app.stdout = testutil.IODiscard{}
+	app.stderr = &stderr
+	app.env.Runner = testutil.FakeRunner{Errors: map[string]error{
+		"git rev-parse --is-inside-work-tree": errors.New("not a git repository"),
+	}}
+
+	if exitCode := app.Run(context.Background(), []string{"recreate", "--issue", "70"}); exitCode != 1 {
+		t.Fatalf("expected exit code 1, got %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "no repository could be inferred") || !strings.Contains(stderr.String(), "supply --repo") {
+		t.Fatalf("unexpected error: %s", stderr.String())
+	}
+}
+
+func TestRecreateCommandExplicitRepoTakesPrecedenceOverCWD(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Chdir(home)
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	app.env.Runner = testutil.FakeRunner{Outputs: recreateCommandOutputs("explicit/repo", 70, 71)}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: home, Repo: "explicit/repo"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if exitCode := app.Run(context.Background(), []string{"recreate", "--repo", "explicit/repo", "--issue", "70"}); exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+	if !strings.Contains(stdout.String(), "recreated explicit/repo issue #70 as #71") {
+		t.Fatalf("unexpected output: %s", stdout.String())
+	}
+}
+
+func recreateCommandOutputs(repoSlug string, oldIssue int, newIssue int) map[string]string {
+	oldIssueText := fmt.Sprintf("%d", oldIssue)
+	newIssueText := fmt.Sprintf("%d", newIssue)
+	body := "body\n\n---\n_Recreated from #" + oldIssueText + " by Vigilante._"
+	return map[string]string{
+		"gh api repos/" + repoSlug + "/issues/" + oldIssueText: `{"title":"title","body":"body","html_url":"https://example.test/issue","state":"open","labels":[],"assignees":[]}`,
+		testutil.Key("gh", "api", "--method", "POST", "-H", "Accept: application/vnd.github+json", "repos/"+repoSlug+"/issues", "-f", "title=title", "-f", "body="+body):                                                                                                           `{"number":` + newIssueText + `,"html_url":"https://example.test/new"}`,
+		"gh issue comment --repo " + repoSlug + " " + oldIssueText + " --body ## ♻️ Issue Recreated\n\nThis issue has been recreated as #" + newIssueText + ".\n\nThe original issue is being closed as `not planned` and stale artifacts are being cleaned up.\n\nSource: `cli`.": "ok",
+		testutil.Key("gh", "api", "--method", "PATCH", "-H", "Accept: application/vnd.github+json", "repos/"+repoSlug+"/issues/"+oldIssueText, "-f", "state=closed", "-f", "state_reason=not_planned"):                                                                             "ok",
 	}
 }
 
