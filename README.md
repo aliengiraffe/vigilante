@@ -82,6 +82,11 @@ Bootstrap the local machine and install the managed service. `--provider` defaul
 vigilante setup -d
 ```
 
+For per-issue Claude model selection, add one of the human-managed labels
+`claude:sonnet`, `claude:opus`, or `claude:fable`. For example, labeling an
+issue `claude:opus` routes it to Claude and launches that session with
+`--model opus`; resumes keep the model captured when the session started.
+
 ## Quick Start
 
 Register a repository and let Vigilante manage the issue-to-PR loop:

@@ -154,6 +154,30 @@
       ]
     },
     {
+      "name": "claude:sonnet",
+      "color": "D4A574",
+      "group": "provider-routing",
+      "behavior": "control",
+      "applied_by": "human",
+      "description": "Routes the issue to Claude using the latest Sonnet model alias."
+    },
+    {
+      "name": "claude:opus",
+      "color": "A56CC1",
+      "group": "provider-routing",
+      "behavior": "control",
+      "applied_by": "human",
+      "description": "Routes the issue to Claude using the latest Opus model alias."
+    },
+    {
+      "name": "claude:fable",
+      "color": "E8B4B8",
+      "group": "provider-routing",
+      "behavior": "control",
+      "applied_by": "human",
+      "description": "Routes the issue to Claude using the Fable model alias."
+    },
+    {
       "name": "gemini",
       "color": "006B75",
       "group": "provider-routing",

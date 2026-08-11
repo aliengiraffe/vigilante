@@ -1279,7 +1279,7 @@ func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumbe
 		Labels: labelsToBackendLabels(issueLabels),
 	}
 
-	selectedProvider, err := resolveIssueProvider(target, ghIssue)
+	selectedProvider, selectedModel, err := resolveIssueProvider(target, ghIssue)
 	if err != nil {
 		return err
 	}
@@ -1320,6 +1320,7 @@ func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumbe
 		RepoPath:           target.Path,
 		Repo:               target.Repo,
 		Provider:           selectedProvider,
+		Model:              selectedModel,
 		IssueBackend:       target.EffectiveIssueBackend(),
 		GitBackend:         target.EffectiveGitBackend(),
 		PRBackend:          target.EffectivePRBackend(),
@@ -2236,7 +2237,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			for _, next := range nextIssues {
 				a.logger.Info("scan repo selected issue", "repo", target.Repo, "issue", next.Number, "title", next.Title)
 
-				selectedProvider, providerErr := resolveIssueProvider(*target, next)
+				selectedProvider, selectedModel, providerErr := resolveIssueProvider(*target, next)
 				if providerErr != nil {
 					a.logger.Info("scan repo issue provider conflict", "repo", target.Repo, "issue", next.Number, "err", providerErr)
 					fmt.Fprintf(a.stdout, "repo: %s skipped issue #%d: %s\n", target.Repo, next.Number, summarizeText(providerErr.Error()))
@@ -2325,6 +2326,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 					RepoPath:           target.Path,
 					Repo:               target.Repo,
 					Provider:           selectedProvider,
+					Model:              selectedModel,
 					IssueBackend:       target.EffectiveIssueBackend(),
 					GitBackend:         target.EffectiveGitBackend(),
 					PRBackend:          target.EffectivePRBackend(),
@@ -4154,7 +4156,7 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 		return fmt.Errorf("redispatch would exceed max parallel sessions for %s", repoSlug)
 	}
 
-	selectedProvider, err := resolveIssueProvider(target, *selectedIssue)
+	selectedProvider, selectedModel, err := resolveIssueProvider(target, *selectedIssue)
 	if err != nil {
 		return err
 	}
@@ -4173,6 +4175,7 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 		RepoPath:           target.Path,
 		Repo:               target.Repo,
 		Provider:           selectedProvider,
+		Model:              selectedModel,
 		IssueBackend:       target.EffectiveIssueBackend(),
 		GitBackend:         target.EffectiveGitBackend(),
 		PRBackend:          target.EffectivePRBackend(),
@@ -5457,20 +5460,20 @@ func summarizeText(text string) string {
 	return text
 }
 
-func resolveIssueProvider(target state.WatchTarget, issue ghcli.Issue) (string, error) {
+func resolveIssueProvider(target state.WatchTarget, issue ghcli.Issue) (string, string, error) {
 	selected := strings.TrimSpace(target.Provider)
 	if selected == "" {
 		selected = provider.DefaultID
 	}
 
-	override, err := provider.ResolveIssueLabel(issue.Labels)
+	override, model, err := provider.ResolveIssueLabels(issue.Labels)
 	if err != nil {
-		return "", fmt.Errorf("issue #%d has conflicting provider labels: %w", issue.Number, err)
+		return "", "", fmt.Errorf("issue #%d has conflicting provider labels: %w", issue.Number, err)
 	}
 	if override == "" {
-		return selected, nil
+		return selected, "", nil
 	}
-	return override, nil
+	return override, model, nil
 }
 
 func blockedIssueSessionForDispatchFailure(target state.WatchTarget, issue ghcli.Issue, selectedProvider string, err error, now time.Time) state.Session {

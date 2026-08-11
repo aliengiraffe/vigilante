@@ -75,6 +75,15 @@ func TestIssueLabelManifestKeepsCompatibilityControls(t *testing.T) {
 			t.Fatalf("expected provider label %q to remain a control routing label: %#v", provider, label)
 		}
 	}
+	for _, name := range []string{"claude:sonnet", "claude:opus", "claude:fable"} {
+		label, ok := labels[name]
+		if !ok {
+			t.Fatalf("expected Claude model label %q", name)
+		}
+		if label.Group != "provider-routing" || label.Behavior != "control" {
+			t.Fatalf("expected model label %q to be a control routing label: %#v", name, label)
+		}
+	}
 
 	resume, ok := labels["vigilante:resume"]
 	if !ok {
