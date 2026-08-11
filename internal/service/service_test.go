@@ -20,6 +20,86 @@ type recordingRunner struct {
 	calls []string
 }
 
+func TestServiceParsingHelpers(t *testing.T) {
+	for input, want := range map[string]string{
+		"ExecStart=/usr/local/bin/vigilante daemon run": "/usr/local/bin/vigilante",
+		"ExecStart=/usr/local/bin/vigilante --flag":     "/usr/local/bin/vigilante",
+		"ExecStart=": "", "Description=x": "",
+	} {
+		if got := parseSystemdExecutable(input); got != want {
+			t.Errorf("parseSystemdExecutable(%q)=%q want %q", input, got, want)
+		}
+	}
+	for input, want := range map[string]string{
+		"vigilante version v1.2.3": "1.2.3", "\n custom build\nmore": "custom build", "   ": "",
+	} {
+		if got := normalizeDaemonVersionOutput(input); got != want {
+			t.Errorf("normalize(%q)=%q want %q", input, got, want)
+		}
+	}
+	dir := t.TempDir()
+	launchd := filepath.Join(dir, "agent.plist")
+	if err := os.WriteFile(launchd, []byte(`<key>ProgramArguments</key><array><string>/Applications/Vigilante &amp; Tools/vigilante</string><string>daemon</string></array>`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := daemonExecutableFromServiceDefinition("darwin", launchd); err != nil || got != "/Applications/Vigilante & Tools/vigilante" {
+		t.Fatalf("launchd=%q err=%v", got, err)
+	}
+	unit := filepath.Join(dir, "vigilante.service")
+	if err := os.WriteFile(unit, []byte("[Service]\nExecStart=/bin/vigilante daemon run\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := daemonExecutableFromServiceDefinition("linux", unit); err != nil || got != "/bin/vigilante" {
+		t.Fatalf("systemd=%q err=%v", got, err)
+	}
+	if _, err := daemonExecutableFromServiceDefinition("windows", unit); err == nil {
+		t.Fatal("expected unsupported OS")
+	}
+	if _, err := daemonExecutableFromServiceDefinition("linux", filepath.Join(dir, "missing")); err == nil {
+		t.Fatal("expected read error")
+	}
+}
+
+func TestShellDerivedPath(t *testing.T) {
+	key := `/bin/zsh -lic printf "%s" "$PATH"`
+	got, err := shellDerivedPath(context.Background(), testutil.FakeRunner{Outputs: map[string]string{key: " /opt/bin:/usr/bin \n"}}, "/bin/zsh")
+	if err != nil || got != "/opt/bin:/usr/bin" {
+		t.Fatalf("path=%q err=%v", got, err)
+	}
+	if _, err := shellDerivedPath(context.Background(), testutil.FakeRunner{Outputs: map[string]string{key: " "}}, "/bin/zsh"); err == nil || !strings.Contains(err.Error(), "empty PATH") {
+		t.Fatalf("error=%v", err)
+	}
+	want := errors.New("shell failed")
+	if _, err := shellDerivedPath(context.Background(), testutil.FakeRunner{Errors: map[string]error{key: want}}, "/bin/zsh"); !errors.Is(err, want) {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestInstallSystemdUserService(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	store := state.NewStore()
+	cfg := Config{Executable: "/usr/bin/vigilante", PathEnv: "/usr/bin", HomeDir: home}
+	runner := testutil.FakeRunner{Outputs: map[string]string{"systemctl --user daemon-reload": "ok", "systemctl --user enable --now vigilante.service": "ok"}}
+	env := &environment.Environment{OS: "linux", Runner: runner}
+	if err := installSystemdUserService(context.Background(), env, store, cfg); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".config", "systemd", "user", systemdUnitName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "ExecStart=/usr/bin/vigilante daemon run") {
+		t.Fatalf("unit=%s", data)
+	}
+	for _, command := range []string{"systemctl --user daemon-reload", "systemctl --user enable --now vigilante.service"} {
+		r := testutil.FakeRunner{Outputs: runner.Outputs, Errors: map[string]error{command: errors.New("systemctl failed")}}
+		if err := installSystemdUserService(context.Background(), &environment.Environment{OS: "linux", Runner: r}, store, cfg); err == nil {
+			t.Errorf("expected failure for %q", command)
+		}
+	}
+}
+
 func (r *recordingRunner) Run(ctx context.Context, dir string, name string, args ...string) (string, error) {
 	r.calls = append(r.calls, testutil.Key(name, args...))
 	return r.FakeRunner.Run(ctx, dir, name, args...)

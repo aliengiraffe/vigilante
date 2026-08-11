@@ -2,11 +2,111 @@ package sandbox
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestManagerSessionLifecycleHelpers(t *testing.T) {
+	r := &fakeRunner{}
+	m, err := NewManager(r, slog.Default(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.ProxyAddr() != "" {
+		t.Fatalf("unstarted proxy=%q", m.ProxyAddr())
+	}
+	if err := m.StartProxy("127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
+	if m.ProxyAddr() == "" {
+		t.Fatal("started proxy has no address")
+	}
+	defer m.StopProxy(context.Background())
+	sess := &Session{ID: "s1", ContainerName: "container-1", Status: "provisioned"}
+	m.sessions[sess.ID] = sess
+	if got, ok := m.GetSession("s1"); !ok || got != sess {
+		t.Fatalf("session=%#v ok=%v", got, ok)
+	}
+	if ids := m.ActiveSessions(); len(ids) != 1 || ids[0] != "s1" {
+		t.Fatalf("active=%#v", ids)
+	}
+	if err := m.Start(context.Background(), "s1"); err != nil || sess.Status != "running" {
+		t.Fatalf("status=%q err=%v calls=%#v", sess.Status, err, r.calls)
+	}
+	if err := m.StopContainer(context.Background(), "s1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(context.Background(), "missing"); err == nil {
+		t.Fatal("expected missing start error")
+	}
+	if err := m.StopContainer(context.Background(), "missing"); err == nil {
+		t.Fatal("expected missing stop error")
+	}
+}
+
+func TestManagerTeardownAndReconcile(t *testing.T) {
+	r := &fakeRunner{}
+	m, err := NewManager(r, slog.Default(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshDir := filepath.Join(t.TempDir(), "ssh")
+	if err := os.MkdirAll(sshDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sess := &Session{ID: "s1", ContainerName: "vigilante-sandbox-s1", SSHKeyDir: sshDir, Status: "running"}
+	m.sessions[sess.ID] = sess
+	if err := m.Teardown(context.Background(), "s1", "test complete"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.GetSession("s1"); ok || sess.Status != "terminated" {
+		t.Fatalf("session retained status=%q", sess.Status)
+	}
+	if _, err := os.Stat(sshDir); !os.IsNotExist(err) {
+		t.Fatalf("ssh dir still exists: %v", err)
+	}
+	if err := m.Teardown(context.Background(), "missing", "test"); err == nil {
+		t.Fatal("expected missing teardown error")
+	}
+	r.out = "vigilante-sandbox-orphan\n"
+	if err := m.ReconcileStale(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(r.calls, "\n")
+	if !strings.Contains(joined, "docker stop") || !strings.Contains(joined, "docker rm") {
+		t.Fatalf("calls=%s", joined)
+	}
+}
+
+func TestManagerRunnerErrorPaths(t *testing.T) {
+	r := &fakeRunner{err: fmt.Errorf("docker failed")}
+	m, err := NewManager(r, slog.Default(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.sessions["s1"] = &Session{ID: "s1", ContainerName: "c1"}
+	if err := m.Start(context.Background(), "s1"); err == nil {
+		t.Fatal("expected start error")
+	}
+	if err := m.StopContainer(context.Background(), "s1"); err == nil {
+		t.Fatal("expected stop error")
+	}
+	if err := m.ReconcileStale(context.Background()); err == nil || !strings.Contains(err.Error(), "reconcile stale") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestProxyPortBoundaries(t *testing.T) {
+	for input, want := range map[string]int{"": 0, "invalid": 0, "127.0.0.1:notaport": 0, "127.0.0.1:9821": 9821} {
+		if got := proxyPort(input); got != want {
+			t.Errorf("proxyPort(%q)=%d want %d", input, got, want)
+		}
+	}
+}
 
 type fakeRunner struct {
 	calls []string

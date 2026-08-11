@@ -22,19 +22,20 @@ threshold is a ratchet: it only moves up. If a change raises the total, raising
 the threshold in the same pull request is welcome.
 
 The target is **80% per non-data package**, which is the standard [awesome-go][ag]
-applies to listed projects. The repository is not there yet — the committed
-threshold starts at the measured baseline and climbs. New and changed code is held
-to 80% immediately through Codecov's patch status, so the way the number goes up is
-by covering what you touch rather than by bulk backfill.
+applies to listed projects. The committed threshold records the measured local
+baseline and only moves up. New and changed code is held to 80% immediately
+through Codecov's patch status, so the way the number stays healthy is by covering
+what you touch.
 
 Coverage reports are published to [Codecov][cc]. `internal/testutil` and the
 non-Go directories are excluded; see `codecov.yml`.
 
 Codecov's percentage is lower than `task coverage`'s and both are correct: Codecov
 converts the Go profile to **line** coverage, while Go tooling reports **statement**
-coverage. The same profile reads about 67% on Codecov and about 71% locally. The
-80% goal and the committed ratchet are statement-based, so compare against
-`task coverage` when judging whether coverage moved.
+coverage. After the targeted coverage backfill, the project is at the 80% Codecov
+line-coverage target and the same profile reports at least 82.6% local statement coverage.
+The committed ratchet is statement-based, so compare against `task coverage` when
+judging whether local coverage moved.
 
 [ag]: https://github.com/avelino/awesome-go/blob/main/CONTRIBUTING.md
 [cc]: https://app.codecov.io/gh/aliengiraffe/vigilante

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -435,5 +436,78 @@ func TestStatusDashboardDoesNotPollRateLimitEveryTick(t *testing.T) {
 	}
 	if !model.sessions.Loaded {
 		t.Fatal("expected session ticks to refresh the local session data")
+	}
+}
+
+func TestStatusRenderingBoundaryHelpers(t *testing.T) {
+	for height, want := range map[int]int{0: 1, 1: 1, 2: 1, 3: 1, 10: 8} {
+		if got := (statusModel{height: height}).pageSize(); got != want {
+			t.Errorf("pageSize(%d)=%d want %d", height, got, want)
+		}
+	}
+	for _, tc := range []struct {
+		info serviceStatusInfo
+		want string
+	}{
+		{serviceStatusInfo{DaemonVersion: "1.2.3", Running: true}, "1.2.3"},
+		{serviceStatusInfo{DaemonVersion: "1.2.3"}, "configured binary"},
+		{serviceStatusInfo{Running: true}, "unavailable"},
+		{serviceStatusInfo{}, "service not running"},
+	} {
+		if got := statusDaemonVersion(tc.info); !strings.Contains(got, tc.want) {
+			t.Errorf("daemon=%q want %q", got, tc.want)
+		}
+	}
+	for _, state := range []string{"running", "stopped", "unknown"} {
+		if got := statusStateStyle(state).Render("state"); !strings.Contains(got, "state") {
+			t.Errorf("style %s=%q", state, got)
+		}
+	}
+	for _, r := range []ghcli.RateLimitResource{{Limit: 100, Remaining: 80}, {Limit: 100, Remaining: 30}, {Limit: 100, Remaining: 10}, {Limit: 0}, {Limit: 10, Remaining: -2}, {Limit: 10, Remaining: 20}} {
+		row := formatRateLimitGaugeRow("core", r)
+		if !strings.Contains(row, "core") || !strings.Contains(row, fmt.Sprintf("%d/%d", r.Remaining, r.Limit)) {
+			t.Errorf("row=%q", row)
+		}
+	}
+	model := statusModel{service: statusServiceSnapshot{Loaded: true, Err: errors.New("offline")}}
+	if got := strings.Join(model.serviceLines(), "\n"); !strings.Contains(got, "offline") {
+		t.Fatalf("service lines=%q", got)
+	}
+	model.rateLimit = statusRateLimitSnapshot{Loaded: true, Available: true, Snapshot: ghcli.RateLimitSnapshot{}}
+	if got := strings.Join(model.rateLimitLines(), "\n"); !strings.Contains(got, "unavailable") {
+		t.Fatalf("rate lines=%q", got)
+	}
+}
+
+func TestStatusModelNavigationAndRefreshBranches(t *testing.T) {
+	m := loadedStatusModel()
+	m.height = 5
+	m.offset = 3
+	for _, key := range []tea.KeyMsg{{Type: tea.KeyPgUp}, {Type: tea.KeyPgDown}, {Type: tea.KeyHome}, {Type: tea.KeyRunes, Runes: []rune{'g'}}, {Type: tea.KeyEnd}} {
+		updated, _ := m.Update(key)
+		m = updated.(statusModel)
+		if m.offset < 0 || m.offset > len(m.contentLines()) {
+			t.Fatalf("key %s offset=%d", key.String(), m.offset)
+		}
+	}
+	updated, _ := m.Update(statusServiceMsg(statusServiceSnapshot{Info: serviceStatusInfo{State: "stopped"}}))
+	m = updated.(statusModel)
+	if !m.service.Loaded {
+		t.Fatal("service message not loaded")
+	}
+	updated, _ = m.Update(statusRateLimitMsg(statusRateLimitSnapshot{Available: true}))
+	m = updated.(statusModel)
+	if !m.rateLimit.Loaded {
+		t.Fatal("rate message not loaded")
+	}
+	for _, msg := range []tea.Msg{statusServiceTickMsg(time.Now()), statusSessionsTickMsg(time.Now()), statusRateLimitTickMsg(time.Now())} {
+		_, _ = m.Update(msg)
+	}
+	if statusTick(0, func(t time.Time) tea.Msg { return t }) != nil {
+		t.Fatal("zero tick should be nil")
+	}
+	empty := statusModel{}
+	if empty.serviceCmd() != nil || empty.sessionsCmd() != nil || empty.rateLimitCmd() != nil {
+		t.Fatal("nil loaders returned commands")
 	}
 }

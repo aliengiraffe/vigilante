@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,68 @@ import (
 
 	"github.com/nicobistolfi/vigilante/internal/sandbox/token"
 )
+
+func TestProxyLifecycleAndRefresh(t *testing.T) {
+	key, _ := token.GenerateSigningKey()
+	p := New(key, &fakeRunner{}, slog.Default())
+	if p.Addr() != "" {
+		t.Fatalf("unstarted addr=%q", p.Addr())
+	}
+	entry := SessionEntry{SessionID: "session", Repository: "owner/repo", ExpiresAt: time.Now()}
+	p.RegisterSession(entry)
+	body, _ := json.Marshal(TokenRefreshRequest{SessionID: "session", ExtendSeconds: 60})
+	w := httptest.NewRecorder()
+	p.handleTokenRefresh(w, httptest.NewRequest(http.MethodPost, "/api/sandbox/token/refresh", bytes.NewReader(body)))
+	if w.Code != http.StatusOK || !p.sessions["session"].ExpiresAt.Equal(entry.ExpiresAt.Add(time.Minute)) {
+		t.Fatalf("refresh status=%d entry=%#v", w.Code, p.sessions["session"])
+	}
+	w = httptest.NewRecorder()
+	p.handleTokenRefresh(w, httptest.NewRequest(http.MethodPost, "/api/sandbox/token/refresh", strings.NewReader("bad")))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("bad refresh=%d", w.Code)
+	}
+	p.DeregisterSession("session")
+	w = httptest.NewRecorder()
+	p.handleTokenRefresh(w, httptest.NewRequest(http.MethodPost, "/api/sandbox/token/refresh", bytes.NewReader(body)))
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("missing refresh=%d", w.Code)
+	}
+	if err := p.Start("127.0.0.1:0"); err != nil {
+		t.Fatal(err)
+	}
+	if p.Addr() == "" {
+		t.Fatal("started proxy has empty address")
+	}
+	if err := p.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGHEndpointInvalidMissingSessionAndRunnerError(t *testing.T) {
+	key, _ := token.GenerateSigningKey()
+	runner := &fakeRunner{err: fmt.Errorf("gh failed")}
+	p := New(key, runner, slog.Default())
+	w := httptest.NewRecorder()
+	p.handleGH(w, httptest.NewRequest(http.MethodPost, "/api/sandbox/gh", strings.NewReader("bad")))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid=%d", w.Code)
+	}
+	tok, _ := token.Issue(key, token.Claims{SessionID: "missing", Repository: "owner/repo", ExpiresAt: time.Now().Add(time.Hour).Unix()})
+	body, _ := json.Marshal(GHRequest{Command: "issue list", Token: tok})
+	w = httptest.NewRecorder()
+	p.handleGH(w, httptest.NewRequest(http.MethodPost, "/api/sandbox/gh", bytes.NewReader(body)))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("missing=%d", w.Code)
+	}
+	p.RegisterSession(SessionEntry{SessionID: "missing", Repository: "owner/repo"})
+	w = httptest.NewRecorder()
+	p.handleGH(w, httptest.NewRequest(http.MethodPost, "/api/sandbox/gh", bytes.NewReader(body)))
+	var resp GHResponse
+	_ = json.NewDecoder(w.Body).Decode(&resp)
+	if w.Code != http.StatusOK || resp.ExitCode != 1 || !strings.Contains(resp.Stderr, "gh failed") {
+		t.Fatalf("status=%d response=%#v", w.Code, resp)
+	}
+}
 
 type fakeRunner struct {
 	lastArgs  []string

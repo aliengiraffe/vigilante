@@ -5,15 +5,55 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nicobistolfi/vigilante/internal/backend"
+	"github.com/nicobistolfi/vigilante/internal/environment"
 	"github.com/nicobistolfi/vigilante/internal/state"
 	"github.com/nicobistolfi/vigilante/internal/testutil"
 )
+
+func TestGenerateReportAppWrapperAndErrorPaths(t *testing.T) {
+	t.Setenv("VIGILANTE_HOME", t.TempDir())
+	store := state.NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveWatchTargets([]state.WatchTarget{{Repo: "owner/repo", Provider: "gemini"}}); err != nil {
+		t.Fatal(err)
+	}
+	runner := testutil.FakeRunner{Outputs: map[string]string{"gh api repos/owner/repo/issues?state=closed&per_page=100&page=1": "[]"}}
+	app := &App{state: store, env: &environment.Environment{Runner: runner}}
+	var out bytes.Buffer
+	if err := app.generateReport(context.Background(), "owner/repo", &out); err != nil {
+		t.Fatal(err)
+	}
+	records, err := csv.NewReader(strings.NewReader(out.String())).ReadAll()
+	if err != nil || len(records) != 1 {
+		t.Fatalf("records=%#v err=%v", records, err)
+	}
+	if _, ok := app.resolveRunner().(testutil.FakeRunner); !ok {
+		t.Fatalf("runner=%T", app.resolveRunner())
+	}
+	if _, ok := (&App{}).resolveRunner().(environment.ExecRunner); !ok {
+		t.Fatalf("fallback runner=%T", (&App{}).resolveRunner())
+	}
+	boom := errors.New("api failed")
+	if err := generateReportWithRunner(context.Background(), testutil.FakeRunner{Errors: map[string]error{"gh api repos/owner/repo/issues?state=closed&per_page=100&page=1": boom}}, "owner/repo", "", io.Discard); !errors.Is(err, boom) {
+		t.Fatalf("list error=%v", err)
+	}
+	if _, err := listClosedIssues(context.Background(), testutil.FakeRunner{Outputs: map[string]string{"gh api repos/owner/repo/issues?state=closed&per_page=100&page=1": "bad"}}, "owner/repo"); err == nil {
+		t.Fatal("expected issue JSON error")
+	}
+	if _, err := listIssueCommentsForReport(context.Background(), testutil.FakeRunner{Outputs: map[string]string{"gh api repos/owner/repo/issues/1/comments?per_page=100&page=1": "bad"}}, "owner/repo", 1); err == nil {
+		t.Fatal("expected comment JSON error")
+	}
+}
 
 func makeComment(id int64, body string, createdAt time.Time) backend.WorkItemComment {
 	return backend.WorkItemComment{

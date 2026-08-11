@@ -104,3 +104,38 @@ func firstBodyLine(comment string) string {
 	}
 	return lines[1]
 }
+
+func TestCommentFormattingBoundaries(t *testing.T) {
+	for input, want := range map[int]int{-10: 0, 0: 0, 50: 50, 100: 100, 101: 100} {
+		if got := clampPercent(input); got != want {
+			t.Errorf("clamp(%d)=%d", input, got)
+		}
+	}
+	for input, want := range map[int]string{-1: "1 minute", 0: "1 minute", 1: "1 minute", 2: "2 minutes"} {
+		if got := formatMinutes(input); got != want {
+			t.Errorf("minutes(%d)=%q", input, got)
+		}
+	}
+	for _, tc := range []struct{ value, fallback, want string }{{"", "fallback", "fallback"}, {"  ", "fallback", "fallback"}, {" value ", "fallback", "value"}} {
+		if got := fallbackCommentValue(tc.value, tc.fallback); got != tc.want {
+			t.Errorf("fallback=%q", got)
+		}
+	}
+	for _, tc := range []struct {
+		resource RateLimitResource
+		want     int
+	}{{RateLimitResource{Limit: 100, Remaining: 40}, 60}, {RateLimitResource{Limit: 10, Remaining: 20}, 0}} {
+		if got := usedRequests(tc.resource); got != tc.want {
+			t.Errorf("used=%d", got)
+		}
+	}
+	if got := formatAbsoluteTime(time.Time{}); got != "unknown" {
+		t.Fatalf("zero time=%q", got)
+	}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for reset, want := range map[time.Time]int{{}: 1, now.Add(-time.Minute): 1, now.Add(30 * time.Second): 1, now.Add(61 * time.Second): 2} {
+		if got := minutesUntil(now, reset); got != want {
+			t.Errorf("until %s=%d", reset, got)
+		}
+	}
+}

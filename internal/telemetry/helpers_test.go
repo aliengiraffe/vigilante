@@ -1,9 +1,136 @@
 package telemetry
 
 import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nicobistolfi/vigilante/internal/state"
 )
+
+func TestCoverageClassifiersAndCommandParsers(t *testing.T) {
+	for _, tc := range []struct {
+		diagnostic, want string
+		retry, ok        bool
+	}{
+		{"secondary rate limit", "rate_limit", true, true}, {"HTTP 429", "rate_limit", true, true},
+		{"usage limit", "quota", false, true}, {"credits exhausted; purchase more", "quota", false, true}, {"ordinary error", "", false, false},
+	} {
+		got, retry, ok := classifyDownstreamRateLimit(state.BlockedReason{}, tc.diagnostic)
+		if got != tc.want || retry != tc.retry || ok != tc.ok {
+			t.Errorf("classify(%q)=(%q,%v,%v)", tc.diagnostic, got, retry, ok)
+		}
+	}
+	if got, retry, ok := classifyDownstreamRateLimit(state.BlockedReason{Kind: "provider_quota"}, ""); got != "quota" || retry || !ok {
+		t.Fatalf("provider quota=(%q,%v,%v)", got, retry, ok)
+	}
+	for _, tc := range []struct{ operation, kind, diagnostic, want string }{
+		{"gh pr view", "", "", "github"}, {"", "provider_quota", "", "provider"}, {"", "", "otlp failure", "telemetry_export"}, {"other", "", "", "unknown"},
+	} {
+		if got := downstreamServiceCategory(tc.operation, state.BlockedReason{Kind: tc.kind}, tc.diagnostic); got != tc.want {
+			t.Errorf("category=%q want %q", got, tc.want)
+		}
+	}
+	if boundedOperation("   ") != "unknown" || boundedOperation(" ok ") != "ok" || len(boundedOperation(strings.Repeat("x", 90))) != 80 {
+		t.Fatal("boundedOperation boundaries")
+	}
+	for category, want := range map[string]string{"git": "tool_proxy", "coding_agent": "coding_agent", "other": "internal_subprocess"} {
+		if got := internalCommandFeatureArea(category); got != want {
+			t.Errorf("feature=%q", got)
+		}
+	}
+	for group, want := range map[string]string{"setup": "setup", "watch": "watch_management", "status": "service_management", "daemon": "daemon", "cleanup": "cleanup", "resume": "issue_session", "gh": "tool_proxy", "help": "operator_cli", "weird": "operator_cli"} {
+		if got := commandFeatureArea(group); got != want {
+			t.Errorf("group %q=%q", group, got)
+		}
+	}
+	for _, tc := range []struct {
+		tool string
+		args []string
+		want string
+	}{
+		{"codex", []string{"--model", "gpt", "exec"}, "exec"}, {"codex", []string{"--help"}, "help"}, {"claude", []string{"--permission-mode", "plan", "doctor"}, "doctor"}, {"gemini", []string{"--prompt=hi", "mcp"}, "mcp"}, {"gemini", []string{"secret"}, ""},
+	} {
+		if got := internalCommandPath(tc.tool, tc.args); got != tc.want {
+			t.Errorf("path %s %#v=%q want %q", tc.tool, tc.args, got, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		tool string
+		args []string
+		want string
+	}{
+		{"gh", []string{"--repo", "owner/repo", "pr", "view"}, "pr view"}, {"git", []string{"-C", "/tmp", "worktree", "list"}, "worktree list"}, {"docker", []string{"--context=local", "compose", "up"}, "compose up"}, {"gh", []string{"--help"}, "help"}, {"git", nil, ""},
+	} {
+		if got := proxyCommandPath(tc.tool, tc.args); got != tc.want {
+			t.Errorf("proxy %s %#v=%q want %q", tc.tool, tc.args, got, tc.want)
+		}
+	}
+}
+
+func TestHTTPAnalyticsExporter(t *testing.T) {
+	var got analyticsBatch
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/batch/" || r.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("request %s %#v", r.URL.Path, r.Header)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+	exporter := &httpAnalyticsExporter{baseURL: server.URL, apiKey: "key", client: server.Client()}
+	if err := exporter.Export(context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := exporter.Export(context.Background(), []analyticsEvent{{Event: "command"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got.APIKey != "key" || len(got.Messages) != 1 {
+		t.Fatalf("batch=%#v", got)
+	}
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, " slow down ")
+	}))
+	defer bad.Close()
+	exporter.baseURL, exporter.client = bad.URL, bad.Client()
+	if err := exporter.Export(context.Background(), []analyticsEvent{{Event: "command"}}); err == nil || !strings.Contains(err.Error(), "slow down") {
+		t.Fatalf("error=%v", err)
+	}
+}
+
+func TestEnsureLocalStateCreateReuseAndInvalid(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "telemetry")
+	created, fresh, err := ensureLocalState(root)
+	if err != nil || !fresh || strings.TrimSpace(created.AnonymousID) == "" {
+		t.Fatalf("created=%#v fresh=%v err=%v", created, fresh, err)
+	}
+	reused, fresh, err := ensureLocalState(root)
+	if err != nil || fresh || reused.AnonymousID != created.AnonymousID {
+		t.Fatalf("reused=%#v fresh=%v err=%v", reused, fresh, err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "state.json"), []byte("not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ensureLocalState(root); err == nil {
+		t.Fatal("expected invalid state error")
+	}
+	fileRoot := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(fileRoot, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ensureLocalState(fileRoot); err == nil {
+		t.Fatal("expected root creation error")
+	}
+}
 
 // The command name becomes the telemetry event name, so it has to be stable and
 // must never carry user data. Flags and help tokens collapse rather than being

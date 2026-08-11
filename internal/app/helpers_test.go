@@ -1,14 +1,172 @@
 package app
 
 import (
+	"bytes"
+	"context"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
 	"github.com/nicobistolfi/vigilante/internal/provider"
 	"github.com/nicobistolfi/vigilante/internal/state"
 )
+
+func TestCoverageFailureGuidanceHelpers(t *testing.T) {
+	base := state.Session{Repo: "owner/repo", IssueNumber: 42, Provider: "codex", Branch: "branch", WorktreePath: "/tmp/worktree"}
+	for _, tc := range []struct{ kind, stage, text string }{
+		{"provider_auth", "startup", "re-authenticate"}, {"provider_quota", "startup", "capacity"},
+		{"provider_missing", "startup", "runtime"}, {"provider_runtime_error", "startup", "runtime"},
+		{"", "dispatch", "worktree setup"}, {"", "startup", "startup problem"},
+	} {
+		s := base
+		s.BlockedReason.Kind = tc.kind
+		if got := dispatchFailureNextStep(s, tc.stage); !strings.Contains(got, tc.text) {
+			t.Errorf("dispatch %s/%s=%q", tc.kind, tc.stage, got)
+		}
+	}
+	s := base
+	s.LastError = "worktree already exists"
+	if got := dispatchFailureNextStep(s, "dispatch"); !strings.Contains(got, "cleanup") {
+		t.Fatalf("stale worktree=%q", got)
+	}
+	for _, tc := range []struct{ kind, text string }{
+		{"provider_auth", "Re-authenticate"}, {"provider_missing", "Install"}, {"git_auth", "git remote"}, {"gh_auth", "GitHub CLI"},
+		{"network_unreachable", "network"}, {"dirty_worktree", "worktree"}, {"validation_failed", "validation"}, {"other", "Fix the blocker"},
+	} {
+		s := base
+		s.BlockedReason.Kind = tc.kind
+		if got := resumeFailureNextStep(s); !strings.Contains(got, tc.text) {
+			t.Errorf("resume %s=%q", tc.kind, got)
+		}
+	}
+	if !strings.Contains(dispatchFailureFingerprint(base, "dispatch"), "branch") || !strings.Contains(resumeFailureFingerprint(base), "unknown") {
+		t.Fatal("fingerprints omit stable fields")
+	}
+}
+
+func TestCoveragePathThresholdAndCompletionHelpers(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for raw, want := range map[string]string{"~": home, "~/repo": filepath.Join(home, "repo")} {
+		got, err := ExpandPath(raw)
+		if err != nil || got != want {
+			t.Errorf("ExpandPath(%q)=%q,%v want %q", raw, got, err, want)
+		}
+	}
+	if _, err := ExpandPath(""); err == nil {
+		t.Fatal("expected empty path error")
+	}
+	rel, err := ExpandPath("relative")
+	if err != nil || !filepath.IsAbs(rel) {
+		t.Fatalf("relative=%q err=%v", rel, err)
+	}
+	for raw, want := range map[string]time.Duration{"": defaultStalledSessionThreshold, "bad": defaultStalledSessionThreshold, "0s": defaultStalledSessionThreshold, "90s": 90 * time.Second} {
+		t.Setenv("VIGILANTE_STALLED_SESSION_THRESHOLD", raw)
+		if got := stalledSessionThreshold(); got != want {
+			t.Errorf("threshold %q=%s want %s", raw, got, want)
+		}
+	}
+	for _, shell := range []string{"bash", "fish", "zsh"} {
+		var out bytes.Buffer
+		a := &App{stdout: &out}
+		if err := a.runCompletionCommand([]string{shell}); err != nil || out.Len() == 0 {
+			t.Errorf("completion %s len=%d err=%v", shell, out.Len(), err)
+		}
+	}
+	var out bytes.Buffer
+	a := &App{stdout: &out}
+	if err := a.runCompletionCommand([]string{"powershell"}); err == nil {
+		t.Fatal("expected unsupported shell")
+	}
+	if err := a.runCompletionCommand(nil); err == nil {
+		t.Fatal("expected missing shell")
+	}
+}
+
+func TestCoverageSessionMessageAndStallBoundaries(t *testing.T) {
+	for _, tc := range []struct{ kind, want string }{{"provider_quota", "usage or subscription"}, {"other", "merge-ready"}} {
+		blocked := state.BlockedReason{Kind: tc.kind}
+		if got := maintenanceBlockedMessage(blocked, 42, "branch"); !strings.Contains(got, tc.want) {
+			t.Errorf("maintenance=%q", got)
+		}
+		if got := resumePreflightBlockedMessage(blocked, "branch"); !strings.Contains(got, map[bool]string{true: "usage or subscription", false: "did not pass"}[tc.kind == "provider_quota"]) {
+			t.Errorf("preflight=%q", got)
+		}
+		if got := resumeBlockedMessage(blocked, "branch"); !strings.Contains(got, map[bool]string{true: "usage or subscription", false: "did not complete"}[tc.kind == "provider_quota"]) {
+			t.Errorf("resume=%q", got)
+		}
+	}
+	for kind, want := range map[string]string{"provider_auth": "provider_related", "provider_missing": "provider_related", "provider_runtime_error": "provider_related", "network_unreachable": "transient", "other": "operator_fixable"} {
+		if got := resumeFailureClassification(kind); got != want {
+			t.Errorf("classification %s=%s", kind, got)
+		}
+	}
+	now := time.Now().UTC()
+	path := t.TempDir()
+	for _, tc := range []struct {
+		session   state.Session
+		threshold time.Duration
+		stalled   bool
+		want      string
+	}{
+		{state.Session{WorktreePath: filepath.Join(path, "missing")}, time.Hour, true, "missing"},
+		{state.Session{WorktreePath: path}, time.Hour, true, "heartbeat"},
+		{state.Session{WorktreePath: path, LastHeartbeatAt: now.Format(time.RFC3339)}, time.Hour, false, ""},
+		{state.Session{WorktreePath: path, LastHeartbeatAt: now.Add(-2 * time.Hour).Format(time.RFC3339), ProcessID: 123}, time.Hour, true, "process 123"},
+		{state.Session{WorktreePath: path, LastHeartbeatAt: now.Add(-2 * time.Hour).Format(time.RFC3339)}, time.Hour, true, "idle"},
+	} {
+		stalled, reason := isStalledSession(tc.session, now, tc.threshold)
+		if stalled != tc.stalled || !strings.Contains(reason, tc.want) {
+			t.Errorf("stalled=%v reason=%q want %v/%q", stalled, reason, tc.stalled, tc.want)
+		}
+	}
+}
+
+func TestRecoveryCommandArgumentValidation(t *testing.T) {
+	ctx := context.Background()
+	for name, fn := range map[string]func([]string) error{
+		"resume": func(args []string) error {
+			var out bytes.Buffer
+			return (&App{stdout: &out}).runResumeCommand(ctx, args)
+		},
+		"redispatch": func(args []string) error {
+			var out bytes.Buffer
+			return (&App{stdout: &out}).runRedispatchCommand(ctx, args)
+		},
+		"cleanup": func(args []string) error {
+			var out bytes.Buffer
+			return (&App{stdout: &out}).runCleanupCommand(ctx, args)
+		},
+	} {
+		if err := fn([]string{"--help"}); err != nil {
+			t.Errorf("%s help=%v", name, err)
+		}
+		if err := fn([]string{"--unknown"}); err == nil {
+			t.Errorf("%s accepted unknown flag", name)
+		}
+	}
+	for _, args := range [][]string{nil, {"--repo", "owner/repo"}, {"--issue", "1"}, {"--all-blocked", "--repo", "owner/repo"}} {
+		var out bytes.Buffer
+		if err := (&App{stdout: &out}).runResumeCommand(ctx, args); err == nil {
+			t.Errorf("resume accepted %#v", args)
+		}
+	}
+	for _, args := range [][]string{nil, {"--repo", "owner/repo"}, {"--issue", "1"}} {
+		var out bytes.Buffer
+		if err := (&App{stdout: &out}).runRedispatchCommand(ctx, args); err == nil {
+			t.Errorf("redispatch accepted %#v", args)
+		}
+	}
+	for _, args := range [][]string{nil, {"--issue", "1"}, {"--repo", "owner/repo", "--issue", "-1"}, {"--all", "--repo", "owner/repo"}} {
+		var out bytes.Buffer
+		if err := (&App{stdout: &out}).runCleanupCommand(ctx, args); err == nil {
+			t.Errorf("cleanup accepted %#v", args)
+		}
+	}
+}
 
 // stringListFlag backs repeatable --label flags. Rejecting an empty value here is
 // what stops `--label ""` from asking GitHub to apply a nameless label.

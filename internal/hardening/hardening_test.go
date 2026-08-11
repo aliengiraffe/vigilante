@@ -2,11 +2,103 @@ package hardening
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestPackageJSONAndAuditBoundaryPaths(t *testing.T) {
+	var result Result
+	checkPackageJSON(filepath.Join(t.TempDir(), "missing.json"), "missing.json", &result)
+	if len(result.Findings) != 0 {
+		t.Fatalf("missing file findings=%#v", result.Findings)
+	}
+	dir := t.TempDir()
+	invalid := filepath.Join(dir, "package.json")
+	if err := os.WriteFile(invalid, []byte("bad"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	checkPackageJSON(invalid, "package.json", &result)
+	if len(result.Findings) != 1 || result.Findings[0].Check != "package-json-parse" {
+		t.Fatalf("parse findings=%#v", result.Findings)
+	}
+	deps := map[string]string{"blank": ""}
+	for i := 0; i < 12; i++ {
+		deps[fmt.Sprintf("pkg%02d", i)] = "^1.0.0"
+	}
+	result = Result{}
+	checkNonExactRanges(deps, "package.json", "dependencies", &result)
+	if len(result.Findings) != 1 || !strings.Contains(result.Findings[0].Message, "12 non-exact") || strings.Count(result.Findings[0].Message, "pkg") != 10 {
+		t.Fatalf("range finding=%#v", result.Findings)
+	}
+	result = Result{}
+	runNPMAudit(context.Background(), fakeRunner{outputs: map[string]string{"npm audit --json": "not-json"}}, dir, &result)
+	if !result.AuditRan || len(result.Findings) != 1 || result.Findings[0].Check != "npm-audit-parse" {
+		t.Fatalf("parse audit=%#v", result)
+	}
+	vulns := `{"vulnerabilities":{`
+	for i := 0; i < 17; i++ {
+		if i > 0 {
+			vulns += ","
+		}
+		vulns += fmt.Sprintf(`"pkg%02d":{"severity":"moderate"}`, i)
+	}
+	vulns += `}}`
+	result = Result{}
+	runNPMAudit(context.Background(), fakeRunner{outputs: map[string]string{"npm audit --json": vulns}}, dir, &result)
+	if len(result.Findings) != 1 || result.Findings[0].Severity != SeverityMedium || !strings.Contains(result.Findings[0].Message, "17 known") {
+		t.Fatalf("audit finding=%#v", result.Findings)
+	}
+	long := errors.New(strings.Repeat("x", 500))
+	if got := summarizeError(long); len(got) != 200 {
+		t.Fatalf("summary len=%d", len(got))
+	}
+	if summarizeError(errors.New(" short ")) != "short" {
+		t.Fatal("short summary")
+	}
+}
+
+func TestCIAuditPathPackageManagerBranches(t *testing.T) {
+	for _, pm := range []string{"pnpm", "yarn", "unknown"} {
+		t.Run(pm, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, dir, ".github/workflows/ci.yaml", "steps:\n  - run: echo test\n")
+			// Directories and non-workflow files exercise the filters.
+			if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows", "nested"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, dir, ".github/workflows/notes.txt", "ignore")
+			var result Result
+			checkCIAuditPath(dir, pm, &result)
+			if len(result.Findings) != 2 || result.Findings[0].Check != "ci-deterministic-install" || result.Findings[1].Check != "ci-audit-step" {
+				t.Fatalf("findings=%#v", result.Findings)
+			}
+		})
+	}
+	for _, tc := range []struct{ pm, content string }{{"pnpm", "pnpm install --frozen-lockfile\npnpm audit"}, {"yarn", "yarn install --immutable\nyarn npm audit"}} {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, dir, ".github/workflows/ci.yml", tc.content)
+		var result Result
+		checkCIAuditPath(dir, tc.pm, &result)
+		if len(result.Findings) != 0 {
+			t.Errorf("%s findings=%#v", tc.pm, result.Findings)
+		}
+	}
+	var result Result
+	checkCIAuditPath(t.TempDir(), "npm", &result)
+	if len(result.Findings) != 0 {
+		t.Fatalf("no CI findings=%#v", result.Findings)
+	}
+}
 
 type fakeRunner struct {
 	outputs map[string]string

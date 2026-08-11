@@ -3,6 +3,8 @@ package app
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,8 +12,59 @@ import (
 	"time"
 
 	"github.com/nicobistolfi/vigilante/internal/environment"
+	"github.com/nicobistolfi/vigilante/internal/logging"
+	"github.com/nicobistolfi/vigilante/internal/state"
 	"github.com/nicobistolfi/vigilante/internal/testutil"
 )
+
+func TestCoverageLogRotationAndStreamingBoundaries(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", root)
+	store := state.NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "config.json"), []byte("bad"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	limits := configureLogRotation(store)
+	if limits != logging.DefaultLimits() {
+		t.Fatalf("fallback limits=%#v", limits)
+	}
+	t.Cleanup(func() { logging.Configure(logging.DefaultLimits(), nil, nil) })
+	var out bytes.Buffer
+	input := "\nnot-json\n" + `{"timestamp":"2026-03-26T10:00:00Z","context":"daemon","tool":"gh","success":true}` + "\n"
+	if err := renderAccessLogStream(&out, strings.NewReader(input)); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "[malformed]") || !strings.Contains(out.String(), "gh") {
+		t.Fatalf("stream=%q", out.String())
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := followFile(ctx, filepath.Join(root, "missing.log"), true, time.Millisecond, func(r io.Reader) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "data.log")
+	if err := os.WriteFile(path, []byte("data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("emit failed")
+	if err := followFile(context.Background(), path, false, time.Millisecond, func(r io.Reader) error { return want }); !errors.Is(err, want) {
+		t.Fatalf("follow error=%v", err)
+	}
+	rootFile := filepath.Join(root, "root-file")
+	if err := os.WriteFile(rootFile, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("VIGILANTE_HOME", rootFile)
+	a := New()
+	a.state = state.NewStore()
+	a.stdout = &out
+	if err := a.streamSessionLog(context.Background(), "owner/repo", 1); err == nil {
+		t.Fatal("expected session log mkdir error")
+	}
+}
 
 func TestFormatAccessLogEntry(t *testing.T) {
 	entry := environment.AccessLogEntry{

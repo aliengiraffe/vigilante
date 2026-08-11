@@ -1,13 +1,124 @@
 package provider
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
 	"github.com/nicobistolfi/vigilante/internal/skill"
 	"github.com/nicobistolfi/vigilante/internal/state"
+	"github.com/nicobistolfi/vigilante/internal/testutil"
 )
+
+func TestCodexAndGeminiInvocations(t *testing.T) {
+	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
+	issue := ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}
+	session := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7"}
+	pr := ghcli.PullRequest{Number: 11, URL: "https://github.com/owner/repo/pull/11"}
+	checks := []ghcli.StatusCheckRoll{{Context: "test", Conclusion: "FAILURE"}}
+	for _, tc := range []struct {
+		id, name, display string
+		runtime           string
+		prefix, suffix    []string
+		dir               string
+	}{
+		{CodexID, "codex", "Codex", skill.RuntimeCodex, []string{"exec", "--cd", session.WorktreePath, "--dangerously-bypass-approvals-and-sandbox"}, nil, ""},
+		{GeminiID, "gemini", "Gemini CLI", skill.RuntimeGemini, []string{"--prompt"}, []string{"--yolo"}, session.WorktreePath},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			p, err := Resolve(tc.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.DisplayName() != tc.display || p.RequiredTools()[0] != tc.name {
+				t.Fatalf("provider=%s tools=%#v", p.DisplayName(), p.RequiredTools())
+			}
+			assert := func(got Invocation, prompt string) {
+				want := append(append(append([]string{}, tc.prefix...), prompt), tc.suffix...)
+				if got.Name != tc.name || got.Dir != tc.dir {
+					t.Fatalf("invocation=%#v", got)
+				}
+				assertInvocationArgs(t, got.Args, want)
+			}
+			got, err := p.BuildIssuePreflightInvocation(IssueTask{Target: target, Issue: issue, Session: session})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assert(got, skill.BuildIssuePreflightPrompt(target, issue, session))
+			got, err = p.BuildIssueInvocation(IssueTask{Target: target, Issue: issue, Session: session})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assert(got, skill.BuildIssuePromptForRuntime(tc.runtime, target, issue, session))
+			got, err = p.BuildConflictResolutionInvocation(ConflictTask{Target: target, Session: session, PR: pr})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assert(got, skill.BuildConflictResolutionPromptForRuntime(tc.runtime, target, session, pr))
+			got, err = p.BuildCIRemediationInvocation(CIRemediationTask{Target: target, Session: session, PR: pr, FailingChecks: checks})
+			if err != nil {
+				t.Fatal(err)
+			}
+			assert(got, skill.BuildCIRemediationPromptForRuntime(tc.runtime, target, session, pr, checks))
+			create, err := p.BuildIssueCreateInvocation(IssueCreateTask{Target: target, Prompt: "new issue"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if create.Name != tc.name || (tc.id == GeminiID && create.Dir != target.Path) {
+				t.Fatalf("create=%#v", create)
+			}
+			packageRun, err := p.BuildPackageRemediationInvocation(PackageRemediationTask{Target: target, PRNumber: 11, PRBranch: "branch", FindingsCount: 2})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if packageRun.Name != tc.name || (tc.id == GeminiID && packageRun.Dir != target.Path) {
+				t.Fatalf("package=%#v", packageRun)
+			}
+		})
+	}
+}
+
+func TestValidateRuntimeCompatibilityUsesRunner(t *testing.T) {
+	p, err := Resolve(CodexID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateRuntimeCompatibility(context.Background(), testutil.FakeRunner{Outputs: map[string]string{"codex --version": "codex 0.114.0"}}, p); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("missing")
+	err = ValidateRuntimeCompatibility(context.Background(), testutil.FakeRunner{Errors: map[string]error{"codex --version": wantErr}}, p)
+	if !errors.Is(err, wantErr) || !strings.Contains(err.Error(), "detect codex CLI version") {
+		t.Fatalf("error=%v", err)
+	}
+	if got := describeCompatibility("unknown"); got != "unknown" {
+		t.Fatalf("description=%q", got)
+	}
+}
+
+func TestCompatibilityHelpersRejectInvalidInputs(t *testing.T) {
+	for _, raw := range []string{"1.2", "x.2.3", "1.x.3", "1.2.x"} {
+		if _, err := parseVersion(raw); err == nil {
+			t.Errorf("parseVersion(%q) unexpectedly succeeded", raw)
+		}
+	}
+	if _, err := compatibilityFor("unknown"); err == nil {
+		t.Fatal("expected missing compatibility contract error")
+	}
+	unknown := testProvider{id: "unknown"}
+	if err := ValidateVersionOutput(unknown, "unknown 1.2.3"); err == nil {
+		t.Fatal("expected unknown provider compatibility error")
+	}
+	if got := runtimeTool(unknown); got != "unknown" {
+		t.Fatalf("runtimeTool()=%q", got)
+	}
+	withTool := testProvider{id: "custom", tools: []string{"  custom-cli  "}}
+	if got := runtimeTool(withTool); got != "custom-cli" {
+		t.Fatalf("runtimeTool()=%q", got)
+	}
+}
 
 func TestResolveDefaultsToClaude(t *testing.T) {
 	selectedProvider, err := Resolve("")
@@ -484,7 +595,8 @@ func assertInvocationArgs(t *testing.T, got []string, want []string) {
 }
 
 type testProvider struct {
-	id string
+	id    string
+	tools []string
 }
 
 func (p testProvider) ID() string {
@@ -496,7 +608,7 @@ func (p testProvider) DisplayName() string {
 }
 
 func (p testProvider) RequiredTools() []string {
-	return nil
+	return p.tools
 }
 
 func (p testProvider) EnsureRuntimeInstalled(store *state.Store) error {

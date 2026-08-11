@@ -32,24 +32,28 @@ type ghResponse struct {
 }
 
 func main() {
-	os.Exit(run())
+	var stdin io.Reader
+	if stat, err := os.Stdin.Stat(); err == nil && (stat.Mode()&os.ModeCharDevice) == 0 {
+		stdin = os.Stdin
+	}
+	os.Exit(run(os.Args[1:], stdin, os.Stdout, os.Stderr))
 }
 
-func run() int {
+func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	proxyURL := os.Getenv("VIGILANTE_PROXY_URL")
 	if proxyURL == "" {
-		fmt.Fprintln(os.Stderr, "gh-sandbox: VIGILANTE_PROXY_URL not set")
+		fmt.Fprintln(stderr, "gh-sandbox: VIGILANTE_PROXY_URL not set")
 		return 1
 	}
 	token := os.Getenv("VIGILANTE_SANDBOX_TOKEN")
 	if token == "" {
-		fmt.Fprintln(os.Stderr, "gh-sandbox: VIGILANTE_SANDBOX_TOKEN not set")
+		fmt.Fprintln(stderr, "gh-sandbox: VIGILANTE_SANDBOX_TOKEN not set")
 		return 1
 	}
 
-	command := strings.Join(os.Args[1:], " ")
+	command := strings.Join(args, " ")
 	if command == "" {
-		fmt.Fprintln(os.Stderr, "usage: gh <command>")
+		fmt.Fprintln(stderr, "usage: gh <command>")
 		return 1
 	}
 
@@ -57,10 +61,11 @@ func run() int {
 	// invocations don't block waiting for input. Required so flags like
 	// `--body-file -` see the bytes the agent piped in.
 	var stdinBytes []byte
-	if stat, err := os.Stdin.Stat(); err == nil && (stat.Mode()&os.ModeCharDevice) == 0 {
-		stdinBytes, err = io.ReadAll(os.Stdin)
+	if stdin != nil {
+		var err error
+		stdinBytes, err = io.ReadAll(stdin)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "gh-sandbox: read stdin: %s\n", err)
+			fmt.Fprintf(stderr, "gh-sandbox: read stdin: %s\n", err)
 			return 1
 		}
 	}
@@ -71,35 +76,35 @@ func run() int {
 		Stdin:   string(stdinBytes),
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "gh-sandbox: marshal request: %s\n", err)
+		fmt.Fprintf(stderr, "gh-sandbox: marshal request: %s\n", err)
 		return 1
 	}
 
 	resp, err := http.Post(proxyURL+"/api/sandbox/gh", "application/json", bytes.NewReader(body))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "gh-sandbox: proxy request failed: %s\n", err)
+		fmt.Fprintf(stderr, "gh-sandbox: proxy request failed: %s\n", err)
 		return 1
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "gh-sandbox: read response: %s\n", err)
+		fmt.Fprintf(stderr, "gh-sandbox: read response: %s\n", err)
 		return 1
 	}
 
 	var ghResp ghResponse
 	if err := json.Unmarshal(respBody, &ghResp); err != nil {
 		// Not JSON — print raw body as error.
-		fmt.Fprint(os.Stderr, string(respBody))
+		fmt.Fprint(stderr, string(respBody))
 		return 1
 	}
 
 	if ghResp.Stdout != "" {
-		fmt.Fprint(os.Stdout, ghResp.Stdout)
+		fmt.Fprint(stdout, ghResp.Stdout)
 	}
 	if ghResp.Stderr != "" {
-		fmt.Fprint(os.Stderr, ghResp.Stderr)
+		fmt.Fprint(stderr, ghResp.Stderr)
 	}
 	return ghResp.ExitCode
 }

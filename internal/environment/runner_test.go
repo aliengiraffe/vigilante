@@ -373,7 +373,8 @@ func TestLoggingRunnerRunWithStdin(t *testing.T) {
 		t.Parallel()
 
 		base := &stdinStreamingRunner{recordingRunner: recordingRunner{output: "ok"}}
-		r := LoggingRunner{Base: base}
+		var logs bytes.Buffer
+		r := LoggingRunner{Base: base, Logger: newTestLogger(&logs), LogSuccessOutput: true}
 
 		if _, err := r.RunWithStdin(context.Background(), "payload", "/dir", "gh", "api"); err != nil {
 			t.Fatal(err)
@@ -386,6 +387,9 @@ func TestLoggingRunnerRunWithStdin(t *testing.T) {
 		}
 		if base.runCalls != 0 {
 			t.Fatal("must not fall back to Run when the base supports stdin")
+		}
+		if !strings.Contains(logs.String(), "stdin_bytes=7") || !strings.Contains(logs.String(), "output=ok") {
+			t.Fatalf("logs=%q", logs.String())
 		}
 	})
 
@@ -409,10 +413,12 @@ func TestLoggingRunnerRunWithStdin(t *testing.T) {
 		t.Parallel()
 
 		base := &recordingRunner{err: errors.New("exit status 1")}
+		var logs bytes.Buffer
 		var exitCode int
 		var sawEntry bool
 		r := LoggingRunner{
 			Base:           base,
+			Logger:         newTestLogger(&logs),
 			CaptureCommand: func(_ context.Context, _ string, _ []string, code int, _ int64) { exitCode = code },
 			AccessLog:      func(AccessLogEntry) { sawEntry = true },
 		}
@@ -422,6 +428,9 @@ func TestLoggingRunnerRunWithStdin(t *testing.T) {
 		}
 		if exitCode == 0 || !sawEntry {
 			t.Fatalf("hooks not invoked correctly: exit=%d entry=%v", exitCode, sawEntry)
+		}
+		if !strings.Contains(logs.String(), "command failed") {
+			t.Fatalf("logs=%q", logs.String())
 		}
 	})
 }
@@ -436,7 +445,8 @@ func TestLoggingRunnerRunStreaming(t *testing.T) {
 			recordingRunner: recordingRunner{output: "full"},
 			streamedBytes:   "streamed",
 		}
-		r := LoggingRunner{Base: base}
+		var logs bytes.Buffer
+		r := LoggingRunner{Base: base, Logger: newTestLogger(&logs), LogSuccessOutput: true}
 		var buf bytes.Buffer
 
 		output, err := r.RunStreaming(context.Background(), "/dir", &buf, "go", "test")
@@ -451,6 +461,9 @@ func TestLoggingRunnerRunStreaming(t *testing.T) {
 		}
 		if buf.String() != "streamed" {
 			t.Fatalf("writer got %q", buf.String())
+		}
+		if !strings.Contains(logs.String(), "streaming=true") || !strings.Contains(logs.String(), "output=full") {
+			t.Fatalf("logs=%q", logs.String())
 		}
 	})
 
@@ -506,8 +519,10 @@ func TestLoggingRunnerRunStreaming(t *testing.T) {
 
 		base := &recordingRunner{err: errors.New("exit status 1")}
 		var exitCode int
+		var logs bytes.Buffer
 		r := LoggingRunner{
 			Base:           base,
+			Logger:         newTestLogger(&logs),
 			CaptureCommand: func(_ context.Context, _ string, _ []string, code int, _ int64) { exitCode = code },
 			AccessLog:      func(AccessLogEntry) {},
 		}
@@ -517,6 +532,9 @@ func TestLoggingRunnerRunStreaming(t *testing.T) {
 		}
 		if exitCode == 0 {
 			t.Fatal("expected a non-zero exit code in telemetry")
+		}
+		if !strings.Contains(logs.String(), "command failed") {
+			t.Fatalf("logs=%q", logs.String())
 		}
 	})
 }
