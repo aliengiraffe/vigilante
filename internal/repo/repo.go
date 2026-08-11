@@ -90,7 +90,15 @@ func Discover(ctx context.Context, runner environment.Runner, path string) (Info
 	if err != nil {
 		return Info{}, err
 	}
-	repo, err := DiscoverSlug(ctx, runner, absPath)
+	if _, err := runner.Run(ctx, absPath, "git", "rev-parse", "--is-inside-work-tree"); err != nil {
+		return Info{}, fmt.Errorf("%s is not a git repository: %w", absPath, err)
+	}
+
+	remoteURL, err := runner.Run(ctx, absPath, "git", "remote", "get-url", "origin")
+	if err != nil {
+		return Info{}, fmt.Errorf("origin remote not found: %w", err)
+	}
+	repo, err := ParseGitHubRepo(strings.TrimSpace(remoteURL))
 	if err != nil {
 		return Info{}, err
 	}
@@ -106,27 +114,6 @@ func Discover(ctx context.Context, runner environment.Runner, path string) (Info
 		Branch:         branch,
 		Classification: Classify(absPath),
 	}, nil
-}
-
-// DiscoverSlug resolves the GitHub owner/name slug for a local git checkout.
-func DiscoverSlug(ctx context.Context, runner environment.Runner, path string) (string, error) {
-	absPath, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-	if _, err := runner.Run(ctx, absPath, "git", "rev-parse", "--is-inside-work-tree"); err != nil {
-		return "", fmt.Errorf("%s is not a git repository: %w", absPath, err)
-	}
-
-	remoteURL, err := runner.Run(ctx, absPath, "git", "remote", "get-url", "origin")
-	if err != nil {
-		return "", fmt.Errorf("origin remote not found: %w", err)
-	}
-	repo, err := ParseGitHubRepo(strings.TrimSpace(remoteURL))
-	if err != nil {
-		return "", err
-	}
-	return repo, nil
 }
 
 func ResolveBranch(ctx context.Context, runner environment.Runner, repoPath string, branchMode string, branch string) (string, error) {

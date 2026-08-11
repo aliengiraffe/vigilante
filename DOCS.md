@@ -413,13 +413,6 @@ Expected behavior:
 - immediately launches a brand-new implementation session using the current watched-repo configuration
 - does not delete remote pull requests or remote branches
 
-### `vigilante recreate [--repo <owner/name>] --issue <n>`
-
-Recreate a stuck issue as a fresh duplicate and clean up its stale artifacts.
-`--issue` is always required. `--repo` may be omitted when the command runs
-inside a git checkout whose `origin` matches a repository Vigilante watches;
-an explicit `--repo` always takes precedence.
-
 ### `vigilante unwatch <path>`
 
 Remove a repository from the watchlist without deleting the repository itself.
