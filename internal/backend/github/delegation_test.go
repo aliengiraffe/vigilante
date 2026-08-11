@@ -118,7 +118,7 @@ func TestBackendDelegationTargets(t *testing.T) {
 		},
 		{
 			name:    "GetPullRequestDetails requests the review-relevant fields",
-			command: "gh pr view --repo owner/repo 7 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName",
+			command: "gh pr view --repo owner/repo 7 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName,headRefOid",
 			output:  `{"number":7,"title":"t","state":"OPEN","baseRefName":"main"}`,
 			invoke: func(t *testing.T, b *Backend) error {
 				pr, err := b.GetPullRequestDetails(context.Background(), "owner/repo", 7)

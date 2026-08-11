@@ -71,6 +71,7 @@ type PullRequest struct {
 	URL               string        `json:"url"`
 	State             string        `json:"state"`
 	BaseRefName       string        `json:"baseRefName"`
+	HeadRefOID        string        `json:"headRefOid"`
 	MergedAt          *time.Time    `json:"mergedAt"`
 	Labels            []Label       `json:"labels"`
 	IsDraft           bool          `json:"isDraft"`
@@ -88,10 +89,13 @@ type PullRequestFile struct {
 
 // StatusCheck represents a CI status check on a pull request.
 type StatusCheck struct {
-	Context    string `json:"context"`
-	Name       string `json:"name"`
-	State      string `json:"state"`
-	Conclusion string `json:"conclusion"`
+	Context     string `json:"context"`
+	Name        string `json:"name"`
+	State       string `json:"state"`
+	Conclusion  string `json:"conclusion"`
+	StartedAt   string `json:"startedAt"`
+	CompletedAt string `json:"completedAt"`
+	DetailsURL  string `json:"detailsUrl"`
 }
 
 // CreatedWorkItem is the result of creating a new work item.

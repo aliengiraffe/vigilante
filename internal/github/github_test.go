@@ -519,7 +519,7 @@ func TestFindPullRequestForBranch(t *testing.T) {
 func TestGetPullRequestDetails(t *testing.T) {
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh pr view --repo owner/repo 17 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": `{"number":17,"title":"Feature","body":"PR body","url":"https://github.com/owner/repo/pull/17","state":"OPEN","mergedAt":null,"labels":[{"name":"automerge"}],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}],"baseRefName":"develop"}`,
+			"gh pr view --repo owner/repo 17 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName,headRefOid": `{"number":17,"title":"Feature","body":"PR body","url":"https://github.com/owner/repo/pull/17","state":"OPEN","mergedAt":null,"labels":[{"name":"automerge"}],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS","startedAt":"2026-03-17T19:30:00Z","completedAt":"2026-03-17T19:31:00Z","detailsUrl":"https://example.com/checks/123"}],"baseRefName":"develop","headRefOid":"abc123"}`,
 		},
 	}
 
@@ -533,11 +533,17 @@ func TestGetPullRequestDetails(t *testing.T) {
 	if pr.BaseRefName != "develop" {
 		t.Fatalf("unexpected pull request base: %#v", pr)
 	}
+	if pr.HeadRefOID != "abc123" {
+		t.Fatalf("unexpected pull request head SHA: %#v", pr)
+	}
 	if len(pr.Labels) != 1 || pr.Labels[0].Name != "automerge" {
 		t.Fatalf("expected automerge label, got: %#v", pr.Labels)
 	}
 	if len(pr.StatusCheckRollup) != 1 || pr.StatusCheckRollup[0].Conclusion != "SUCCESS" {
 		t.Fatalf("unexpected status checks: %#v", pr.StatusCheckRollup)
+	}
+	if pr.StatusCheckRollup[0].StartedAt == "" || pr.StatusCheckRollup[0].DetailsURL != "https://example.com/checks/123" {
+		t.Fatalf("expected check-run generation and details context: %#v", pr.StatusCheckRollup[0])
 	}
 }
 

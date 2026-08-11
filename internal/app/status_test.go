@@ -925,7 +925,7 @@ func TestStatusCommandReconcilesStaleRunningSessionAgainstOpenPullRequest(t *tes
 			"systemctl --user show --property=LoadState,ActiveState vigilante.service":                            "LoadState=loaded\nActiveState=active\n",
 			"gh api repos/owner/repo/issues/99":                                                                   `{"title":"stale","body":"body","html_url":"https://github.com/owner/repo/issues/99","state":"closed","labels":[{"name":"vigilante:done"}]}`,
 			"gh pr list --repo owner/repo --head vigilante/issue-99 --state all --json number,url,state,mergedAt": `[{"number":123,"url":"https://github.com/owner/repo/pull/123","state":"OPEN","mergedAt":null}]`,
-			"gh pr view --repo owner/repo 123 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName": `{"number":123,"title":"Test PR","body":"Body","url":"https://github.com/owner/repo/pull/123","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[],"baseRefName":"main"}`,
+			"gh pr view --repo owner/repo 123 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName,headRefOid": `{"number":123,"title":"Test PR","body":"Body","url":"https://github.com/owner/repo/pull/123","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[],"baseRefName":"main"}`,
 		},
 	}
 

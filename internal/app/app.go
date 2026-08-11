@@ -60,6 +60,8 @@ const defaultSuccessfulSessionPollInterval = 5 * time.Minute
 const issueDetailsCacheTTL = 3 * time.Minute
 const staleAutoRestartAttemptLimit = 3
 const maxAutomaticCleanupAttempts = 3
+const maxConsecutiveCIRemediationAttempts = 3
+const ciRemediationNoProgressTimeout = 30 * time.Minute
 const githubCoreLowQuotaThreshold = 5
 const unsetMaxParallel = -2147483648
 const autoRecoverySource = "auto_recovery"
@@ -3266,6 +3268,7 @@ func (a *App) tryAutoSquashMerge(ctx context.Context, session *state.Session, pr
 		} else if checkState == "passing" {
 			session.LastCIRemediationFingerprint = ""
 			session.LastCIRemediationAttemptedAt = ""
+			session.CIRemediationAttempts = nil
 		}
 		return nil
 	}
@@ -3390,6 +3393,7 @@ func (a *App) handleFailingPullRequestChecks(ctx context.Context, session *state
 	case "passing":
 		session.LastCIRemediationFingerprint = ""
 		session.LastCIRemediationAttemptedAt = ""
+		session.CIRemediationAttempts = nil
 		return nil
 	}
 
@@ -3397,13 +3401,41 @@ func (a *App) handleFailingPullRequestChecks(ctx context.Context, session *state
 	if len(failingChecks) == 0 {
 		return nil
 	}
-	fingerprint := ciFailureFingerprint(pr.Number, failingChecks)
+	fingerprint := ciFailureFingerprint(pr.Number, pr.HeadRefOID, failingChecks)
 	if fingerprint == session.LastCIRemediationFingerprint {
+		if ciRemediationMadeNoProgress(*session, a.clock()) {
+			blocked := state.BlockedReason{
+				Kind:      "unknown_operator_action_required",
+				Operation: "ci remediation",
+				Summary:   fmt.Sprintf("CI remediation for PR #%d produced no new check observation within %s", pr.Number, ciRemediationNoProgressTimeout),
+				Detail:    formatCIRemediationHistory(session.CIRemediationAttempts, failingChecks),
+			}
+			markSessionBlocked(session, "ci_remediation", blocked, a.clock())
+			session.LastMaintenanceError = blocked.Summary
+			body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "CI Needs Manual Review",
+				Emoji:      "🧱",
+				Percent:    94,
+				ETAMinutes: 10,
+				Items: []string{
+					fmt.Sprintf("PR #%d did not produce a new head or check run within %s of remediation.", pr.Number, ciRemediationNoProgressTimeout),
+					fmt.Sprintf("Unchanged observation %s; failing checks: %s", ciObservationLabel(pr.HeadRefOID), formatFailingChecksSummary(failingChecks)),
+					fmt.Sprintf("Next step: inspect the branch `%s`, then run `%s` or request resume from GitHub.", session.Branch, session.ResumeHint),
+				},
+				Tagline: "No-progress loops need a human checkpoint.",
+			})
+			a.commentOnIssueBestEffort(ctx, session.Repo, session.IssueNumber, body, "ci remediation no progress")
+			return nil
+		}
+		session.LastMaintenanceError = fmt.Sprintf("ci remediation already dispatched for PR #%d observation %s; waiting for updated checks", pr.Number, ciObservationLabel(pr.HeadRefOID))
+		return nil
+	}
+	if len(session.CIRemediationAttempts) >= maxConsecutiveCIRemediationAttempts {
 		blocked := state.BlockedReason{
 			Kind:      "unknown_operator_action_required",
 			Operation: "ci remediation",
-			Summary:   fmt.Sprintf("CI remediation already ran for PR #%d but the same failing checks are still unresolved", pr.Number),
-			Detail:    formatFailingChecksSummary(failingChecks),
+			Summary:   fmt.Sprintf("CI remediation stopped after %d consecutive attempts for PR #%d", len(session.CIRemediationAttempts), pr.Number),
+			Detail:    formatCIRemediationHistory(session.CIRemediationAttempts, failingChecks),
 		}
 		markSessionBlocked(session, "ci_remediation", blocked, a.clock())
 		session.LastMaintenanceError = blocked.Summary
@@ -3413,11 +3445,11 @@ func (a *App) handleFailingPullRequestChecks(ctx context.Context, session *state
 			Percent:    94,
 			ETAMinutes: 10,
 			Items: []string{
-				fmt.Sprintf("PR #%d still reports the same failing checks after an automated remediation attempt.", pr.Number),
-				fmt.Sprintf("Failing checks: %s", formatFailingChecksSummary(failingChecks)),
+				fmt.Sprintf("PR #%d exhausted %d consecutive CI remediation attempts.", pr.Number, len(session.CIRemediationAttempts)),
+				fmt.Sprintf("Current observation %s; failing checks: %s", ciObservationLabel(pr.HeadRefOID), formatFailingChecksSummary(failingChecks)),
 				fmt.Sprintf("Next step: inspect the branch `%s`, apply a manual fix, then run `%s` or request resume from GitHub.", session.Branch, session.ResumeHint),
 			},
-			Tagline: "One clean retry is enough to prove the point.",
+			Tagline: "Bound the loop, preserve the evidence.",
 		})
 		a.commentOnIssueBestEffort(ctx, session.Repo, session.IssueNumber, body, "ci remediation blocked")
 		return nil
@@ -3438,18 +3470,23 @@ func (a *App) handleFailingPullRequestChecks(ctx context.Context, session *state
 	a.commentOnIssueBestEffort(ctx, session.Repo, session.IssueNumber, startBody, "ci remediation start")
 
 	target := watchTargetForSession(*session, a.fallbackWatchTargetForSession(*session))
+	attemptedAt := a.clock().Format(time.RFC3339)
+	session.LastCIRemediationFingerprint = fingerprint
+	session.LastCIRemediationAttemptedAt = attemptedAt
+	session.CIRemediationAttempts = append(session.CIRemediationAttempts, state.CIAttempt{
+		Observation: fingerprint,
+		HeadSHA:     strings.TrimSpace(pr.HeadRefOID),
+		Checks:      formatFailingChecksSummary(failingChecks),
+		AttemptedAt: attemptedAt,
+	})
 	if err := issuerunner.RunCIRemediationSession(ctx, a.env, a.state, a.issueTrackerForTarget(target), target, *session, pr, failingChecks); err != nil {
 		blocked := classifyBlockedReason("ci_remediation", "coding agent remediation", err)
 		markSessionBlocked(session, "ci_remediation", blocked, a.clock())
 		session.LastMaintenanceError = err.Error()
-		session.LastCIRemediationFingerprint = fingerprint
-		session.LastCIRemediationAttemptedAt = a.clock().Format(time.RFC3339)
 		return nil
 	}
 
-	session.LastCIRemediationFingerprint = fingerprint
-	session.LastCIRemediationAttemptedAt = a.clock().Format(time.RFC3339)
-	session.LastMaintenanceError = fmt.Sprintf("ci remediation dispatched for PR #%d; waiting for updated checks", pr.Number)
+	session.LastMaintenanceError = fmt.Sprintf("ci remediation attempt %d dispatched for PR #%d observation %s; waiting for updated checks", len(session.CIRemediationAttempts), pr.Number, ciObservationLabel(pr.HeadRefOID))
 	return nil
 }
 
@@ -4407,6 +4444,7 @@ func (a *App) resetSessionForRedispatch(ctx context.Context, session *state.Sess
 	session.LastMaintenanceError = ""
 	session.LastCIRemediationFingerprint = ""
 	session.LastCIRemediationAttemptedAt = ""
+	session.CIRemediationAttempts = nil
 	session.BlockedAt = ""
 	session.BlockedStage = ""
 	session.BlockedReason = state.BlockedReason{}
@@ -5310,16 +5348,44 @@ func failingStatusChecks(checks []ghcli.StatusCheckRoll) []ghcli.StatusCheckRoll
 	return failing
 }
 
-func ciFailureFingerprint(prNumber int, checks []ghcli.StatusCheckRoll) string {
-	parts := []string{fmt.Sprintf("pr:%d", prNumber)}
+func ciFailureFingerprint(prNumber int, headSHA string, checks []ghcli.StatusCheckRoll) string {
+	parts := []string{fmt.Sprintf("pr:%d", prNumber), "head:" + fallbackText(strings.TrimSpace(headSHA), "unknown")}
 	for _, check := range checks {
 		parts = append(parts, strings.Join([]string{
 			failingCheckName(check),
 			strings.ToUpper(strings.TrimSpace(check.State)),
 			strings.ToUpper(strings.TrimSpace(check.Conclusion)),
+			strings.TrimSpace(check.StartedAt),
+			strings.TrimSpace(check.CompletedAt),
+			strings.TrimSpace(check.DetailsURL),
 		}, ":"))
 	}
 	return strings.Join(parts, "|")
+}
+
+func ciObservationLabel(headSHA string) string {
+	headSHA = strings.TrimSpace(headSHA)
+	if len(headSHA) > 12 {
+		headSHA = headSHA[:12]
+	}
+	return fallbackText(headSHA, "unknown-head")
+}
+
+func ciRemediationMadeNoProgress(session state.Session, now time.Time) bool {
+	attemptedAt, err := time.Parse(time.RFC3339, strings.TrimSpace(session.LastCIRemediationAttemptedAt))
+	if err != nil {
+		return false
+	}
+	return now.Sub(attemptedAt) >= ciRemediationNoProgressTimeout
+}
+
+func formatCIRemediationHistory(attempts []state.CIAttempt, failingChecks []ghcli.StatusCheckRoll) string {
+	parts := make([]string, 0, len(attempts)+1)
+	for index, attempt := range attempts {
+		parts = append(parts, fmt.Sprintf("attempt %d: head=%s checks=%s at=%s", index+1, ciObservationLabel(attempt.HeadSHA), attempt.Checks, attempt.AttemptedAt))
+	}
+	parts = append(parts, "current failing checks: "+formatFailingChecksSummary(failingChecks))
+	return strings.Join(parts, "; ")
 }
 
 func formatFailingChecksSummary(checks []ghcli.StatusCheckRoll) string {
@@ -5439,6 +5505,7 @@ func clearBlockedState(session *state.Session, now time.Time, source string) {
 	session.LastMaintenanceError = ""
 	session.LastCIRemediationFingerprint = ""
 	session.LastCIRemediationAttemptedAt = ""
+	session.CIRemediationAttempts = nil
 	session.LastResumeSource = source
 	clearBlockedCommentState(session)
 	session.LastResumeFailureFingerprint = ""
