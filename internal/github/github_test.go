@@ -104,6 +104,37 @@ func TestSelectIssuesHonorsRequestedLimit(t *testing.T) {
 	}
 }
 
+func TestSelectIssuesSkipsIssueWithBlockedLabelRegardlessOfLocalSession(t *testing.T) {
+	tests := []struct {
+		name     string
+		sessions []state.Session
+	}{
+		{name: "missing session"},
+		{
+			name: "stale failed session",
+			sessions: []state.Session{{
+				Repo:        "owner/repo",
+				IssueNumber: 1,
+				Status:      state.SessionStatusFailed,
+			}},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			issues := []Issue{
+				{Number: 1, Labels: []Label{{Name: "vigilante:blocked"}, {Name: "to-do"}}},
+				{Number: 2, Labels: []Label{{Name: "to-do"}}},
+			}
+
+			selected := SelectIssues(issues, tc.sessions, state.WatchTarget{Repo: "owner/repo", Labels: []string{"to-do"}}, 2)
+			if len(selected) != 1 || selected[0].Number != 2 {
+				t.Fatalf("expected only unblocked issue to be selected, got %#v", selected)
+			}
+		})
+	}
+}
+
 func TestSelectIssuesHonorsConfiguredStageForLinearTargets(t *testing.T) {
 	issues := []Issue{
 		{Number: 1, Labels: []Label{{Name: "to-do"}}, Stage: "Todo"},

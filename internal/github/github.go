@@ -128,6 +128,9 @@ func SelectIssues(issues []Issue, sessions []state.Session, target state.WatchTa
 		if len(selected) >= limit {
 			break
 		}
+		if issueHasLabel(issues[i], "vigilante:blocked") {
+			continue
+		}
 		if active[issues[i].Number] {
 			continue
 		}
@@ -141,6 +144,15 @@ func SelectIssues(issues []Issue, sessions []state.Session, target state.WatchTa
 		active[issues[i].Number] = true
 	}
 	return selected
+}
+
+func issueHasLabel(issue Issue, name string) bool {
+	for _, label := range issue.Labels {
+		if strings.EqualFold(strings.TrimSpace(label.Name), name) {
+			return true
+		}
+	}
+	return false
 }
 
 func ActiveSessionCount(sessions []state.Session, target state.WatchTarget) int {

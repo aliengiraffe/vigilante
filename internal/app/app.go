@@ -4680,6 +4680,10 @@ func (a *App) cleanupInactiveBlockedSessions(ctx context.Context, sessions []sta
 		if session.Status != state.SessionStatusBlocked {
 			continue
 		}
+		if !isMaintenanceBlockedStage(session.BlockedStage) {
+			a.logger.Info("blocked session waiting for explicit resume", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "stage", session.BlockedStage)
+			continue
+		}
 
 		evaluationTimeout := timeout
 		if shouldAutoRecoverBlockedSession(*session) {
@@ -4810,9 +4814,7 @@ func (a *App) cleanupBlockedSessionForInactivity(ctx context.Context, session *s
 }
 
 func shouldAutoRecoverBlockedSession(session state.Session) bool {
-	switch session.BlockedStage {
-	case "pr_maintenance", "ci_remediation", "conflict_resolution":
-	default:
+	if !isMaintenanceBlockedStage(session.BlockedStage) {
 		return false
 	}
 
@@ -4822,6 +4824,15 @@ func shouldAutoRecoverBlockedSession(session state.Session) bool {
 
 	text := strings.ToLower(strings.TrimSpace(session.BlockedReason.Summary + " " + session.BlockedReason.Detail))
 	return strings.Contains(text, "worktree is not clean")
+}
+
+func isMaintenanceBlockedStage(stage string) bool {
+	switch strings.TrimSpace(stage) {
+	case "pr_maintenance", "ci_remediation", "conflict_resolution":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *App) autoRecoverBlockedMaintenanceSession(ctx context.Context, session *state.Session, timeout time.Duration) error {
