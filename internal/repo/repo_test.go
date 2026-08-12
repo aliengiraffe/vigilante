@@ -65,6 +65,22 @@ func TestDiscoverRepositoryWithRealGit(t *testing.T) {
 	}
 }
 
+func TestDiscoverSlugOnlyRunsCheckoutAndRemoteCommands(t *testing.T) {
+	dir := t.TempDir()
+	runner := environment.ExecRunner{}
+	ctx := context.Background()
+
+	mustRun(t, runner, ctx, dir, "git", "init", "--initial-branch=main")
+	mustRun(t, runner, ctx, dir, "git", "remote", "add", "origin", "git@github.com:owner/repo.git")
+	slug, err := DiscoverSlug(ctx, runner, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if slug != "owner/repo" {
+		t.Fatalf("unexpected repo slug: %s", slug)
+	}
+}
+
 func TestClassifyTraditionalRepo(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/demo\n"), 0o644); err != nil {

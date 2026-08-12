@@ -1414,10 +1414,11 @@ func labelsToBackendLabels(names []string) []ghcli.Label {
 func (a *App) runRecreateCommand(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("recreate", flag.ContinueOnError)
 	configureFlagSet(fs, func(w io.Writer) {
-		fmt.Fprintln(w, "usage: vigilante recreate --repo <owner/name> --issue <n>")
+		fmt.Fprintln(w, "usage: vigilante recreate [--repo <owner/name>] --issue <n>")
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Recreate a stuck issue as a fresh duplicate, close the original as not planned,")
 		fmt.Fprintln(w, "and clean up stale PR/branch/session artifacts.")
+		fmt.Fprintln(w, "When --repo is omitted, the repository is inferred from the current watched checkout.")
 		fmt.Fprintln(w)
 		fs.SetOutput(w)
 		fs.PrintDefaults()
@@ -1430,10 +1431,38 @@ func (a *App) runRecreateCommand(ctx context.Context, args []string) error {
 		}
 		return err
 	}
-	if *repo == "" || *issue <= 0 {
+	if *issue <= 0 {
 		return errors.New("usage: vigilante recreate --repo <owner/name> --issue <n>")
 	}
+	if *repo == "" {
+		resolved, err := a.resolveRepoSlugFromCWD(ctx)
+		if err != nil {
+			return err
+		}
+		*repo = resolved
+	}
 	return a.RecreateSession(ctx, *repo, *issue, "cli")
+}
+
+func (a *App) resolveRepoSlugFromCWD(ctx context.Context) (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("could not determine the current directory; supply --repo <owner/name>: %w", err)
+	}
+	repoSlug, err := repo.DiscoverSlug(ctx, a.env.Runner, wd)
+	if err != nil {
+		return "", fmt.Errorf("no repository could be inferred from the current directory; supply --repo <owner/name>: %w", err)
+	}
+	targets, err := a.state.LoadWatchTargets()
+	if err != nil {
+		return "", fmt.Errorf("load watch targets: %w", err)
+	}
+	for _, target := range targets {
+		if strings.EqualFold(target.Repo, repoSlug) {
+			return target.Repo, nil
+		}
+	}
+	return "", fmt.Errorf("repository %s inferred from the current directory is not watched by Vigilante; add it with vigilante watch or supply --repo", repoSlug)
 }
 
 func (a *App) runDaemonCommand(ctx context.Context, args []string) error {
@@ -6768,7 +6797,7 @@ func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  vigilante cleanup --repo <owner/name> [--issue <n>]")
 	fmt.Fprintln(w, "  vigilante cleanup --all")
 	fmt.Fprintln(w, "  vigilante redispatch --repo <owner/name> --issue <n>")
-	fmt.Fprintln(w, "  vigilante recreate --repo <owner/name> --issue <n>")
+	fmt.Fprintln(w, "  vigilante recreate [--repo <owner/name>] --issue <n>")
 	fmt.Fprintln(w, "  vigilante resume --repo <owner/name> --issue <n>")
 	fmt.Fprintln(w, "  vigilante resume --all-blocked")
 	fmt.Fprintln(w, "  vigilante service restart")
