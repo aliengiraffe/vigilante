@@ -702,7 +702,7 @@ func GetPullRequestDetails(ctx context.Context, runner environment.Runner, repo 
 		repo,
 		fmt.Sprintf("%d", number),
 		"--json",
-		"number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName",
+		"number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName,headRefOid",
 	)
 	if err != nil {
 		return nil, err

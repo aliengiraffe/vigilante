@@ -548,8 +548,8 @@ func TestBuildCIRemediationPrompt(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
 	session := state.Session{IssueNumber: 12, IssueTitle: "Fix bug", IssueURL: "https://example.com/issues/12", WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-12"}
 	pr := ghcli.PullRequest{Number: 88, URL: "https://example.com/pull/88"}
-	prompt := BuildCIRemediationPromptForRuntime(RuntimeCodex, target, session, pr, []ghcli.StatusCheckRoll{{Context: "test", Conclusion: "FAILURE"}})
-	for _, text := range []string{"Use the `vigilante-issue-implementation` skill", "Pull Request: #88", "CI remediation context", "Failing check: test", "Use `vigilante commit` for all commit-producing operations", "Do not use `git commit` or GitHub CLI commit flows directly", "preserve the user's existing git author, committer, and signing configuration", "Do not add `Co-authored by:` trailers", "do not open a new pull request", "exit with a non-zero status"} {
+	prompt := BuildCIRemediationPromptForRuntime(RuntimeCodex, target, session, pr, []ghcli.StatusCheckRoll{{Context: "test", Conclusion: "FAILURE", DetailsURL: "https://example.com/checks/123"}})
+	for _, text := range []string{"Use the `vigilante-issue-implementation` skill", "Pull Request: #88", "CI remediation context", "Failing check: test", "Failing check details: https://example.com/checks/123", "Use `vigilante commit` for all commit-producing operations", "Do not use `git commit` or GitHub CLI commit flows directly", "preserve the user's existing git author, committer, and signing configuration", "Do not add `Co-authored by:` trailers", "do not open a new pull request", "exit with a non-zero status"} {
 		if !strings.Contains(prompt, text) {
 			t.Fatalf("prompt missing %q: %s", text, prompt)
 		}

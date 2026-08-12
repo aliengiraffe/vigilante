@@ -709,6 +709,9 @@ func BuildCIRemediationPromptForRuntime(runtime string, target state.WatchTarget
 			name = "unnamed-check"
 		}
 		lines = append(lines, fmt.Sprintf("Failing check: %s (state=%s conclusion=%s)", name, fallbackPromptText(strings.TrimSpace(check.State), "unknown"), fallbackPromptText(strings.TrimSpace(check.Conclusion), "unknown")))
+		if detailsURL := strings.TrimSpace(check.DetailsURL); detailsURL != "" {
+			lines = append(lines, fmt.Sprintf("Failing check details: %s", detailsURL))
+		}
 	}
 	lines = append(lines,
 		"Investigate the failing CI checks, reproduce the problem locally when practical, and make the minimal code or configuration fix needed to get the PR green again.",

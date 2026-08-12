@@ -256,6 +256,7 @@ type Session struct {
 	LastMaintenanceError           string              `json:"last_maintenance_error,omitempty"`
 	LastCIRemediationFingerprint   string              `json:"last_ci_remediation_fingerprint,omitempty"`
 	LastCIRemediationAttemptedAt   string              `json:"last_ci_remediation_attempted_at,omitempty"`
+	CIRemediationAttempts          []CIAttempt         `json:"ci_remediation_attempts,omitempty"`
 	BlockedAt                      string              `json:"blocked_at,omitempty"`
 	BlockedStage                   string              `json:"blocked_stage,omitempty"`
 	LastBlockedStage               string              `json:"last_blocked_stage,omitempty"`
@@ -308,6 +309,14 @@ type Session struct {
 	SandboxContainerName           string              `json:"sandbox_container_name,omitempty"`
 	SandboxContainerID             string              `json:"sandbox_container_id,omitempty"`
 	SandboxExpiresAt               string              `json:"sandbox_expires_at,omitempty"`
+}
+
+// CIAttempt records one handled PR-head/check observation.
+type CIAttempt struct {
+	Observation string `json:"observation"`
+	HeadSHA     string `json:"head_sha,omitempty"`
+	Checks      string `json:"checks"`
+	AttemptedAt string `json:"attempted_at"`
 }
 
 type Store struct {

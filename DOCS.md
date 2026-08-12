@@ -730,6 +730,9 @@ Future policy can expand to richer label filters, assignment rules, and priority
 For pull requests tied to an active Vigilante session:
 
 - keep the branch updated against the session or pull request base branch through the existing maintenance loop instead of assuming `main`
+- keep required checks under observation after a PR opens; queued and in-progress checks wait without dispatching work
+- deduplicate CI remediation by PR head SHA and check-run generation so daemon restarts and repeated polls cannot launch concurrent fixes
+- allow up to three consecutive focused remediation attempts across replacement CI runs; also stop after 30 minutes without a new head or check-run observation, then pause with persisted diagnostics and an explicit `vigilante resume` recovery path
 - if either the source issue or the PR has `vigilante:automerge`, attempt a GitHub squash merge only after required checks pass and GitHub reports the PR is mergeable
 - keep the legacy plain `automerge` PR label working as a compatibility alias during migration to the namespaced label
 - never force through branch protection, required reviews, or failing checks
