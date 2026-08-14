@@ -141,6 +141,38 @@ func TestBuildIssuePrompt(t *testing.T) {
 	}
 }
 
+func TestBuildIssuePromptLaunchTitleIncludesSelectedModel(t *testing.T) {
+	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
+	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}
+	tests := []struct {
+		name     string
+		provider string
+		model    string
+		want     string
+	}{
+		{name: "Claude Sonnet", provider: "claude", model: "sonnet", want: "Coding Agent Launched: Claude Code (sonnet)"},
+		{name: "Claude Opus", provider: "claude", model: "opus", want: "Coding Agent Launched: Claude Code (opus)"},
+		{name: "Claude Fable", provider: "claude", model: "fable", want: "Coding Agent Launched: Claude Code (fable)"},
+		{name: "Claude Without Model", provider: "claude", want: "Coding Agent Launched: Claude Code`"},
+		{name: "Codex Without Model", provider: "codex", want: "Coding Agent Launched: Codex`"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			session := state.Session{
+				WorktreePath: "/tmp/worktree",
+				Branch:       "vigilante/issue-12",
+				Provider:     tt.provider,
+				Model:        tt.model,
+			}
+			prompt := BuildIssuePromptForRuntime(RuntimeCodex, target, issue, session)
+			if !strings.Contains(prompt, tt.want) {
+				t.Fatalf("prompt missing %q: %s", tt.want, prompt)
+			}
+		})
+	}
+}
+
 func TestBuildIssuePromptIncludesReusedRemoteBranchContext(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}
 	issue := ghcli.Issue{Number: 12, Title: "Fix bug", URL: "https://example.com/issues/12"}

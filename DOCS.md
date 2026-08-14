@@ -727,7 +727,7 @@ Initial rules:
 - count both running implementation sessions and open-PR maintenance sessions against that repository limit
 - avoid duplicate work across multiple daemon scans
 - allow an issue label that exactly matches a registered provider id, such as `codex`, `claude`, `gemini`, or `opencode`, to override the watch target provider for that issue only
-- allow `claude:sonnet`, `claude:opus`, or `claude:fable` to route to Claude and select that model alias for the persisted session
+- allow `claude:sonnet`, `claude:opus`, or `claude:fable` to route to Claude and select that model alias for the persisted session; the coding-agent launch comment echoes the active alias
 - allow bare `claude` together with one Claude model label; reject multiple Claude model labels or a Claude model label combined with another provider label
 - ignore unrecognized names such as `claude:haiku`, like any unrelated label
 - prefer oldest eligible open issue first unless later prioritization rules are added
