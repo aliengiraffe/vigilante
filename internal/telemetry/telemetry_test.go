@@ -401,6 +401,14 @@ func TestInternalCommandName(t *testing.T) {
 			wantOK:       true,
 		},
 		{
+			name:         "claude skips model value",
+			command:      "claude",
+			args:         []string{"--model", "opus", "--print", "free form prompt"},
+			wantName:     "claude",
+			wantCategory: "coding_agent",
+			wantOK:       true,
+		},
+		{
 			name:         "gemini skips prompt flag value",
 			command:      "gemini",
 			args:         []string{"--prompt", "free form prompt", "--yolo"},

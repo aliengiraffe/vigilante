@@ -30,11 +30,11 @@ func (claudeProvider) BuildIssuePreflightInvocation(task IssueTask) (Invocation,
 		// a stable --cwd option in headless mode.
 		Dir:  task.Session.WorktreePath,
 		Name: "claude",
-		Args: []string{
+		Args: claudeSessionArgs(task.Session.Model, []string{
 			"--print",
 			"--dangerously-skip-permissions",
 			skill.BuildIssuePreflightPrompt(task.Target, task.Issue, task.Session),
-		},
+		}),
 	}, nil
 }
 
@@ -42,11 +42,11 @@ func (claudeProvider) BuildIssueInvocation(task IssueTask) (Invocation, error) {
 	return Invocation{
 		Dir:  task.Session.WorktreePath,
 		Name: "claude",
-		Args: []string{
+		Args: claudeSessionArgs(task.Session.Model, []string{
 			"--print",
 			"--dangerously-skip-permissions",
 			skill.BuildIssuePromptForRuntime(skill.RuntimeClaude, task.Target, task.Issue, task.Session),
-		},
+		}),
 	}, nil
 }
 
@@ -54,11 +54,11 @@ func (claudeProvider) BuildConflictResolutionInvocation(task ConflictTask) (Invo
 	return Invocation{
 		Dir:  task.Session.WorktreePath,
 		Name: "claude",
-		Args: []string{
+		Args: claudeSessionArgs(task.Session.Model, []string{
 			"--print",
 			"--dangerously-skip-permissions",
 			skill.BuildConflictResolutionPromptForRuntime(skill.RuntimeClaude, task.Target, task.Session, task.PR),
-		},
+		}),
 	}, nil
 }
 
@@ -66,12 +66,19 @@ func (claudeProvider) BuildCIRemediationInvocation(task CIRemediationTask) (Invo
 	return Invocation{
 		Dir:  task.Session.WorktreePath,
 		Name: "claude",
-		Args: []string{
+		Args: claudeSessionArgs(task.Session.Model, []string{
 			"--print",
 			"--permission-mode", "acceptEdits",
 			skill.BuildCIRemediationPromptForRuntime(skill.RuntimeClaude, task.Target, task.Session, task.PR, task.FailingChecks),
-		},
+		}),
 	}, nil
+}
+
+func claudeSessionArgs(model string, args []string) []string {
+	if model == "" {
+		return args
+	}
+	return append([]string{"--model", model}, args...)
 }
 
 func (claudeProvider) BuildIssueCreateInvocation(task IssueCreateTask) (Invocation, error) {

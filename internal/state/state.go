@@ -217,6 +217,7 @@ type Session struct {
 	RepoPath                       string              `json:"repo_path"`
 	Repo                           string              `json:"repo"`
 	Provider                       string              `json:"provider,omitempty"`
+	Model                          string              `json:"model,omitempty"`
 	IssueBackend                   string              `json:"issue_backend,omitempty"`
 	GitBackend                     string              `json:"git_backend,omitempty"`
 	PRBackend                      string              `json:"pr_backend,omitempty"`

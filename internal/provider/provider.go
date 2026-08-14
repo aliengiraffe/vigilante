@@ -20,6 +20,12 @@ const ClaudeID = "claude"
 const GeminiID = "gemini"
 const OpenCodeID = "opencode"
 
+var claudeModelLabels = map[string]string{
+	"claude:sonnet": "sonnet",
+	"claude:opus":   "opus",
+	"claude:fable":  "fable",
+}
+
 // DefaultID is the provider selected when no provider is specified by a flag,
 // an issue label, or a persisted watch target. It is deliberately an alias of
 // another provider's ID rather than its own literal, so "the default" and
@@ -97,20 +103,52 @@ func RegisteredIDs() []string {
 }
 
 func ResolveIssueLabel(labels []ghcli.Label) (string, error) {
+	providerID, _, err := ResolveIssueLabels(labels)
+	return providerID, err
+}
+
+// ResolveIssueLabels resolves provider and model routing labels attached to an issue.
+func ResolveIssueLabels(labels []ghcli.Label) (string, string, error) {
 	matches := make([]string, 0, len(registry))
 	for _, providerID := range RegisteredIDs() {
 		if ghcli.HasAnyLabel(labels, providerID) {
 			matches = append(matches, providerID)
 		}
 	}
+	models := make([]string, 0, 1)
+	for label, model := range claudeModelLabels {
+		if ghcli.HasAnyLabel(labels, label) {
+			models = append(models, model)
+		}
+	}
+	sort.Strings(models)
+	if len(models) > 1 {
+		return "", "", fmt.Errorf("multiple model labels: claude:%s", strings.Join(models, ", claude:"))
+	}
+	if len(models) == 1 && !containsString(matches, ClaudeID) {
+		matches = append(matches, ClaudeID)
+		sort.Strings(matches)
+	}
 	switch len(matches) {
 	case 0:
-		return "", nil
+		return "", "", nil
 	case 1:
-		return matches[0], nil
+		if len(models) == 1 {
+			return matches[0], models[0], nil
+		}
+		return matches[0], "", nil
 	default:
-		return "", fmt.Errorf("multiple provider labels: %s", strings.Join(matches, ", "))
+		return "", "", fmt.Errorf("multiple provider labels: %s", strings.Join(matches, ", "))
 	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func Resolve(id string) (Provider, error) {

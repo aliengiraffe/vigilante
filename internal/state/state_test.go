@@ -132,7 +132,7 @@ func TestSessionStatusClosedRoundTrips(t *testing.T) {
 	}
 
 	sessions := []Session{
-		{Repo: "owner/repo", IssueNumber: 1, Branch: "vigilante/issue-1", Status: SessionStatusClosed},
+		{Repo: "owner/repo", Provider: "claude", Model: "opus", IssueNumber: 1, Branch: "vigilante/issue-1", Status: SessionStatusClosed},
 		{Repo: "owner/repo", IssueNumber: 2, Branch: "vigilante/issue-2", Status: SessionStatusSuccess},
 	}
 	if err := store.SaveSessions(sessions); err != nil {
@@ -148,6 +148,9 @@ func TestSessionStatusClosedRoundTrips(t *testing.T) {
 	}
 	if loaded[0].Status != SessionStatusClosed {
 		t.Fatalf("expected closed status, got %q", loaded[0].Status)
+	}
+	if loaded[0].Provider != "claude" || loaded[0].Model != "opus" {
+		t.Fatalf("expected provider and model to round-trip, got provider=%q model=%q", loaded[0].Provider, loaded[0].Model)
 	}
 	if loaded[1].Status != SessionStatusSuccess {
 		t.Fatalf("expected success status, got %q", loaded[1].Status)

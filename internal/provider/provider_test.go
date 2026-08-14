@@ -331,6 +331,70 @@ func TestResolveIssueLabelRejectsConflictingProviderLabels(t *testing.T) {
 	}
 }
 
+func TestResolveIssueLabelsSelectsClaudeModel(t *testing.T) {
+	for _, model := range []string{"sonnet", "opus", "fable"} {
+		providerID, gotModel, err := ResolveIssueLabels([]ghcli.Label{{Name: "claude:" + model}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if providerID != ClaudeID || gotModel != model {
+			t.Fatalf("claude:%s resolved to provider=%q model=%q", model, providerID, gotModel)
+		}
+	}
+}
+
+func TestResolveIssueLabelsClaudeConflictRules(t *testing.T) {
+	tests := []struct {
+		name      string
+		labels    []ghcli.Label
+		provider  string
+		model     string
+		wantError bool
+	}{
+		{name: "bare and model", labels: []ghcli.Label{{Name: ClaudeID}, {Name: "claude:sonnet"}}, provider: ClaudeID, model: "sonnet"},
+		{name: "two models", labels: []ghcli.Label{{Name: "claude:sonnet"}, {Name: "claude:opus"}}, wantError: true},
+		{name: "other provider", labels: []ghcli.Label{{Name: "claude:opus"}, {Name: CodexID}}, wantError: true},
+		{name: "unknown model", labels: []ghcli.Label{{Name: "claude:haiku"}}, provider: "", model: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			providerID, model, err := ResolveIssueLabels(tt.labels)
+			if (err != nil) != tt.wantError {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if providerID != tt.provider || model != tt.model {
+				t.Fatalf("resolved provider=%q model=%q", providerID, model)
+			}
+		})
+	}
+}
+
+func TestClaudeInvocationIncludesPersistedModel(t *testing.T) {
+	selectedProvider, err := Resolve(ClaudeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
+	issue := ghcli.Issue{Number: 7, Title: "Demo"}
+	session := state.Session{WorktreePath: "/tmp/worktree", Model: "opus"}
+	pr := ghcli.PullRequest{Number: 11}
+
+	invocations := []Invocation{}
+	preflight, _ := selectedProvider.BuildIssuePreflightInvocation(IssueTask{Target: target, Issue: issue, Session: session})
+	invocations = append(invocations, preflight)
+	issueRun, _ := selectedProvider.BuildIssueInvocation(IssueTask{Target: target, Issue: issue, Session: session})
+	invocations = append(invocations, issueRun)
+	conflict, _ := selectedProvider.BuildConflictResolutionInvocation(ConflictTask{Target: target, Session: session, PR: pr})
+	invocations = append(invocations, conflict)
+	ci, _ := selectedProvider.BuildCIRemediationInvocation(CIRemediationTask{Target: target, Session: session, PR: pr})
+	invocations = append(invocations, ci)
+	for _, invocation := range invocations {
+		if len(invocation.Args) < 2 || invocation.Args[0] != "--model" || invocation.Args[1] != "opus" {
+			t.Fatalf("model missing from invocation: %#v", invocation.Args)
+		}
+	}
+}
+
 func TestValidateVersionOutputAcceptsSupportedVersions(t *testing.T) {
 	cases := []struct {
 		name     string

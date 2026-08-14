@@ -1663,7 +1663,7 @@ func TestSyncIssueManagedLabelsQueued(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/labels?per_page=100":                                                     `[{"name":"bug"},{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/labels?per_page=100":                                                     `[{"name":"bug"},{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 			"gh api repos/owner/repo/issues/7":                                                                `{"labels":[{"name":"bug"},{"name":"vigilante:running"}]}`,
 			"gh issue edit --repo owner/repo 7 --add-label vigilante:queued --remove-label vigilante:running": "ok",
 		},
@@ -1696,7 +1696,7 @@ func TestSyncIssueManagedLabelsNoopDoesNotEmitTelemetry(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 			"gh api repos/owner/repo/issues/7":            `{"labels":[{"name":"vigilante:queued"}]}`,
 		},
 	}
@@ -1897,7 +1897,7 @@ func TestSyncSessionIssueLabelsUsesPullRequestReviewState(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 			"gh pr view --repo owner/repo 17 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName,headRefOid": `{"number":17,"title":"Demo PR","body":"PR body","url":"https://github.com/owner/repo/pull/17","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}],"baseRefName":"main"}`,
 			"gh api repos/owner/repo/issues/7": `{"labels":[{"name":"vigilante:ready-for-review"},{"name":"vigilante:needs-review"}]}`,
 			"gh issue edit --repo owner/repo 7 --add-label vigilante:awaiting-user-validation --remove-label vigilante:needs-review --remove-label vigilante:ready-for-review": "ok",
@@ -1924,7 +1924,7 @@ func TestSyncSessionIssueLabelsStopsMonitoringUnavailableIssue(t *testing.T) {
 	app.clock = func() time.Time { return time.Date(2026, 3, 26, 17, 0, 0, 0, time.UTC) }
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/labels?per_page=100":                `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/labels?per_page=100":                `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 			"git worktree prune":                                         "ok",
 			"git worktree list --porcelain":                              "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n",
 			"git show-ref --verify --quiet refs/heads/vigilante/issue-7": "ok",
@@ -1976,6 +1976,9 @@ func TestSyncIssueManagedLabelsProvisionMissingRepositoryLabels(t *testing.T) {
 			"gh api --method POST repos/owner/repo/labels -f name=codex -f color=1D76DB -f description=Routes the issue to the Codex provider for execution.":                                                                  "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=claude -f color=0052CC -f description=Routes the issue to the Claude provider for execution.":                                                                "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=gemini -f color=006B75 -f description=Routes the issue to the Gemini provider for execution.":                                                                "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=claude:sonnet -f color=D4A574 -f description=Routes the issue to Claude using the latest Sonnet model alias.":                                                "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=claude:opus -f color=A56CC1 -f description=Routes the issue to Claude using the latest Opus model alias.":                                                    "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=claude:fable -f color=E8B4B8 -f description=Routes the issue to Claude using the Fable model alias.":                                                         "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:resume -f color=C5DEF5 -f description=Requests that Vigilante resume a blocked session.":                                                           "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:automerge -f color=0E8A16 -f description=Requests automatic squash merge once required checks and merge requirements are satisfied.":               "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=resume -f color=C5DEF5 -f description=Legacy compatibility alias for vigilante:resume.":                                                                      "ok",
@@ -5667,7 +5670,7 @@ func TestScanOnceAutoRecoversStaleBlockedMaintenanceSession(t *testing.T) {
 			"git rebase origin/main":                                     "Current branch vigilante/issue-1 is up to date.\n",
 			"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName,headRefOid": `{"number":31,"title":"Test PR","body":"body","url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}]}`,
 			"gh issue comment --repo owner/repo 1 --body " + successComment: "ok",
-			"gh api repos/owner/repo/labels?per_page=100":                   `[{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:queued"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/labels?per_page=100":                   `[{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:queued"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 			"gh api repos/owner/repo/issues/1":                              `{"labels":[{"name":"vigilante:blocked"},{"name":"vigilante:needs-git-fix"}]}`,
 			"gh issue edit --repo owner/repo 1 --add-label vigilante:recovering --remove-label vigilante:blocked --remove-label vigilante:needs-git-fix": "ok",
 			"gh issue edit --repo owner/repo 1 --add-label vigilante:awaiting-user-validation --remove-label vigilante:recovering":                       "ok",
@@ -7438,7 +7441,7 @@ func TestCleanupClosedIssueSessionsStopsAfterAutomaticCleanupLimit(t *testing.T)
 	runner := &countingRunner{allowUnexpectedGH: true, base: testutil.FakeRunner{
 		Outputs: map[string]string{
 			"git worktree prune":                          "ok",
-			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 			"gh api repos/owner/repo/issues/1":            `{"labels":[]}`,
 		},
 		Errors: map[string]error{
@@ -8106,7 +8109,7 @@ func TestScanOnceReusesIssueDetailsAcrossMaintenanceAndLabelSync(t *testing.T) {
 			Outputs: map[string]string{
 				"gh api repos/owner/repo/issues/1":                                                                   `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"open","labels":[{"name":"vigilante:automerge"}]}`,
 				"gh api repos/owner/repo/issues/1/comments":                                                          "[]",
-				"gh api repos/owner/repo/labels?per_page=100":                                                        `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+				"gh api repos/owner/repo/labels?per_page=100":                                                        `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 				"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
 				"git fetch origin main":                                                                              "ok",
 				"git status --porcelain":                                                                             "",
@@ -10781,23 +10784,37 @@ func TestBuildResumeFailureSummaryInvocationPerProvider(t *testing.T) {
 func TestResolveIssueProviderPrefersLabelOverDefault(t *testing.T) {
 	target := state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}
 
-	selected, err := resolveIssueProvider(target, ghcli.Issue{Number: 7})
+	selected, model, err := resolveIssueProvider(target, ghcli.Issue{Number: 7})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if selected != provider.ClaudeID {
 		t.Fatalf("expected unlabeled issue to default to claude, got %q", selected)
 	}
+	if model != "" {
+		t.Fatalf("expected unlabeled issue to have no model, got %q", model)
+	}
 
-	selected, err = resolveIssueProvider(target, ghcli.Issue{Number: 7, Labels: []ghcli.Label{{Name: provider.CodexID}}})
+	selected, model, err = resolveIssueProvider(target, ghcli.Issue{Number: 7, Labels: []ghcli.Label{{Name: provider.CodexID}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if selected != provider.CodexID {
 		t.Fatalf("expected codex label to override the default, got %q", selected)
 	}
+	if model != "" {
+		t.Fatalf("expected codex routing to have no Claude model, got %q", model)
+	}
 
-	if _, err := resolveIssueProvider(target, ghcli.Issue{Number: 7, Labels: []ghcli.Label{{Name: provider.CodexID}, {Name: provider.GeminiID}}}); err == nil {
+	selected, model, err = resolveIssueProvider(target, ghcli.Issue{Number: 7, Labels: []ghcli.Label{{Name: "claude:opus"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected != provider.ClaudeID || model != "opus" {
+		t.Fatalf("expected Claude Opus routing, got provider=%q model=%q", selected, model)
+	}
+
+	if _, _, err := resolveIssueProvider(target, ghcli.Issue{Number: 7, Labels: []ghcli.Label{{Name: provider.CodexID}, {Name: provider.GeminiID}}}); err == nil {
 		t.Fatal("expected conflicting provider labels to error")
 	}
 }
