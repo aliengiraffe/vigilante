@@ -56,4 +56,19 @@ func TestUpdateNightlyCaskIncludesMacOSPostflightRemediation(t *testing.T) {
 			t.Fatalf("generated cask missing %q\n%s", want, body)
 		}
 	}
+
+	// Both platform blocks must restart the managed service so an upgrade never
+	// leaves the daemon running the previous binary, and the restart must be
+	// tolerant of a machine that never ran `vigilante setup -d`.
+	restart := strings.Join([]string{
+		`      vigilante_binary = "#{staged_path}/vigilante"`,
+		`      if File.executable?(vigilante_binary)`,
+		`        system_command vigilante_binary,`,
+		`                       args:         ["service", "restart"],`,
+		`                       must_succeed: false`,
+		`      end`,
+	}, "\n")
+	if got := strings.Count(body, restart); got != 2 {
+		t.Fatalf("generated cask has %d service restart blocks, want 2 (macOS and Linux)\n%s", got, body)
+	}
 }

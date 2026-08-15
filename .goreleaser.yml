@@ -95,6 +95,22 @@ homebrew_casks:
     license: "Apache-2.0"
     binaries:
       - vigilante
+    # Homebrew performs an upgrade as uninstall-old + install-new, so this
+    # postflight runs after both a fresh install and an upgrade. Restarting
+    # through the newly staged binary points an already-installed launchd or
+    # systemd service at the new build instead of leaving the old process
+    # running until someone notices. On a machine that never ran
+    # `vigilante setup -d` there is no service to restart, so the command
+    # exits nonzero and `must_succeed: false` keeps the cask operation green.
+    hooks:
+      post:
+        install: |
+          vigilante_binary = "#{staged_path}/vigilante"
+          if File.executable?(vigilante_binary)
+            system_command vigilante_binary,
+                           args:         ["service", "restart"],
+                           must_succeed: false
+          end
 
 changelog:
   use: github-native

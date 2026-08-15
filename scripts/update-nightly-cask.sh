@@ -63,6 +63,14 @@ cask "vigilante-nightly" do
       system_command "/usr/bin/codesign",
                      args:         ["--force", "--sign", "-", "#{staged_path}/vigilante"],
                      must_succeed: false
+      # Homebrew upgrades uninstall then reinstall, so this also runs on upgrade:
+      # point an already-installed managed service at the freshly staged binary.
+      vigilante_binary = "#{staged_path}/vigilante"
+      if File.executable?(vigilante_binary)
+        system_command vigilante_binary,
+                       args:         ["service", "restart"],
+                       must_succeed: false
+      end
     end
   end
 
@@ -70,6 +78,17 @@ cask "vigilante-nightly" do
     on_intel do
       url "https://github.com/aliengiraffe/vigilante/releases/download/${NIGHTLY_TAG}/${linux_amd64_archive}"
       sha256 "${linux_amd64_sha}"
+    end
+
+    postflight do
+      # Homebrew upgrades uninstall then reinstall, so this also runs on upgrade:
+      # point an already-installed managed service at the freshly staged binary.
+      vigilante_binary = "#{staged_path}/vigilante"
+      if File.executable?(vigilante_binary)
+        system_command vigilante_binary,
+                       args:         ["service", "restart"],
+                       must_succeed: false
+      end
     end
   end
 

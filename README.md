@@ -70,6 +70,12 @@ Install with Homebrew:
 brew install --cask aliengiraffe/spaceship/vigilante
 ```
 
+Upgrading through Homebrew restarts the managed service for you, so
+`brew upgrade --cask vigilante` alone is enough — no follow-up
+`vigilante service restart` is needed. On a machine that has not run
+`vigilante setup -d` yet there is no service to restart and the install still
+succeeds.
+
 Requirements:
 
 - `git`
