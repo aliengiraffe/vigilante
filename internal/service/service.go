@@ -48,6 +48,7 @@ type Status struct {
 	DaemonVersion string
 }
 
+var daemonNightlyVersionPattern = regexp.MustCompile(`\b0\.0\.0-nightly\.\d{14}\.([0-9a-fA-F]{12})\b`)
 var daemonVersionPattern = regexp.MustCompile(`\b(v?\d+\.\d+\.\d+)\b`)
 var launchdProgramArgumentsPattern = regexp.MustCompile(`(?s)<key>\s*ProgramArguments\s*</key>\s*<array>\s*<string>([^<]+)</string>`)
 
@@ -415,6 +416,9 @@ func normalizeDaemonVersionOutput(output string) string {
 	trimmed := strings.TrimSpace(output)
 	if trimmed == "" {
 		return ""
+	}
+	if match := daemonNightlyVersionPattern.FindStringSubmatch(trimmed); len(match) == 2 {
+		return match[1]
 	}
 	if match := daemonVersionPattern.FindStringSubmatch(trimmed); len(match) == 2 {
 		return strings.TrimPrefix(match[1], "v")

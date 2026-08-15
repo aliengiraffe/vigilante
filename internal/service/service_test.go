@@ -259,6 +259,28 @@ func TestServiceStatusReportsLaunchdRunning(t *testing.T) {
 	}
 }
 
+func TestNormalizeDaemonVersionOutput(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{name: "stable", output: "vigilante 1.2.3\n", want: "1.2.3"},
+		{name: "stable with v prefix", output: "vigilante v1.2.3\n", want: "1.2.3"},
+		{
+			name:   "nightly",
+			output: "0.0.0-nightly.20260814120000.abc123456789\n",
+			want:   "abc123456789",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeDaemonVersionOutput(tt.output); got != tt.want {
+				t.Fatalf("normalizeDaemonVersionOutput(%q) = %q, want %q", tt.output, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestServiceStatusReportsLaunchdStoppedWhenServiceIsUnloaded(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

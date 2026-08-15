@@ -34,6 +34,7 @@ import (
 	githubbackend "github.com/nicobistolfi/vigilante/internal/backend/github"
 	linearbackend "github.com/nicobistolfi/vigilante/internal/backend/linear"
 	"github.com/nicobistolfi/vigilante/internal/blocking"
+	"github.com/nicobistolfi/vigilante/internal/build"
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	forkmode "github.com/nicobistolfi/vigilante/internal/fork"
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
@@ -108,13 +109,14 @@ const statusCommandUsage = "usage: vigilante status [--plain] [-w]"
 var cloneIntoPattern = regexp.MustCompile(`Cloning into (?:bare repository )?'([^']+)'`)
 
 type App struct {
-	stdin  io.Reader
-	stdout io.Writer
-	stderr io.Writer
-	state  *state.Store
-	logger *slog.Logger
-	clock  func() time.Time
-	env    *environment.Environment
+	stdin   io.Reader
+	stdout  io.Writer
+	stderr  io.Writer
+	state   *state.Store
+	logger  *slog.Logger
+	clock   func() time.Time
+	env     *environment.Environment
+	version string
 
 	issueTracker  backend.IssueTracker
 	labelManager  backend.LabelManager
@@ -212,6 +214,7 @@ func New() *App {
 		state:        store,
 		logger:       logger,
 		clock:        func() time.Time { return time.Now().UTC() },
+		version:      build.Version,
 		issueTracker: ghBackend,
 		labelManager: ghBackend,
 		prManager:    ghBackend,
@@ -680,6 +683,9 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 	}
 
 	switch args[0] {
+	case "version", "--version":
+		fmt.Fprintln(a.stdout, a.version)
+		return nil
 	case "commit":
 		return a.runCommitCommand(ctx, args[1:])
 	case "start":
