@@ -297,6 +297,37 @@ func TestRunSupportsTopLevelHelpFlags(t *testing.T) {
 	}
 }
 
+func TestRunSupportsVersionCommands(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		arg     string
+		version string
+	}{
+		{name: "flag with stable version", arg: "--version", version: "1.2.0"},
+		{name: "command with nightly version", arg: "version", version: "0.0.0-nightly.20260814120000.abc123456789"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			app := New()
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			app.stdout = &stdout
+			app.stderr = &stderr
+			app.version = tt.version
+
+			exitCode := app.Run(context.Background(), []string{tt.arg})
+			if exitCode != 0 {
+				t.Fatalf("expected success exit code, got %d", exitCode)
+			}
+			if got, want := stdout.String(), tt.version+"\n"; got != want {
+				t.Fatalf("stdout = %q, want %q", got, want)
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("expected empty stderr, got %q", stderr.String())
+			}
+		})
+	}
+}
+
 func TestRunProxiesSupportedToolCommands(t *testing.T) {
 	app := New()
 	var stdout bytes.Buffer
