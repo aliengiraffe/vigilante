@@ -21,6 +21,8 @@ day-to-day release flow, and how to verify a published artifact.
 | `vigilante_<version>_Linux_amd64.tar.gz` | unsigned, unchanged |
 | `gh-sandbox_<version>_Linux_{amd64,arm64}.tar.gz` | unsigned, unchanged |
 | `checksums.txt` | covers all of the above |
+| `vigilante_cli-<version>-py3-none-{macosx_11_0_arm64,macosx_10_13_x86_64,manylinux2014_x86_64}.whl` | PyPI wheels repackaging the three `vigilante` archives above |
+| `vigilante_cli-<version>.tar.gz` (sdist) | PyPI fallback that fails loudly on unsupported platforms |
 
 macOS binaries are signed with our **Apple Developer ID Application**
 certificate under the hardened runtime and notarized by Apple's notary service,
@@ -275,10 +277,117 @@ git push origin v1.2.0
 ```
 
 The `Release` workflow runs on `macos-latest`, signs and notarizes, publishes the
-GitHub release, and updates the `vigilante` Homebrew cask.
+GitHub release, and updates the `vigilante` Homebrew cask. A second job then
+publishes the PyPI artifacts (next section).
 
 Nightlies need no action: every push to `main` republishes the rolling
-`main-nightly` prerelease and the `vigilante-nightly` cask.
+`main-nightly` prerelease and the `vigilante-nightly` cask. Nightlies do not
+publish to PyPI — only tagged releases do.
+
+## PyPI wheels (`vigilante-cli`)
+
+Every tagged release also publishes **prebuilt-binary wheels** to PyPI so
+`pip install vigilante-cli`, `pipx install vigilante-cli`, and
+`uv tool install vigilante-cli` place the `vigilante` binary on `PATH` with no
+Go toolchain and no Python shim. The machinery lives in
+[`packaging/pypi/`](../packaging/pypi/) and the `pypi` job of
+[`release.yml`](../.github/workflows/release.yml).
+
+The distribution is named **`vigilante-cli`** because the `vigilante` name on
+PyPI belongs to an unrelated project (see issue #516, where the decision is
+recorded). The command users run is still `vigilante` — the wheel stages the
+binary in `vigilante_cli-<version>.data/scripts/`, the standard wheel location
+pip copies onto `PATH` with the executable bit set.
+
+How the job works, and the invariants it protects:
+
+- It runs **after** the `release` job, on `ubuntu-latest`, and downloads the
+  **already-published archives** with `gh release download`. The Go binary is
+  **never rebuilt** during packaging: a rebuild would be unsigned, not
+  notarized, and would lack the ldflags version stamp and telemetry
+  configuration, and the packaging job deliberately has no access to those
+  secrets.
+- Ordering is intentional: by the time PyPI is attempted, the GitHub release
+  and the Homebrew cask are live. A PyPI outage therefore degrades to "this
+  version is missing from PyPI" — it can never abort a signed release. The
+  failed job still fails the workflow run, so it is visible, and it can be
+  re-run from the Actions UI once PyPI recovers.
+- `packaging/pypi/build_wheels.py` builds one sdist plus one wheel per
+  GoReleaser target (`macosx_11_0_arm64`, `macosx_10_13_x86_64`,
+  `manylinux2014_x86_64` — honest because the binary is `CGO_ENABLED=0` and
+  fully static). The PyPI version is the tag with the leading `v` stripped and
+  must match the version embedded in the downloaded archive names, so a
+  tag/artifact mismatch fails the job instead of publishing a mislabeled wheel.
+- `packaging/pypi/check_wheel.py` gates the upload: each wheel must carry
+  exactly its `py3-none-<platform>` tag, contain the binary under
+  `.data/scripts/` with the executable bit recorded, contain **zero `.py`
+  files** and no entry points, and say `Root-Is-Purelib: false`. The worst
+  regression this guards against is a wheel silently reverting to
+  `py3-none-any`, which pip would serve to every platform.
+- The **sdist is a loud-failure fallback**, not a build path. On platforms
+  with no matching wheel (Windows, Linux arm64) pip falls back to the sdist,
+  whose build aborts with a message naming the Homebrew cask command and the
+  GitHub releases page. It never installs a no-op package and never tries to
+  compile Go.
+
+### Credential: PyPI Trusted Publishing
+
+The job authenticates with **Trusted Publishing** (OIDC) — no long-lived PyPI
+token is stored anywhere. One-time maintainer setup on
+<https://pypi.org/manage/account/publishing/> (or the project's *Publishing*
+settings once it exists): add a trusted publisher for
+
+| Field | Value |
+|---|---|
+| Owner / repository | `aliengiraffe/vigilante` |
+| Workflow filename | `release.yml` |
+| Environment | `main` |
+
+That is why the `pypi` job carries `id-token: write` in a job-level
+`permissions` block (the workflow default stays `contents: write` untouched)
+and runs in the `main` environment. If Trusted Publishing ever has to be
+replaced with an API token, store it as a `PYPI_API_TOKEN` secret in the
+`main` environment and pass it to the publish action — do not widen workflow
+permissions for it.
+
+### Rehearsing and verifying
+
+Rehearse against **Test PyPI** before the first production tag (and after any
+change to `packaging/pypi/`): add a second trusted publisher on
+<https://test.pypi.org>, point the publish step at it temporarily
+(`repository-url: https://test.pypi.org/legacy/`), and run the install matrix
+against the uploaded artifacts. Remember that a published PyPI version can
+never be reused — a botched upload costs a new patch version, not a
+re-upload.
+
+The packaging machinery itself can be rehearsed locally without touching any
+index:
+
+```bash
+python3 -m venv /tmp/venv && /tmp/venv/bin/pip install build
+gh release download v1.2.3 --pattern 'vigilante_*.tar.gz' --dir /tmp/archives
+/tmp/venv/bin/python packaging/pypi/build_wheels.py \
+  --version 1.2.3 --archives /tmp/archives --out /tmp/pypi-dist
+/tmp/venv/bin/python packaging/pypi/check_wheel.py \
+  --dist /tmp/pypi-dist --version 1.2.3
+/tmp/venv/bin/pip install /tmp/pypi-dist/vigilante_cli-1.2.3-py3-none-macosx_11_0_arm64.whl
+file /tmp/venv/bin/vigilante   # Mach-O/ELF executable, not a Python script
+/tmp/venv/bin/vigilante --help
+```
+
+On a macOS machine that has never seen the binary, also confirm the
+pip-installed `vigilante` runs without a Gatekeeper prompt: the Developer ID
+signature travels inside the wheel byte-for-byte, but a bare CLI binary's
+notarization is validated online (see the stapling note above), so execution
+is the only conclusive check — the same rule as for the release archives.
+
+### Platform coverage
+
+Wheels exist only for the current GoReleaser matrix (macOS arm64/x86_64,
+Linux x86_64). Adding `linux/arm64` or Windows wheels requires adding those
+targets to `.goreleaser.yml` first and is deliberately out of scope here;
+`packaging/pypi/check_wheel.py` carries the target table that would need to
+grow with it.
 
 ## Local validation
 

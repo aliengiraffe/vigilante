@@ -1,0 +1,6 @@
+# Build outputs and the binary staged by build_wheels.py; nothing under
+# scripts/ is ever committed — the wheel payload comes from release archives.
+/build/
+/dist/
+/*.egg-info/
+/scripts/

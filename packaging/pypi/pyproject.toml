@@ -1,0 +1,35 @@
+# PyPI packaging for the prebuilt vigilante binary. The wheels contain no
+# Python code: each one embeds the matching GoReleaser-built binary under
+# <dist>.data/scripts/ so pip places it on PATH. See docs/releasing.md.
+#
+# The distribution name below is the single source of truth for it; the
+# packaging scripts read it from this file. `vigilante` itself is taken on
+# PyPI by an unrelated project, hence `vigilante-cli`. The installed command
+# is still `vigilante`.
+
+[build-system]
+requires = ["setuptools>=70.1", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vigilante-cli"
+description = "Autonomous GitHub issue runner for headless coding agents (prebuilt vigilante binary)"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+# No Python code runs at runtime, so the floor is only what pip needs.
+requires-python = ">=3.8"
+dynamic = ["version"]
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Software Development",
+]
+
+[project.urls]
+Homepage = "https://github.com/aliengiraffe/vigilante"
+Releases = "https://github.com/aliengiraffe/vigilante/releases"
+
+[tool.setuptools]
+# The wheel intentionally ships zero importable Python.
+packages = []

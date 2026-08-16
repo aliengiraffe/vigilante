@@ -55,6 +55,16 @@ Install with Homebrew:
 brew install --cask aliengiraffe/spaceship/vigilante
 ```
 
+Or from PyPI (macOS arm64/x86_64, Linux x86_64) — the wheel ships the same
+prebuilt `vigilante` binary, and the command name is unchanged:
+
+```sh
+pipx install vigilante-cli   # or: pip install vigilante-cli / uv tool install vigilante-cli
+```
+
+Either way, `git`, an authenticated `gh`, and a coding-agent CLI must be
+installed separately — see the requirements below.
+
 Prepare the local machine. `--provider` defaults to `claude`, so pass the flag only when you want a different coding agent:
 
 ```sh
@@ -239,6 +249,25 @@ Upgrade later with:
 ```sh
 brew upgrade --cask vigilante
 ```
+
+Or install from PyPI with a Python package manager:
+
+```sh
+pip install vigilante-cli
+pipx install vigilante-cli
+uv tool install vigilante-cli
+```
+
+The PyPI distribution is named `vigilante-cli` because `vigilante` on PyPI
+belongs to an unrelated project; the installed command is still `vigilante`.
+Each wheel contains no Python code — it embeds the prebuilt (and, on macOS,
+signed and notarized) release binary, which pip places on `PATH`. Wheels are
+published for macOS arm64, macOS x86_64, and Linux x86_64. On unsupported
+platforms (Windows, Linux arm64) the install fails with instructions pointing
+at Homebrew and the GitHub releases page rather than installing a broken
+package. pip installs the binary only: `git`, an authenticated `gh`, and a
+coding-agent CLI remain prerequisites, and `vigilante setup -d` is still the
+bootstrap step.
 
 ### `vigilante watch [--assignee <value>] [--max-parallel <value>] [--provider <codex|claude|gemini|opencode>] [--issue-tracker <github|linear>] [--issue-tracker-stage <value>] [--branch <name> | --track-default-branch] <path>`
 
@@ -562,6 +591,7 @@ Tagged releases are built and published with GoReleaser. Pushing a version tag t
 - `linux/amd64`
 - a `checksums.txt` file for the published archives
 - an updated Homebrew cask in the `aliengiraffe/homebrew-spaceship` tap so `brew install --cask aliengiraffe/spaceship/vigilante` installs the tagged release
+- prebuilt-binary wheels and an sdist on PyPI as `vigilante-cli`, repackaged from the published release archives after the GitHub release and cask are live (see [docs/releasing.md](docs/releasing.md))
 
 The release workflow requires a GitHub App that can write to the tap repository:
 

@@ -1,0 +1,3 @@
+# The sdist must never carry a staged binary: it exists only to fail loudly
+# on platforms with no prebuilt wheel (see setup.py).
+exclude scripts/vigilante

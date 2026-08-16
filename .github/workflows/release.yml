@@ -1,7 +1,8 @@
 name: Release
 
 # Builds, signs, and notarizes the macOS binaries with GoReleaser, then publishes
-# the GitHub release and the Homebrew cask.
+# the GitHub release and the Homebrew cask, and finally repackages the released
+# binaries into prebuilt PyPI wheels (see the pypi job below).
 #
 # Runs on macOS because signing needs Apple's native codesign/notarytool. The
 # Linux artifacts cross-compile from the same runner (everything is
@@ -102,3 +103,68 @@ jobs:
             echo "::warning::Apple notary credentials are not configured; the release will be signed but NOT notarized."
           fi
           goreleaser release --clean
+
+  # Repackages the already-published release archives into PyPI wheels
+  # (packaging/pypi/). Runs after `release`, so the GitHub release and the
+  # Homebrew cask are live before PyPI is attempted: a PyPI outage degrades to
+  # "this version is missing from PyPI" instead of blocking a signed release,
+  # while a failed upload still fails the workflow loudly.
+  #
+  # The Go binary is NEVER rebuilt here — a rebuild would be unsigned, not
+  # notarized, and would lack the ldflags version stamp and telemetry
+  # configuration. This job only needs to download, repackage, and upload, so
+  # it runs on ubuntu-latest with no Apple or OTEL secrets.
+  pypi:
+    needs: release
+    runs-on: ubuntu-latest
+    environment: main
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # PyPI Trusted Publishing (OIDC). The trusted publisher on PyPI is
+      # scoped to this repository, this workflow file, and the `main`
+      # environment — see docs/releasing.md.
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+
+      - name: Download release archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          gh release download "$TAG_NAME" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'vigilante_*.tar.gz' --dir release-archives
+
+      - name: Build wheels and sdist from released archives
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          python -m pip install --upgrade build
+          python packaging/pypi/build_wheels.py \
+            --version "${TAG_NAME#v}" \
+            --archives release-archives \
+            --out packaging/pypi/dist
+
+      # The pre-upload gate: exact py3-none-<platform> tags, the binary under
+      # <dist>.data/scripts/ with the executable bit, zero .py files, and
+      # Root-Is-Purelib: false. A wheel that silently reverted to
+      # py3-none-any would install a non-functional binary on every platform.
+      - name: Verify wheel and sdist contents
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          python packaging/pypi/check_wheel.py \
+            --dist packaging/pypi/dist \
+            --version "${TAG_NAME#v}"
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: packaging/pypi/dist
