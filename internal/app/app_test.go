@@ -10075,6 +10075,379 @@ func TestRecreateCommandExplicitRepoTakesPrecedenceOverCWD(t *testing.T) {
 	}
 }
 
+func reviewClaudeInvocationKey(target state.WatchTarget, prNumber int, model string) string {
+	prompt := skill.BuildAdversarialReviewPromptForRuntime(skill.RuntimeClaude, target, prNumber)
+	return testutil.Key("claude", "--model", model, "--print", "--dangerously-skip-permissions", prompt)
+}
+
+func TestReviewCommandHelp(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+
+	exitCode := app.Run(context.Background(), []string{"review", "--help"})
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0 for --help, got %d", exitCode)
+	}
+	if !strings.Contains(stdout.String(), "vigilante review {provider}:{model} --pr <n>") || !strings.Contains(stdout.String(), "adversarial code review") {
+		t.Fatalf("expected usage text in help output, got: %s", stdout.String())
+	}
+}
+
+func TestReviewCommandUsageErrors(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	for _, args := range [][]string{
+		{"review"},
+		{"review", "claude:fable"},
+		{"review", "claude:fable", "--pr", "0"},
+		{"review", "claude:fable", "--pr", "-1"},
+	} {
+		app := New()
+		var stderr bytes.Buffer
+		app.stdout = &bytes.Buffer{}
+		app.stderr = &stderr
+
+		exitCode := app.Run(context.Background(), args)
+		if exitCode != 1 {
+			t.Fatalf("expected exit code 1 for %v, got %d", args, exitCode)
+		}
+		if !strings.Contains(stderr.String(), "usage: vigilante review {provider}:{model} --pr <n>") {
+			t.Fatalf("expected usage error for %v, got: %s", args, stderr.String())
+		}
+	}
+}
+
+func TestReviewCommandRejectsInvalidSelector(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	for _, tc := range []struct {
+		selector string
+		want     string
+	}{
+		{selector: "claudefable", want: "expected {provider}:{model}"},
+		{selector: "claude:", want: "expected {provider}:{model}"},
+		{selector: "foo:bar", want: "unsupported provider"},
+	} {
+		app := New()
+		var stderr bytes.Buffer
+		app.stdout = &bytes.Buffer{}
+		app.stderr = &stderr
+
+		exitCode := app.Run(context.Background(), []string{"review", tc.selector, "--pr", "5"})
+		if exitCode != 1 {
+			t.Fatalf("expected exit code 1 for selector %q, got %d", tc.selector, exitCode)
+		}
+		if !strings.Contains(stderr.String(), tc.want) {
+			t.Fatalf("expected %q in error for selector %q, got: %s", tc.want, tc.selector, stderr.String())
+		}
+	}
+}
+
+func TestReviewCommandSuccess(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	target := state.WatchTarget{Path: repoPath, Repo: "owner/repo"}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"claude --version": "claude 2.4.1 (Claude Code)",
+			reviewClaudeInvocationKey(target, 12, "fable"): "review posted",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{target}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:          repoPath,
+		Repo:              "owner/repo",
+		IssueNumber:       1,
+		Status:            state.SessionStatusSuccess,
+		PullRequestNumber: 12,
+		PullRequestState:  "OPEN",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	exitCode := app.Run(context.Background(), []string{"review", "claude:fable", "--pr", "12", "--repo", "owner/repo"})
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+	if !strings.Contains(stdout.String(), "adversarial review completed for owner/repo PR #12") {
+		t.Fatalf("unexpected output: %s", stdout.String())
+	}
+}
+
+func TestReviewCommandRejectsUnwatchedRepo(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	var stderr bytes.Buffer
+	app.stdout = &bytes.Buffer{}
+	app.stderr = &stderr
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets(nil); err != nil {
+		t.Fatal(err)
+	}
+
+	exitCode := app.Run(context.Background(), []string{"review", "claude:fable", "--pr", "12", "--repo", "owner/repo"})
+	if exitCode != 1 {
+		t.Fatalf("expected exit code 1, got %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "not watched by Vigilante") {
+		t.Fatalf("unexpected error: %s", stderr.String())
+	}
+}
+
+func TestReviewCommandRejectsUnmanagedPR(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	var stderr bytes.Buffer
+	app.stdout = &bytes.Buffer{}
+	app.stderr = &stderr
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:          repoPath,
+		Repo:              "owner/repo",
+		IssueNumber:       1,
+		Status:            state.SessionStatusSuccess,
+		PullRequestNumber: 7,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	exitCode := app.Run(context.Background(), []string{"review", "claude:fable", "--pr", "12", "--repo", "owner/repo"})
+	if exitCode != 1 {
+		t.Fatalf("expected exit code 1, got %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "not a Vigilante-managed PR") {
+		t.Fatalf("unexpected error: %s", stderr.String())
+	}
+}
+
+func TestReviewCommandInfersWatchedRepoFromCWD(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Chdir(home)
+
+	app := New()
+	var stdout bytes.Buffer
+	app.stdout = &stdout
+	app.stderr = testutil.IODiscard{}
+	target := state.WatchTarget{Path: home, Repo: "Owner/Repo"}
+	app.env.Runner = testutil.FakeRunner{
+		Outputs: map[string]string{
+			"git rev-parse --is-inside-work-tree":          "true\n",
+			"git remote get-url origin":                    "git@github.com:owner/repo.git\n",
+			"claude --version":                             "claude 2.4.1 (Claude Code)",
+			reviewClaudeInvocationKey(target, 12, "fable"): "review posted",
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{target}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions([]state.Session{{
+		RepoPath:          home,
+		Repo:              "Owner/Repo",
+		IssueNumber:       1,
+		Status:            state.SessionStatusSuccess,
+		PullRequestNumber: 12,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	exitCode := app.Run(context.Background(), []string{"review", "claude:fable", "--pr", "12"})
+	if exitCode != 0 {
+		t.Fatalf("expected exit code 0, got %d", exitCode)
+	}
+	if !strings.Contains(stdout.String(), "adversarial review completed for Owner/Repo PR #12") {
+		t.Fatalf("unexpected output: %s", stdout.String())
+	}
+}
+
+func TestReviewCommandRejectsNonGitCWD(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Chdir(home)
+
+	app := New()
+	var stderr bytes.Buffer
+	app.stdout = testutil.IODiscard{}
+	app.stderr = &stderr
+	app.env.Runner = testutil.FakeRunner{Errors: map[string]error{
+		"git rev-parse --is-inside-work-tree": errors.New("not a git repository"),
+	}}
+
+	exitCode := app.Run(context.Background(), []string{"review", "claude:fable", "--pr", "12"})
+	if exitCode != 1 {
+		t.Fatalf("expected exit code 1, got %d", exitCode)
+	}
+	if !strings.Contains(stderr.String(), "no repository could be inferred") || !strings.Contains(stderr.String(), "supply --repo") {
+		t.Fatalf("unexpected error: %s", stderr.String())
+	}
+}
+
+func TestProcessGitHubReviewRequestsDispatchesExactlyOnce(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	target := state.WatchTarget{Path: repoPath, Repo: "owner/repo"}
+	dispatchKey := reviewClaudeInvocationKey(target, 12, "fable")
+	runner := &countingRunner{
+		base: testutil.FakeRunner{
+			Outputs: map[string]string{
+				"gh api repos/owner/repo/issues/1/comments":            `[]`,
+				"gh api repos/owner/repo/issues/12/comments":           `[{"id":501,"body":"@vigilanteai review claude:fable","created_at":"2026-03-19T11:59:00Z","user":{"login":"nico"}}]`,
+				"gh api repos/owner/repo/pulls/12/comments --paginate": `[]`,
+				"claude --version": "claude 2.4.1 (Claude Code)",
+				dispatchKey:        "review posted",
+			},
+		},
+		allowUnexpectedGH: true,
+	}
+	app.env.Runner = runner
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{target}); err != nil {
+		t.Fatal(err)
+	}
+	sessions := []state.Session{{
+		RepoPath:          repoPath,
+		Repo:              "owner/repo",
+		IssueNumber:       1,
+		Status:            state.SessionStatusRunning,
+		PullRequestNumber: 12,
+		PullRequestState:  "OPEN",
+	}}
+
+	sessions, err := app.processGitHubReviewRequests(context.Background(), sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].LastReviewCommentID != 501 {
+		t.Fatalf("expected review comment 501 to be claimed, got: %d", sessions[0].LastReviewCommentID)
+	}
+
+	// A second scan with the same comments must not dispatch again.
+	sessions, err = app.processGitHubReviewRequests(context.Background(), sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := runner.counts[dispatchKey]; got != 1 {
+		t.Fatalf("expected exactly one review dispatch, got: %d", got)
+	}
+	ackPosted := false
+	for key := range runner.counts {
+		if strings.Contains(key, "Adversarial Review Dispatched") {
+			ackPosted = true
+		}
+	}
+	if !ackPosted {
+		t.Fatal("expected an acknowledgment comment on the PR")
+	}
+	if sessions[0].LastReviewCommentID != 501 {
+		t.Fatalf("expected claimed review comment to stay 501, got: %d", sessions[0].LastReviewCommentID)
+	}
+}
+
+func TestProcessGitHubReviewRequestsRepliesUsageForUnknownProvider(t *testing.T) {
+	home := t.TempDir()
+	repoPath := filepath.Join(home, "repo")
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	runner := &countingRunner{
+		base: testutil.FakeRunner{
+			Outputs: map[string]string{
+				"gh api repos/owner/repo/issues/1/comments":            `[]`,
+				"gh api repos/owner/repo/issues/12/comments":           `[{"id":601,"body":"@vigilanteai review foo:bar","created_at":"2026-03-19T11:59:00Z","user":{"login":"nico"}}]`,
+				"gh api repos/owner/repo/pulls/12/comments --paginate": `[]`,
+			},
+		},
+		allowUnexpectedGH: true,
+	}
+	app.env.Runner = runner
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo"}}); err != nil {
+		t.Fatal(err)
+	}
+	sessions := []state.Session{{
+		RepoPath:          repoPath,
+		Repo:              "owner/repo",
+		IssueNumber:       1,
+		Status:            state.SessionStatusRunning,
+		PullRequestNumber: 12,
+		PullRequestState:  "OPEN",
+	}}
+
+	sessions, err := app.processGitHubReviewRequests(context.Background(), sessions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sessions[0].LastReviewCommentID != 601 {
+		t.Fatalf("expected review comment 601 to be claimed, got: %d", sessions[0].LastReviewCommentID)
+	}
+	usageReplied := false
+	for key := range runner.counts {
+		if strings.HasPrefix(key, "claude ") {
+			t.Fatalf("expected no review session dispatch for unknown provider, saw: %s", key)
+		}
+		if strings.Contains(key, "Review Request Rejected") && strings.Contains(key, "unsupported provider") {
+			usageReplied = true
+		}
+	}
+	if !usageReplied {
+		t.Fatal("expected an explanatory usage reply on the PR")
+	}
+}
+
 func recreateCommandOutputs(repoSlug string, oldIssue int, newIssue int) map[string]string {
 	oldIssueText := fmt.Sprintf("%d", oldIssue)
 	newIssueText := fmt.Sprintf("%d", newIssue)

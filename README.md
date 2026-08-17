@@ -130,6 +130,7 @@ vigilante service restart
 - `vigilante status`: show service health, watched repos, sessions, and rate-limit state as a live dashboard on a terminal (`--plain` for plain text; piped and redirected output is plain text automatically)
 - `vigilante logs`: inspect daemon and per-issue logs
 - `vigilante resume`, `vigilante redispatch`, `vigilante cleanup`: recover or restart stuck work safely
+- `vigilante review {provider}:{model} --pr <n>`: run a solicited adversarial review of a Vigilante-opened pull request and post the findings back to the PR (also available by commenting `@vigilanteai review {provider}:{model}` on the PR)
 - `vigilante daemon run`: run the watcher loop in the foreground
 
 ## Additional Capabilities

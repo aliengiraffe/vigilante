@@ -288,6 +288,8 @@ type Session struct {
 	LastRecreateSource             string              `json:"last_recreate_source,omitempty"`
 	LastRecreateCommentID          int64               `json:"last_recreate_comment_id,omitempty"`
 	LastRecreateCommentAt          string              `json:"last_recreate_comment_at,omitempty"`
+	LastReviewCommentID            int64               `json:"last_review_comment_id,omitempty"`
+	LastReviewCommentAt            string              `json:"last_review_comment_at,omitempty"`
 	IncompleteReason               string              `json:"incomplete_reason,omitempty"`
 	RecreatedAsIssue               int                 `json:"recreated_as_issue,omitempty"`
 	RecreatedAsIssueURL            string              `json:"recreated_as_issue_url,omitempty"`

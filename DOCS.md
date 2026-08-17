@@ -420,6 +420,33 @@ Recreate a stuck issue as a fresh duplicate and clean up its stale artifacts.
 inside a git checkout whose `origin` matches a repository Vigilante watches;
 an explicit `--repo` always takes precedence.
 
+### `vigilante review {provider}:{model} --pr <n> [--repo <owner/name>]`
+
+Run a solicited adversarial code review of a Vigilante-opened pull request with
+the selected coding agent and model, and post the findings back to the PR.
+
+The selector accepts a model family alias (`claude:fable`, `claude:opus`,
+`claude:sonnet`) or a specific model identifier (`claude:claude-fable-5`); the
+model segment is passed through to the provider's model flag. Providers whose
+CLI cannot honor a model override fail with a clear error. `--repo` may be
+omitted when the command runs inside a git checkout whose `origin` matches a
+repository Vigilante watches, matching `vigilante recreate` behavior.
+
+Expected behavior:
+
+- requires the target PR to be a Vigilante-managed PR in a watched repository
+- directs the agent to hunt for real defects (correctness bugs, security
+  issues, unhandled edge cases, broken invariants) rather than summarize
+- never pushes commits or modifies the PR branch; the only write is the review
+  findings posted to the pull request
+- exits non-zero with a usage message when the selector is missing or malformed
+
+The same review can be requested from GitHub by commenting
+`@vigilanteai review {provider}:{model}` on a Vigilante-opened pull request.
+Vigilante acknowledges the request on the PR, dispatches exactly one review
+session per comment, and replies with usage guidance when the selector is
+malformed or names an unregistered provider.
+
 ### `vigilante unwatch <path>`
 
 Remove a repository from the watchlist without deleting the repository itself.
@@ -451,6 +478,7 @@ Expected behavior:
   - `vigilante-issue-implementation-on-gradle`
   - `vigilante-issue-implementation-on-bazel-monorepo`
   - `vigilante-conflict-resolution`
+  - `vigilante-adversarial-review`
   - `vigilante-create-issue`
   - `vigilante-local-service-dependencies`
   - `docker-compose-launch`

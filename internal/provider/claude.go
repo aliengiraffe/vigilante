@@ -93,6 +93,18 @@ func (claudeProvider) BuildIssueCreateInvocation(task IssueCreateTask) (Invocati
 	}, nil
 }
 
+func (claudeProvider) BuildReviewInvocation(task ReviewTask) (Invocation, error) {
+	return Invocation{
+		Dir:  task.Target.Path,
+		Name: "claude",
+		Args: claudeSessionArgs(task.Model, []string{
+			"--print",
+			"--dangerously-skip-permissions",
+			skill.BuildAdversarialReviewPromptForRuntime(skill.RuntimeClaude, task.Target, task.PRNumber),
+		}),
+	}, nil
+}
+
 func (claudeProvider) BuildPackageRemediationInvocation(task PackageRemediationTask) (Invocation, error) {
 	return Invocation{
 		Dir:  task.Target.Path,
