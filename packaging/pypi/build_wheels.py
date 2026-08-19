@@ -56,6 +56,12 @@ def main():
     parser.add_argument("--out", required=True, type=Path)
     args = parser.parse_args()
 
+    # Resolved to absolute: run_build() launches `python -m build` with
+    # cwd=HERE, so a relative --out would resolve against the wrong
+    # directory there while the existence check below still resolves it
+    # against this process's cwd, silently doubling the path.
+    args.out = args.out.resolve()
+
     if args.version.startswith("v"):
         sys.exit("build_wheels: --version must not carry the leading v (PEP 440)")
 
