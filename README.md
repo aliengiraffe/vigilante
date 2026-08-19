@@ -76,6 +76,23 @@ Upgrading through Homebrew restarts the managed service for you, so
 `vigilante setup -d` yet there is no service to restart and the install still
 succeeds.
 
+Or install from PyPI with `pip`, `pipx`, or `uv`. The wheels ship the same
+prebuilt (and, on macOS, signed) `vigilante` binary the GitHub release
+carries — no Go toolchain and no Python wrapper involved:
+
+```sh
+pipx install vigilante-cli   # or: pip install vigilante-cli / uv tool install vigilante-cli
+```
+
+The distribution is named `vigilante-cli` (the `vigilante` name on PyPI
+belongs to an unrelated project); the installed command is still `vigilante`.
+Wheels exist for macOS arm64, macOS x86_64, and Linux x86_64 — on other
+platforms (Windows, Linux arm64) the install fails with pointers to Homebrew
+and the [releases page](https://github.com/aliengiraffe/vigilante/releases).
+Homebrew remains the recommended path on macOS; pip/pipx suit Linux hosts,
+containers, and Python-managed toolchains. Note that pip delivers the binary
+only — the requirements below still apply.
+
 Requirements:
 
 - `git`
