@@ -21,6 +21,7 @@ day-to-day release flow, and how to verify a published artifact.
 | `vigilante_<version>_Linux_amd64.tar.gz` | unsigned, unchanged |
 | `gh-sandbox_<version>_Linux_{amd64,arm64}.tar.gz` | unsigned, unchanged |
 | `checksums.txt` | covers all of the above |
+| `vigilante-cli`, `vigilante-cli-{darwin-arm64,darwin-x64,linux-x64}` (npm) | repackage the three `vigilante` archives above |
 
 macOS binaries are signed with our **Apple Developer ID Application**
 certificate under the hardened runtime and notarized by Apple's notary service,
@@ -275,10 +276,129 @@ git push origin v1.2.0
 ```
 
 The `Release` workflow runs on `macos-latest`, signs and notarizes, publishes the
-GitHub release, and updates the `vigilante` Homebrew cask.
+GitHub release, and updates the `vigilante` Homebrew cask. A second job then
+publishes the npm packages (next section).
 
 Nightlies need no action: every push to `main` republishes the rolling
-`main-nightly` prerelease and the `vigilante-nightly` cask.
+`main-nightly` prerelease and the `vigilante-nightly` cask. Nightlies do not
+publish to npm — only tagged releases do.
+
+## npm packages (`vigilante-cli`)
+
+Every tagged release also publishes **prebuilt-binary npm packages** so
+`npm install -g vigilante-cli` and `npx vigilante-cli` place the `vigilante`
+binary on `PATH` with no Go toolchain and no JavaScript reimplementation. The
+machinery lives in [`packaging/npm/`](../packaging/npm/) and the `npm` job of
+[`release.yml`](../.github/workflows/release.yml).
+
+The distribution is named **`vigilante-cli`** because the `vigilante` name on
+npm belongs to an unrelated project (see issue #520, where the decision is
+recorded, matching the PyPI name for consistency). The command users run is
+still `vigilante`.
+
+Layout, following the `optionalDependencies` prebuilt-binary pattern used by
+`esbuild`, `@swc/core`, and `rollup`:
+
+- `packaging/npm/vigilante-cli/` — the thin main package. `bin/vigilante.js`
+  resolves the platform package that matched at install time and `spawn`s the
+  real binary, forwarding argv/stdio/exit code. It declares
+  `optionalDependencies` on the three platform packages below; npm installs
+  only the one whose `os`/`cpu` match the current machine.
+- `packaging/npm/vigilante-cli-{darwin-arm64,darwin-x64,linux-x64}/` — each
+  declares its `os`/`cpu` pair and contains nothing but the extracted,
+  already-signed `vigilante` binary under `bin/`.
+
+How the job works, and the invariants it protects:
+
+- It runs **after** the `release` job, on `ubuntu-latest`, and downloads the
+  **already-published archives** with `gh release download`. The Go binary is
+  **never rebuilt** during packaging: a rebuild would be unsigned, not
+  notarized, and would lack the ldflags version stamp and telemetry
+  configuration, and the packaging job deliberately has no access to those
+  secrets.
+- Ordering is intentional: by the time npm is attempted, the GitHub release
+  and the Homebrew cask are live. An npm-registry outage therefore degrades to
+  "this version is missing from npm" — it can never abort a signed release.
+  The failed job still fails the workflow run, so it is visible, and it can be
+  re-run from the Actions UI once npm recovers.
+- `packaging/npm/build_packages.js` stages one binary per GoReleaser target
+  into its platform package and patches the version fields in place. The npm
+  version for a release is the tag with the leading `v` stripped and must
+  match the version embedded in the downloaded archive names, so a
+  tag/artifact mismatch fails the job instead of publishing a mislabeled
+  package.
+- `packaging/npm/check_packages.js` gates the publish: each platform package
+  must declare the exact `os`/`cpu` pair, contain the binary with the
+  executable bit set and nothing else, and declare neither `bin` nor
+  `scripts` (only the main package registers a command or runs install-time
+  code). The main package's `optionalDependencies` must be pinned to the
+  exact version being published. The worst regression this guards against is
+  a platform package silently missing its `os`/`cpu` fields, which would make
+  npm install it on every platform.
+- Publish order is platform packages first, then the main package: the main
+  package's `optionalDependencies` reference these exact versions, so
+  publishing it first could let a freshly-published main package resolve to
+  a platform package version that does not exist yet.
+- **`scripts/postinstall.js`** in the main package is the install-time
+  failure path for unsupported platforms (Windows, Linux arm64): npm silently
+  skips any `optionalDependency` whose `os`/`cpu` doesn't match, which would
+  otherwise install `vigilante-cli` with no binary and no error. The script
+  only checks whether the matching platform package resolved — it never
+  touches the network, so it is safe under `--ignore-scripts` audits and
+  offline installs alike (it simply doesn't run under `--ignore-scripts`,
+  which then leaves the install-time check to `bin/vigilante.js` at first
+  run).
+
+### Credential: npm token and provenance
+
+The job authenticates with an npm automation token stored as `NPM_TOKEN` in
+the `main` GitHub environment, wired through `actions/setup-node`'s
+`registry-url` into `NODE_AUTH_TOKEN`. Publishes also pass `--provenance`,
+which needs the job-level `id-token: write` permission (workflow-level
+permissions stay `contents: write`, untouched) — this attaches a Sigstore
+attestation proving the package was built by this exact workflow run, visible
+on the npm package page. Generate the token at
+<https://www.npmjs.com/settings/~/tokens> as an **Automation** token scoped to
+publish `vigilante-cli` and its platform packages, then:
+
+```bash
+gh secret set NPM_TOKEN --env main --repo aliengiraffe/vigilante
+```
+
+### Rehearsing and verifying
+
+The packaging machinery can be rehearsed locally without publishing anything:
+
+```bash
+gh release download v1.2.3 --pattern 'vigilante_*.tar.gz' --dir /tmp/archives
+node packaging/npm/build_packages.js --version 1.2.3 --archives /tmp/archives
+node packaging/npm/check_packages.js --version 1.2.3
+
+mkdir -p /tmp/npm-test/node_modules
+cp -R packaging/npm/vigilante-cli /tmp/npm-test/node_modules/
+cp -R packaging/npm/vigilante-cli-darwin-arm64 /tmp/npm-test/node_modules/   # match your machine
+node /tmp/npm-test/node_modules/vigilante-cli/bin/vigilante.js --help
+```
+
+Before the first production tag, also do one real end-to-end install from a
+`npm pack` tarball (or a scoped/private registry) on each of macOS arm64,
+macOS x64, and Linux x64: confirm `which vigilante`, `file $(which vigilante)`
+reports the right executable format, the executable bit is set, and
+`vigilante --version` matches the tag — the same rule as for the release
+archives, since a bare CLI binary's notarization is validated online (see the
+stapling note above), so execution is the only conclusive check. Also confirm
+`npm install -g vigilante-cli` fails with the unsupported-platform message on
+a platform with no matching package (Windows or Linux arm64), and that an
+install on one platform never downloads the `optionalDependencies` for the
+other two.
+
+### Platform coverage
+
+Packages exist only for the current GoReleaser matrix (macOS arm64/x64, Linux
+x64). Adding `linux/arm64` or Windows packages requires adding those targets
+to `.goreleaser.yml` first and is deliberately out of scope here;
+`packaging/npm/targets.js` carries the target table that would need to grow
+with it.
 
 ## Local validation
 

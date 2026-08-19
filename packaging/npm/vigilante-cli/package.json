@@ -1,0 +1,33 @@
+{
+  "name": "vigilante-cli",
+  "version": "0.0.0-placeholder",
+  "description": "Autonomous GitHub issue runner for headless coding agents (prebuilt vigilante binary)",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/aliengiraffe/vigilante",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aliengiraffe/vigilante.git"
+  },
+  "bugs": {
+    "url": "https://github.com/aliengiraffe/vigilante/issues"
+  },
+  "bin": {
+    "vigilante": "bin/vigilante.js"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "scripts"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js"
+  },
+  "optionalDependencies": {
+    "vigilante-cli-darwin-arm64": "0.0.0-placeholder",
+    "vigilante-cli-darwin-x64": "0.0.0-placeholder",
+    "vigilante-cli-linux-x64": "0.0.0-placeholder"
+  },
+  "engines": {
+    "node": ">=16"
+  }
+}

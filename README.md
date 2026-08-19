@@ -76,6 +76,29 @@ Upgrading through Homebrew restarts the managed service for you, so
 `vigilante setup -d` yet there is no service to restart and the install still
 succeeds.
 
+Or install from npm. The package ships the same prebuilt `vigilante` binary
+the GitHub release carries — no Go toolchain and no JavaScript
+reimplementation involved:
+
+```sh
+npm install -g vigilante-cli
+```
+
+or run it once with `npx` (no global install needed):
+
+```sh
+npx vigilante-cli --help
+```
+
+The distribution is named `vigilante-cli` (the `vigilante` name on npm
+belongs to an unrelated project); the installed command is still `vigilante`.
+Prebuilt binaries exist for macOS arm64, macOS x64, and Linux x64 — on other
+platforms (Windows, Linux arm64) the install fails with pointers to Homebrew
+and the [releases page](https://github.com/aliengiraffe/vigilante/releases).
+Homebrew remains the recommended path on macOS; npm suits Node-centric teams,
+CI images that already have Node, and one-off `npx` usage. Note that npm
+delivers the binary only — the requirements below still apply.
+
 Requirements:
 
 - `git`
