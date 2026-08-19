@@ -1,7 +1,8 @@
 name: Release
 
 # Builds, signs, and notarizes the macOS binaries with GoReleaser, then publishes
-# the GitHub release and the Homebrew cask.
+# the GitHub release and the Homebrew cask, and finally repackages the released
+# binaries into prebuilt npm packages (see the npm job below).
 #
 # Runs on macOS because signing needs Apple's native codesign/notarytool. The
 # Linux artifacts cross-compile from the same runner (everything is
@@ -102,3 +103,79 @@ jobs:
             echo "::warning::Apple notary credentials are not configured; the release will be signed but NOT notarized."
           fi
           goreleaser release --clean
+
+  # Repackages the already-published release archives into npm packages
+  # (packaging/npm/). Runs after `release`, so the GitHub release and the
+  # Homebrew cask are live before npm is attempted: an npm-registry outage
+  # degrades to "this version is missing from npm" instead of blocking a
+  # signed release, while a failed publish still fails the workflow loudly.
+  #
+  # The Go binary is NEVER rebuilt here — a rebuild would be unsigned, not
+  # notarized, and would lack the ldflags version stamp and telemetry
+  # configuration. This job only needs to download, repackage, and upload, so
+  # it runs on ubuntu-latest with no Apple or OTEL secrets.
+  npm:
+    needs: release
+    runs-on: ubuntu-latest
+    environment: main
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # npm provenance (Sigstore attestation of this workflow run) needs
+      # OIDC. Publishing itself still authenticates with NPM_TOKEN below.
+      id-token: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Download release archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          gh release download "$TAG_NAME" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'vigilante_*.tar.gz' --dir release-archives
+
+      - name: Stage npm packages from released archives
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          node packaging/npm/build_packages.js \
+            --version "${TAG_NAME#v}" \
+            --archives release-archives
+
+      # The pre-publish gate: exact os/cpu per platform package, the binary
+      # present with the executable bit, no stray files or install scripts in
+      # a platform package, and optionalDependencies pinned to this version.
+      # A platform package silently missing its os/cpu fields is the worst
+      # regression here — npm would install it on every platform.
+      - name: Verify npm package contents
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          node packaging/npm/check_packages.js --version "${TAG_NAME#v}"
+
+      # Platform packages first, then the main package: the main package's
+      # optionalDependencies reference these exact versions, so publishing it
+      # first would let a freshly-published main package resolve to a
+      # missing platform package.
+      - name: Publish platform packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          for pkg in vigilante-cli-darwin-arm64 vigilante-cli-darwin-x64 vigilante-cli-linux-x64; do
+            npm publish --provenance --access public "packaging/npm/$pkg"
+          done
+
+      - name: Publish main package
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm publish --provenance --access public packaging/npm/vigilante-cli

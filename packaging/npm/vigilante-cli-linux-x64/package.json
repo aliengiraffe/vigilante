@@ -1,0 +1,20 @@
+{
+  "name": "vigilante-cli-linux-x64",
+  "version": "0.0.0-placeholder",
+  "description": "vigilante prebuilt binary for linux/x64 (installed automatically as an optionalDependency of vigilante-cli; do not install directly)",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/aliengiraffe/vigilante",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aliengiraffe/vigilante.git"
+  },
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin"
+  ]
+}

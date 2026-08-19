@@ -1,0 +1,8 @@
+# The binary staged by build_packages.js from a release archive; nothing
+# under bin/ is ever committed for the platform packages — the payload comes
+# from the published GoReleaser archives at publish time.
+vigilante-cli-darwin-arm64/bin/vigilante
+vigilante-cli-darwin-x64/bin/vigilante
+vigilante-cli-linux-x64/bin/vigilante
+
+node_modules/
