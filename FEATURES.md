@@ -172,6 +172,9 @@ Key capabilities today:
   - `resume` or `vigilante:resume` labels
 - Support GitHub-driven cleanup via:
   - `@vigilanteai cleanup`
+- Support solicited adversarial PR review via:
+  - `@vigilanteai review {provider}:{model}` on a Vigilante-opened pull request
+  - the `vigilante review` CLI command
 - Add reactions to acknowledge GitHub-issued commands.
 
 Target additions:

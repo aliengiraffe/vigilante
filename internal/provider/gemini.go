@@ -83,6 +83,10 @@ func (geminiProvider) BuildIssueCreateInvocation(task IssueCreateTask) (Invocati
 	}, nil
 }
 
+func (geminiProvider) BuildReviewInvocation(task ReviewTask) (Invocation, error) {
+	return Invocation{}, modelOverrideUnsupportedError(GeminiID, task.Model)
+}
+
 func (geminiProvider) BuildPackageRemediationInvocation(task PackageRemediationTask) (Invocation, error) {
 	return Invocation{
 		Dir:  task.Target.Path,

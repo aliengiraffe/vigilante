@@ -83,6 +83,10 @@ func (opencodeProvider) BuildIssueCreateInvocation(task IssueCreateTask) (Invoca
 	}, nil
 }
 
+func (opencodeProvider) BuildReviewInvocation(task ReviewTask) (Invocation, error) {
+	return Invocation{}, modelOverrideUnsupportedError(OpenCodeID, task.Model)
+}
+
 func (opencodeProvider) BuildPackageRemediationInvocation(task PackageRemediationTask) (Invocation, error) {
 	return Invocation{
 		Dir:  task.Target.Path,

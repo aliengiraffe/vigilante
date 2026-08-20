@@ -815,6 +815,8 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		return a.runRecreateCommand(ctx, args[1:])
 	case "resume":
 		return a.runResumeCommand(ctx, args[1:])
+	case "review":
+		return a.runReviewCommand(ctx, args[1:])
 	case "service":
 		return a.runServiceCommand(ctx, args[1:])
 	case "daemon":
@@ -1470,6 +1472,120 @@ func (a *App) resolveRepoSlugFromCWD(ctx context.Context) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("repository %s inferred from the current directory is not watched by Vigilante; add it with vigilante watch or supply --repo", repoSlug)
+}
+
+const reviewCommandUsage = "usage: vigilante review {provider}:{model} --pr <n> [--repo <owner/name>]"
+
+func (a *App) runReviewCommand(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("review", flag.ContinueOnError)
+	configureFlagSet(fs, func(w io.Writer) {
+		fmt.Fprintln(w, reviewCommandUsage)
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Run a solicited adversarial code review of a Vigilante-opened pull request")
+		fmt.Fprintln(w, "with the selected coding agent and post the findings back to the PR.")
+		fmt.Fprintln(w, "The selector accepts a model family alias (claude:fable) or a specific model")
+		fmt.Fprintln(w, "identifier (claude:claude-fable-5).")
+		fmt.Fprintln(w, "When --repo is omitted, the repository is inferred from the current watched checkout.")
+		fmt.Fprintln(w)
+		fs.SetOutput(w)
+		fs.PrintDefaults()
+	})
+	prNumber := fs.Int("pr", 0, "pull request number")
+	repoSlug := fs.String("repo", "", "repository slug")
+	selector := ""
+	rest := args
+	if len(rest) > 0 && !strings.HasPrefix(rest[0], "-") {
+		selector = rest[0]
+		rest = rest[1:]
+	}
+	if err := parseFlagSet(fs, rest, a.stdout); err != nil {
+		if errors.Is(err, errHelpHandled) {
+			return nil
+		}
+		return err
+	}
+	if selector == "" || fs.NArg() != 0 {
+		return errors.New(reviewCommandUsage)
+	}
+	selectedProvider, model, err := provider.ParseAgentSelector(selector)
+	if err != nil {
+		return fmt.Errorf("%w\n%s", err, reviewCommandUsage)
+	}
+	if *prNumber <= 0 {
+		return errors.New(reviewCommandUsage)
+	}
+	if *repoSlug == "" {
+		resolved, err := a.resolveRepoSlugFromCWD(ctx)
+		if err != nil {
+			return err
+		}
+		*repoSlug = resolved
+	}
+	return a.ReviewPullRequest(ctx, *repoSlug, *prNumber, selectedProvider, model, "cli")
+}
+
+// ReviewPullRequest runs a solicited adversarial review of a Vigilante-managed
+// pull request with the selected coding agent and model. The review agent
+// posts its findings back to the PR; the branch is never modified.
+func (a *App) ReviewPullRequest(ctx context.Context, repoSlug string, prNumber int, selectedProvider provider.Provider, model string, source string) error {
+	targets, err := a.state.LoadWatchTargets()
+	if err != nil {
+		return fmt.Errorf("load watch targets: %w", err)
+	}
+	var target *state.WatchTarget
+	for i := range targets {
+		if strings.EqualFold(targets[i].Repo, repoSlug) {
+			target = &targets[i]
+			break
+		}
+	}
+	if target == nil {
+		return fmt.Errorf("repository %s is not watched by Vigilante; add it with vigilante watch", repoSlug)
+	}
+	sessions, err := a.state.LoadSessions()
+	if err != nil {
+		return fmt.Errorf("load sessions: %w", err)
+	}
+	managed := false
+	for _, session := range sessions {
+		if strings.EqualFold(session.Repo, target.Repo) && session.PullRequestNumber == prNumber {
+			managed = true
+			break
+		}
+	}
+	if !managed {
+		return fmt.Errorf("pull request #%d of %s is not a Vigilante-managed PR; adversarial review only runs on PRs Vigilante opened", prNumber, target.Repo)
+	}
+	if err := a.runAdversarialReviewSession(ctx, *target, prNumber, selectedProvider, model, source); err != nil {
+		return err
+	}
+	fmt.Fprintf(a.stdout, "adversarial review completed for %s PR #%d; findings were posted to the pull request\n", target.Repo, prNumber)
+	return nil
+}
+
+// runAdversarialReviewSession validates the provider runtime, builds the
+// review invocation, and runs the review agent to completion. The agent posts
+// its own findings to the PR.
+func (a *App) runAdversarialReviewSession(ctx context.Context, target state.WatchTarget, prNumber int, selectedProvider provider.Provider, model string, source string) error {
+	if err := provider.ValidateRuntimeCompatibility(ctx, a.env.Runner, selectedProvider); err != nil {
+		return fmt.Errorf("provider runtime check failed: %w", err)
+	}
+	invocation, err := selectedProvider.BuildReviewInvocation(provider.ReviewTask{
+		Target:   target,
+		PRNumber: prNumber,
+		Model:    model,
+	})
+	if err != nil {
+		return err
+	}
+	a.logger.Info("adversarial review session start", "repo", target.Repo, "pr", prNumber, "provider", selectedProvider.ID(), "model", model, "source", source)
+	output, err := a.env.Runner.Run(ctx, invocation.Dir, invocation.Name, invocation.Args...)
+	if err != nil {
+		a.logger.Error("adversarial review session failed", "repo", target.Repo, "pr", prNumber, "provider", selectedProvider.ID(), "model", model, "source", source, "err", err, "output_bytes", len(output))
+		return fmt.Errorf("adversarial review session failed: %s", summarizeMaintenanceError(err))
+	}
+	a.logger.Info("adversarial review session completed", "repo", target.Repo, "pr", prNumber, "provider", selectedProvider.ID(), "model", model, "source", source)
+	return nil
 }
 
 func (a *App) runDaemonCommand(ctx context.Context, args []string) error {
@@ -2156,6 +2272,10 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			return err
 		}
 		sessions, err = a.processGitHubResumeRequests(ctx, sessions, issueDetailsCache)
+		if err != nil {
+			return err
+		}
+		sessions, err = a.processGitHubReviewRequests(ctx, sessions)
 		if err != nil {
 			return err
 		}
@@ -3819,6 +3939,100 @@ func (a *App) recreateSessionInline(ctx context.Context, session *state.Session,
 
 	a.logger.Info("recreate completed", "repo", repoSlug, "old_issue", issue, "new_issue", created.Number, "source", source)
 	return nil
+}
+
+// processGitHubReviewRequests detects `@vigilanteai review {provider}:{model}`
+// directives on Vigilante-managed PRs and dispatches one adversarial review
+// session per unclaimed comment. Malformed or unknown selectors get an
+// explanatory usage reply on the PR instead of a session.
+func (a *App) processGitHubReviewRequests(ctx context.Context, sessions []state.Session) ([]state.Session, error) {
+	for i := range sessions {
+		session := &sessions[i]
+		if session.Status == state.SessionStatusClosed {
+			continue
+		}
+		if session.PullRequestNumber == 0 || session.PullRequestState != "OPEN" {
+			continue
+		}
+
+		comments, err := a.collectSessionComments(ctx, *session, "review")
+		if err != nil {
+			a.logger.Error("review comment lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
+			session.LastError = err.Error()
+			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			continue
+		}
+		comment, selector := ghcli.FindReviewComment(comments, session.LastReviewCommentID)
+		if comment == nil {
+			continue
+		}
+		if err := a.issueTrackerForSession(*session).AddCommentReaction(ctx, a.issueProjectForSession(*session), comment.ID, "eyes"); err != nil {
+			a.logger.Error("review reaction failed", "repo", session.Repo, "issue", session.IssueNumber, "comment", comment.ID, "err", err)
+			session.LastError = err.Error()
+			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			continue
+		}
+		session.LastReviewCommentID = comment.ID
+		session.LastReviewCommentAt = comment.CreatedAt.UTC().Format(time.RFC3339)
+		session.UpdatedAt = a.clock().Format(time.RFC3339)
+
+		prMgr := a.prManagerForSession(*session)
+		selectedProvider, model, parseErr := provider.ParseAgentSelector(selector)
+		if parseErr != nil {
+			body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Review Request Rejected",
+				Emoji:      "🚫",
+				Percent:    100,
+				ETAMinutes: 1,
+				Items: []string{
+					fmt.Sprintf("Received `@vigilanteai review %s` on this pull request.", strings.TrimSpace(selector)),
+					fmt.Sprintf("Error: %s.", parseErr),
+					"Usage: `@vigilanteai review {provider}:{model}`, for example `@vigilanteai review claude:fable`.",
+				},
+				Tagline: "No review without a valid reviewer.",
+			})
+			if err := prMgr.CommentOnPullRequest(ctx, session.Repo, session.PullRequestNumber, body); err != nil {
+				a.logger.Error("review usage reply failed", "repo", session.Repo, "pr", session.PullRequestNumber, "err", err)
+			}
+			continue
+		}
+
+		ack := ghcli.FormatProgressComment(ghcli.ProgressComment{
+			Stage:      "Adversarial Review Dispatched",
+			Emoji:      "🔍",
+			Percent:    10,
+			ETAMinutes: 10,
+			Items: []string{
+				fmt.Sprintf("Received `@vigilanteai review %s` for this pull request.", selector),
+				fmt.Sprintf("Dispatching an adversarial review session with %s using model `%s`.", selectedProvider.DisplayName(), model),
+				"Findings will be posted back to this pull request when the review completes.",
+			},
+			Tagline: "Fresh eyes, sharp knives.",
+		})
+		if err := prMgr.CommentOnPullRequest(ctx, session.Repo, session.PullRequestNumber, ack); err != nil {
+			a.logger.Error("review ack comment failed", "repo", session.Repo, "pr", session.PullRequestNumber, "err", err)
+		}
+
+		target := a.fallbackWatchTargetForSession(*session)
+		if err := a.runAdversarialReviewSession(ctx, target, session.PullRequestNumber, selectedProvider, model, "comment"); err != nil {
+			body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Adversarial Review Failed",
+				Emoji:      "❌",
+				Percent:    100,
+				ETAMinutes: 1,
+				Items: []string{
+					fmt.Sprintf("The adversarial review requested with `@vigilanteai review %s` could not be completed.", selector),
+					fmt.Sprintf("Error: %s.", err),
+					"Fix the reported problem and post the review comment again to retry.",
+				},
+				Tagline: "Better luck next time.",
+			})
+			if commentErr := prMgr.CommentOnPullRequest(ctx, session.Repo, session.PullRequestNumber, body); commentErr != nil {
+				a.logger.Error("review failure comment failed", "repo", session.Repo, "pr", session.PullRequestNumber, "err", commentErr)
+			}
+		}
+	}
+	return sessions, nil
 }
 
 func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.Session, issueCache scanIssueDetailsCache) ([]state.Session, error) {
@@ -6809,6 +7023,7 @@ func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  vigilante recreate [--repo <owner/name>] --issue <n>")
 	fmt.Fprintln(w, "  vigilante resume --repo <owner/name> --issue <n>")
 	fmt.Fprintln(w, "  vigilante resume --all-blocked")
+	fmt.Fprintln(w, "  vigilante review {provider}:{model} --pr <n> [--repo <owner/name>]")
 	fmt.Fprintln(w, "  vigilante service restart")
 	fmt.Fprintln(w, "  vigilante daemon run [--once] [--interval duration]")
 	fmt.Fprintln(w, "  vigilante report --repo <owner/name>")
@@ -6854,7 +7069,7 @@ _vigilante()
     local cur prev words cword
     _init_completion || return
 
-    local commands="setup watch unwatch list status cleanup redispatch recreate resume service daemon report completion"
+    local commands="setup watch unwatch list status cleanup redispatch recreate resume review service daemon report completion"
     local global_flags="-h --help"
 
     case "${words[1]}" in
@@ -6888,6 +7103,10 @@ _vigilante()
             ;;
         resume)
             COMPREPLY=( $(compgen -W "--repo --issue --all-blocked" -- "$cur") )
+            return
+            ;;
+        review)
+            COMPREPLY=( $(compgen -W "--pr --repo" -- "$cur") )
             return
             ;;
         report)
@@ -6932,6 +7151,7 @@ complete -c vigilante -f -n '__fish_use_subcommand' -a 'cleanup' -d 'Clean up ru
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'redispatch' -d 'Restart one watched issue in a fresh local worktree'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'recreate' -d 'Recreate a stuck issue as a fresh duplicate'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'resume' -d 'Resume blocked sessions'
+complete -c vigilante -f -n '__fish_use_subcommand' -a 'review' -d 'Run an adversarial review of a Vigilante-opened pull request'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'report' -d 'Analyze closed issues and emit a CSV performance report'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'service' -d 'Run service commands'
 complete -c vigilante -f -n '__fish_use_subcommand' -a 'daemon' -d 'Run daemon commands'
@@ -6960,6 +7180,8 @@ complete -c vigilante -n '__fish_seen_subcommand_from recreate' -l issue
 complete -c vigilante -n '__fish_seen_subcommand_from resume' -l repo
 complete -c vigilante -n '__fish_seen_subcommand_from resume' -l issue
 complete -c vigilante -n '__fish_seen_subcommand_from resume' -l all-blocked
+complete -c vigilante -n '__fish_seen_subcommand_from review' -l pr
+complete -c vigilante -n '__fish_seen_subcommand_from review' -l repo
 complete -c vigilante -n '__fish_seen_subcommand_from report' -l repo
 complete -c vigilante -n '__fish_seen_subcommand_from service' -a 'restart'
 complete -c vigilante -n '__fish_seen_subcommand_from daemon; and not __fish_seen_subcommand_from run' -a 'run'
@@ -6984,6 +7206,7 @@ _vigilante() {
     'redispatch:Restart one watched issue in a fresh local worktree'
     'recreate:Recreate a stuck issue as a fresh duplicate'
     'resume:Resume blocked sessions'
+    'review:Run an adversarial review of a Vigilante-opened pull request'
     'report:Analyze closed issues and emit a CSV performance report'
     'service:Run service commands'
     'daemon:Run daemon commands'
@@ -7019,6 +7242,9 @@ _vigilante() {
       ;;
     resume)
       compadd -- --repo --issue --all-blocked
+      ;;
+    review)
+      compadd -- --pr --repo
       ;;
     report)
       compadd -- --repo

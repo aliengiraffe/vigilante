@@ -83,6 +83,10 @@ func (codexProvider) BuildIssueCreateInvocation(task IssueCreateTask) (Invocatio
 	}, nil
 }
 
+func (codexProvider) BuildReviewInvocation(task ReviewTask) (Invocation, error) {
+	return Invocation{}, modelOverrideUnsupportedError(CodexID, task.Model)
+}
+
 func (codexProvider) BuildPackageRemediationInvocation(task PackageRemediationTask) (Invocation, error) {
 	return Invocation{
 		Name: "codex",
