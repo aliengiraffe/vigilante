@@ -166,6 +166,10 @@ func (b *Backend) AddPullRequestLabel(ctx context.Context, repo string, number i
 	return ghcli.AddPullRequestLabel(ctx, b.runner(), repo, number, label)
 }
 
+func (b *Backend) UpdatePullRequestBody(ctx context.Context, repo string, number int, body string) error {
+	return ghcli.UpdatePullRequestBody(ctx, b.runner(), repo, number, body)
+}
+
 // --- RateLimiter ---
 
 func (b *Backend) GetRateLimitSnapshot(ctx context.Context) (backend.RateLimitSnapshot, error) {

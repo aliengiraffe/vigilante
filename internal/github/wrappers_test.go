@@ -87,6 +87,13 @@ func TestGhWrapperInvocations(t *testing.T) {
 			},
 		},
 		{
+			name:    "UpdatePullRequestBody pipes the body through --body-file -",
+			command: "gh pr edit --repo owner/repo 4 --body-file -",
+			invoke: func(_ *testing.T, r testutil.FakeRunner) error {
+				return UpdatePullRequestBody(context.Background(), r, "owner/repo", 4, "body")
+			},
+		},
+		{
 			name:    "RemoveDeployKey deletes by key id",
 			command: "gh api --method DELETE -H Accept: application/vnd.github+json repos/owner/repo/keys/77",
 			invoke: func(_ *testing.T, r testutil.FakeRunner) error {
@@ -580,6 +587,70 @@ func TestCreateIssueErrors(t *testing.T) {
 		runner := testutil.FakeRunner{Outputs: map[string]string{command: `{"number":1}`}}
 		if _, err := CreateIssue(context.Background(), runner, "owner/repo", "T", "B", nil, nil); err != nil {
 			t.Fatalf("empty labels and assignees must not add flags: %v", err)
+		}
+	})
+}
+
+// stdinlessRunner is an environment.Runner without stdin support, used to pin
+// that UpdatePullRequestBody refuses to send a body it cannot pipe.
+type stdinlessRunner struct {
+	args []string
+}
+
+func (r *stdinlessRunner) Run(_ context.Context, _ string, name string, args ...string) (string, error) {
+	r.args = append([]string{name}, args...)
+	return "", nil
+}
+
+func (r *stdinlessRunner) LookPath(string) (string, error) {
+	return "", errors.New("not found")
+}
+
+func TestUpdatePullRequestBody(t *testing.T) {
+	t.Parallel()
+
+	const command = "gh pr edit --repo owner/repo 4 --body-file -"
+
+	t.Run("pipes the body on stdin instead of argv", func(t *testing.T) {
+		t.Parallel()
+		body := "Summary with `backticks`, a $VAR, \"quotes\" and\nmultiple\nlines\n\nCloses #1"
+		runner := testutil.FakeRunner{
+			Outputs:     map[string]string{command: ""},
+			StdinInputs: map[string]string{},
+		}
+		if err := UpdatePullRequestBody(context.Background(), runner, "owner/repo", 4, body); err != nil {
+			t.Fatal(err)
+		}
+		if got := runner.StdinInputs[command]; got != body {
+			t.Fatalf("piped body = %q, want %q", got, body)
+		}
+	})
+
+	t.Run("reports the gh failure output", func(t *testing.T) {
+		t.Parallel()
+		runner := testutil.FakeRunner{
+			Errors:       map[string]error{command: errors.New("exit status 1")},
+			ErrorOutputs: map[string]string{command: "HTTP 403"},
+			StdinInputs:  map[string]string{},
+		}
+		err := UpdatePullRequestBody(context.Background(), runner, "owner/repo", 4, "body")
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if !strings.Contains(err.Error(), "HTTP 403") {
+			t.Fatalf("error = %v, want it to include the gh output", err)
+		}
+	})
+
+	t.Run("refuses to run when the runner cannot pipe stdin", func(t *testing.T) {
+		t.Parallel()
+		runner := &stdinlessRunner{}
+		err := UpdatePullRequestBody(context.Background(), runner, "owner/repo", 4, "body")
+		if err == nil {
+			t.Fatal("expected an error")
+		}
+		if runner.args != nil {
+			t.Fatalf("expected no command to run, got %v", runner.args)
 		}
 	})
 }

@@ -766,6 +766,31 @@ func ClosePullRequest(ctx context.Context, runner environment.Runner, repo strin
 	return err
 }
 
+// stdinRunner is the optional Runner capability that pipes bytes to a command
+// on stdin. Both environment.ExecRunner and environment.LoggingRunner satisfy
+// it; see environment.Runner for the base contract.
+type stdinRunner interface {
+	RunWithStdin(ctx context.Context, stdin string, dir string, name string, args ...string) (string, error)
+}
+
+// UpdatePullRequestBody replaces the body of a pull request. The body travels
+// on stdin via `--body-file -` so that newlines, backticks and shell
+// metacharacters survive unchanged instead of being flattened into argv.
+func UpdatePullRequestBody(ctx context.Context, runner environment.Runner, repo string, number int, body string) error {
+	piper, ok := runner.(stdinRunner)
+	if !ok {
+		return fmt.Errorf("update pr body: runner does not support stdin")
+	}
+	output, err := piper.RunWithStdin(ctx, body, "", "gh", "pr", "edit", "--repo", repo, fmt.Sprintf("%d", number), "--body-file", "-")
+	if err != nil {
+		if trimmed := strings.TrimSpace(output); trimmed != "" {
+			return fmt.Errorf("update pr body: %w: %s", err, trimmed)
+		}
+		return fmt.Errorf("update pr body: %w", err)
+	}
+	return nil
+}
+
 // DeployKey is the subset of fields returned by the GitHub deploy keys API.
 type DeployKey struct {
 	ID       int64  `json:"id"`
