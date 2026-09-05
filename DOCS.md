@@ -770,6 +770,7 @@ For pull requests tied to an active Vigilante session:
 
 - keep the branch updated against the session or pull request base branch through the existing maintenance loop instead of assuming `main`
 - keep required checks under observation after a PR opens; queued and in-progress checks wait without dispatching work
+- verify that the PR body closes the session issue and, when it does not, append a `Closes #<issue-number>` line so the issue's Development section always shows the PR. The coding agent is still instructed to write the reference itself; this is a deterministic safety net behind that instruction. The check runs at most once per PR number, leaves an already-linked body untouched, preserves the rest of the body byte-for-byte, and is skipped for non-GitHub issue backends and for fork sessions whose body is copied into an upstream repository
 - deduplicate CI remediation by PR head SHA and check-run generation so daemon restarts and repeated polls cannot launch concurrent fixes
 - allow up to three consecutive focused remediation attempts across replacement CI runs; also stop after 30 minutes without a new head or check-run observation, then pause with persisted diagnostics and an explicit `vigilante resume` recovery path
 - if either the source issue or the PR has `vigilante:automerge`, attempt a GitHub squash merge only after required checks pass and GitHub reports the PR is mergeable

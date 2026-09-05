@@ -225,6 +225,13 @@ func TestBackendDelegationTargets(t *testing.T) {
 				return b.AddPullRequestLabel(context.Background(), "owner/repo", 7, "lbl")
 			},
 		},
+		{
+			name:    "UpdatePullRequestBody pipes the body through --body-file -",
+			command: "gh pr edit --repo owner/repo 7 --body-file -",
+			invoke: func(_ *testing.T, b *Backend) error {
+				return b.UpdatePullRequestBody(context.Background(), "owner/repo", 7, "body")
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -295,6 +302,13 @@ func TestBackendDelegationPropagatesErrors(t *testing.T) {
 			command: "gh pr edit --repo owner/repo 7 --add-label lbl",
 			invoke: func(b *Backend) error {
 				return b.AddPullRequestLabel(context.Background(), "owner/repo", 7, "lbl")
+			},
+		},
+		{
+			name:    "UpdatePullRequestBody",
+			command: "gh pr edit --repo owner/repo 7 --body-file -",
+			invoke: func(b *Backend) error {
+				return b.UpdatePullRequestBody(context.Background(), "owner/repo", 7, "body")
 			},
 		},
 		{

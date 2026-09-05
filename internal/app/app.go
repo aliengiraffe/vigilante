@@ -2975,6 +2975,7 @@ func (a *App) runPullRequestMaintenance(ctx context.Context, session *state.Sess
 	}
 
 	updatePullRequestTrackingFromLookup(session, *pr)
+	a.ensurePullRequestIssueLink(sessionCtx, session, *pr)
 	if pr.MergedAt == nil {
 		if pr.State != "OPEN" {
 			if err := a.cleanupSessionArtifacts(sessionCtx, session, "pull_request_closed"); err != nil {

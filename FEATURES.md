@@ -218,6 +218,7 @@ Key capabilities today:
 
 - Discover PRs for issue branches.
 - Track PR number, URL, state, and merge time in session state.
+- Verify that a newly observed PR closes its issue and append `Closes #<issue-number>` when the agent omitted it, so the issue's Development section is populated without relying on the prompt.
 - Rebase open PR branches onto `origin/main`.
 - Detect rebase conflicts and dispatch the conflict-resolution workflow.
 - Rerun `go test ./...` after successful rebases.

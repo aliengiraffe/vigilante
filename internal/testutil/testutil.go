@@ -23,6 +23,9 @@ type FakeRunner struct {
 	ErrorOutputs map[string]string
 	Errors       map[string]error
 	LookPaths    map[string]string
+	// StdinInputs records the stdin piped to RunWithStdin, keyed by command.
+	// Leave it nil when a test does not care about piped input.
+	StdinInputs map[string]string
 }
 
 func (f FakeRunner) Run(_ context.Context, _ string, name string, args ...string) (string, error) {
@@ -40,6 +43,15 @@ func (f FakeRunner) Run(_ context.Context, _ string, name string, args ...string
 		return name + " 1.0.0", nil
 	}
 	return "", fmt.Errorf("unexpected command: %s", cmd)
+}
+
+// RunWithStdin records the piped stdin and otherwise answers from the same
+// fixture map as Run, mirroring the real runners' stdin support.
+func (f FakeRunner) RunWithStdin(ctx context.Context, stdin string, dir string, name string, args ...string) (string, error) {
+	if f.StdinInputs != nil {
+		f.StdinInputs[Key(name, args...)] = stdin
+	}
+	return f.Run(ctx, dir, name, args...)
 }
 
 // RunStreaming writes output to w while also returning it, mirroring the real

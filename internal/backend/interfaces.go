@@ -112,6 +112,9 @@ type PullRequestManager interface {
 
 	// AddPullRequestLabel adds a label to a pull request.
 	AddPullRequestLabel(ctx context.Context, repo string, number int, label string) error
+
+	// UpdatePullRequestBody replaces the body of a pull request.
+	UpdatePullRequestBody(ctx context.Context, repo string, number int, body string) error
 }
 
 // RateLimiter provides rate limit awareness for backends that enforce API quotas.

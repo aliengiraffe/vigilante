@@ -253,6 +253,8 @@ type Session struct {
 	PullRequestChecksState         string              `json:"pull_request_checks_state,omitempty"`
 	PullRequestStatusFingerprint   string              `json:"pull_request_status_fingerprint,omitempty"`
 	PullRequestMaintenanceInFlight bool                `json:"pull_request_maintenance_in_flight,omitempty"`
+	PullRequestLinkAttemptedForPR  int                 `json:"pull_request_link_attempted_for_pr,omitempty"`
+	PullRequestLinkRepairedAt      string              `json:"pull_request_link_repaired_at,omitempty"`
 	LastMaintainedAt               string              `json:"last_maintained_at,omitempty"`
 	LastMaintenanceError           string              `json:"last_maintenance_error,omitempty"`
 	LastCIRemediationFingerprint   string              `json:"last_ci_remediation_fingerprint,omitempty"`
