@@ -13,6 +13,7 @@ type labelManifest struct {
 }
 
 type labelSpec struct {
+	AppliedBy   string   `json:"applied_by"`
 	Name        string   `json:"name"`
 	Color       string   `json:"color"`
 	Group       string   `json:"group"`
@@ -71,16 +72,16 @@ func TestIssueLabelManifestKeepsCompatibilityControls(t *testing.T) {
 		if !ok {
 			t.Fatalf("expected provider label %q", provider)
 		}
-		if label.Group != "provider-routing" || label.Behavior != "control" {
+		if label.Group != "provider-routing" || label.Behavior != "control" || label.AppliedBy != "human" {
 			t.Fatalf("expected provider label %q to remain a control routing label: %#v", provider, label)
 		}
 	}
-	for _, name := range []string{"claude:sonnet", "claude:opus", "claude:fable"} {
+	for _, name := range []string{"claude:sonnet", "claude:opus", "claude:fable", "codex:astra", "codex:sol"} {
 		label, ok := labels[name]
 		if !ok {
-			t.Fatalf("expected Claude model label %q", name)
+			t.Fatalf("expected model label %q", name)
 		}
-		if label.Group != "provider-routing" || label.Behavior != "control" {
+		if label.Group != "provider-routing" || label.Behavior != "control" || label.AppliedBy != "human" {
 			t.Fatalf("expected model label %q to be a control routing label: %#v", name, label)
 		}
 	}

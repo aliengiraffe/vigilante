@@ -396,3 +396,27 @@ func TestLoadSessionsBackfillsLegacyProviderAsCodex(t *testing.T) {
 		t.Fatalf("legacy session must stay on codex, got %q", sessions[0].Provider)
 	}
 }
+
+func TestCodexSessionModelsSurviveRestart(t *testing.T) {
+	t.Setenv("VIGILANTE_HOME", t.TempDir())
+	sessions := []Session{{Repo: "owner/repo", IssueNumber: 1, Provider: "codex", Model: "gpt-6-astra"}, {Repo: "owner/repo", IssueNumber: 2, Provider: "codex", Model: "gpt-5.6-sol"}, {Repo: "owner/repo", IssueNumber: 3, Provider: "codex"}}
+	store := NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveSessions(sessions); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := NewStore().LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != len(sessions) {
+		t.Fatalf("sessions: %#v", loaded)
+	}
+	for i, want := range sessions {
+		if loaded[i].Provider != want.Provider || loaded[i].Model != want.Model {
+			t.Fatalf("session changed: %#v", loaded[i])
+		}
+	}
+}

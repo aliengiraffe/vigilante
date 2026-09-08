@@ -631,3 +631,78 @@ func TestBuildIssueCreateInvocationForAllProviders(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveIssueLabelsCodexModels(t *testing.T) {
+	for _, tc := range []struct{ label, model string }{{"codex:astra", "gpt-6-astra"}, {"codex:sol", "gpt-5.6-sol"}} {
+		for _, labels := range [][]ghcli.Label{{{Name: tc.label}}, {{Name: CodexID}, {Name: tc.label}}, {{Name: "codex:unknown"}, {Name: tc.label}}} {
+			id, model, err := ResolveIssueLabels(labels)
+			if err != nil || id != CodexID || model != tc.model {
+				t.Fatalf("%v: got %q, %q, %v", labels, id, model, err)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		labels []ghcli.Label
+		want   string
+	}{
+		{[]ghcli.Label{{Name: "codex:sol"}, {Name: "codex:astra"}}, "multiple model labels: codex:astra, codex:sol"},
+		{[]ghcli.Label{{Name: "codex:astra"}, {Name: "claude:opus"}}, "multiple model labels: claude:opus, codex:astra"},
+		{[]ghcli.Label{{Name: "codex:sol"}, {Name: ClaudeID}}, "multiple provider labels: claude, codex"},
+		{[]ghcli.Label{{Name: "codex:astra"}, {Name: GeminiID}}, "multiple provider labels: codex, gemini"},
+		{[]ghcli.Label{{Name: "codex:sol"}, {Name: OpenCodeID}}, "multiple provider labels: codex, opencode"},
+	} {
+		for range 2 {
+			id, model, err := ResolveIssueLabels(tc.labels)
+			if err == nil || err.Error() != tc.want || id != "" || model != "" {
+				t.Fatalf("%v: got %q, %q, %v", tc.labels, id, model, err)
+			}
+			tc.labels[0], tc.labels[1] = tc.labels[1], tc.labels[0]
+		}
+	}
+	for _, labels := range [][]ghcli.Label{{{Name: "codex:unknown"}}, {{Name: CodexID}, {Name: "codex:unknown"}}} {
+		id, model, err := ResolveIssueLabels(labels)
+		want := ""
+		if len(labels) == 2 {
+			want = CodexID
+		}
+		if err != nil || id != want || model != "" {
+			t.Fatalf("unknown label changed routing: %q %q %v", id, model, err)
+		}
+	}
+}
+
+func TestCodexInvocationsUsePersistedModel(t *testing.T) {
+	p := codexProvider{}
+	for _, model := range []string{"", "gpt-6-astra", "gpt-5.6-sol"} {
+		t.Run(model, func(t *testing.T) {
+			session := state.Session{WorktreePath: "/tmp/worktree", Model: model}
+			builders := map[string]func() (Invocation, error){
+				"preflight":      func() (Invocation, error) { return p.BuildIssuePreflightInvocation(IssueTask{Session: session}) },
+				"implementation": func() (Invocation, error) { return p.BuildIssueInvocation(IssueTask{Session: session}) },
+				"conflict":       func() (Invocation, error) { return p.BuildConflictResolutionInvocation(ConflictTask{Session: session}) },
+				"ci":             func() (Invocation, error) { return p.BuildCIRemediationInvocation(CIRemediationTask{Session: session}) },
+			}
+			for name, build := range builders {
+				t.Run(name, func(t *testing.T) {
+					inv, err := build()
+					if err != nil {
+						t.Fatal(err)
+					}
+					prefix := []string{"exec"}
+					if model != "" {
+						prefix = append(prefix, "--model", model)
+					}
+					prefix = append(prefix, "--cd", session.WorktreePath, "--dangerously-bypass-approvals-and-sandbox")
+					if inv.Name != "codex" || len(inv.Args) != len(prefix)+1 {
+						t.Fatalf("unexpected invocation: %#v", inv)
+					}
+					for i, want := range prefix {
+						if inv.Args[i] != want {
+							t.Fatalf("args: %#v", inv.Args)
+						}
+					}
+				})
+			}
+		})
+	}
+}

@@ -1694,7 +1694,7 @@ func TestSyncIssueManagedLabelsQueued(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/labels?per_page=100":                                                     `[{"name":"bug"},{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/labels?per_page=100":                                                     `[{"name":"bug"},{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"codex:astra"},{"name":"codex:sol"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 			"gh api repos/owner/repo/issues/7":                                                                `{"labels":[{"name":"bug"},{"name":"vigilante:running"}]}`,
 			"gh issue edit --repo owner/repo 7 --add-label vigilante:queued --remove-label vigilante:running": "ok",
 		},
@@ -1727,7 +1727,7 @@ func TestSyncIssueManagedLabelsNoopDoesNotEmitTelemetry(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"codex:astra"},{"name":"codex:sol"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 			"gh api repos/owner/repo/issues/7":            `{"labels":[{"name":"vigilante:queued"}]}`,
 		},
 	}
@@ -1928,7 +1928,7 @@ func TestSyncSessionIssueLabelsUsesPullRequestReviewState(t *testing.T) {
 	app.stderr = testutil.IODiscard{}
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"codex:astra"},{"name":"codex:sol"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 			"gh pr view --repo owner/repo 17 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName,headRefOid": `{"number":17,"title":"Demo PR","body":"PR body","url":"https://github.com/owner/repo/pull/17","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}],"baseRefName":"main"}`,
 			"gh api repos/owner/repo/issues/7": `{"labels":[{"name":"vigilante:ready-for-review"},{"name":"vigilante:needs-review"}]}`,
 			"gh issue edit --repo owner/repo 7 --add-label vigilante:awaiting-user-validation --remove-label vigilante:needs-review --remove-label vigilante:ready-for-review": "ok",
@@ -1955,7 +1955,7 @@ func TestSyncSessionIssueLabelsStopsMonitoringUnavailableIssue(t *testing.T) {
 	app.clock = func() time.Time { return time.Date(2026, 3, 26, 17, 0, 0, 0, time.UTC) }
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/labels?per_page=100":                `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/labels?per_page=100":                `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"codex:astra"},{"name":"codex:sol"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 			"git worktree prune":                                         "ok",
 			"git worktree list --porcelain":                              "worktree /tmp/repo\nHEAD abcdef\nbranch refs/heads/main\n",
 			"git show-ref --verify --quiet refs/heads/vigilante/issue-7": "ok",
@@ -2009,6 +2009,8 @@ func TestSyncIssueManagedLabelsProvisionMissingRepositoryLabels(t *testing.T) {
 			"gh api --method POST repos/owner/repo/labels -f name=gemini -f color=006B75 -f description=Routes the issue to the Gemini provider for execution.":                                                                "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=claude:sonnet -f color=D4A574 -f description=Routes the issue to Claude using the latest Sonnet model alias.":                                                "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=claude:opus -f color=A56CC1 -f description=Routes the issue to Claude using the latest Opus model alias.":                                                    "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=codex:astra -f color=0052CC -f description=Routes the issue to Codex using gpt-6-astra.":                                                                     "ok",
+			"gh api --method POST repos/owner/repo/labels -f name=codex:sol -f color=0052CC -f description=Routes the issue to Codex using gpt-5.6-sol.":                                                                       "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=claude:fable -f color=E8B4B8 -f description=Routes the issue to Claude using the Fable model alias.":                                                         "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:resume -f color=C5DEF5 -f description=Requests that Vigilante resume a blocked session.":                                                           "ok",
 			"gh api --method POST repos/owner/repo/labels -f name=vigilante:automerge -f color=0E8A16 -f description=Requests automatic squash merge once required checks and merge requirements are satisfied.":               "ok",
@@ -3694,91 +3696,101 @@ func TestRedispatchSessionFailsWhenIssueIsNotEligible(t *testing.T) {
 }
 
 func TestScanOnceProcessesGitHubCommentResumeRequest(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
-	t.Setenv("HOME", home)
-	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	for _, model := range []string{"", "gpt-6-astra", "gpt-5.6-sol"} {
+		t.Run(model, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+			t.Setenv("HOME", home)
+			t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
 
-	repoPath := filepath.Join(home, "repo")
-	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
-	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
-		t.Fatal(err)
-	}
+			repoPath := filepath.Join(home, "repo")
+			worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+			if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+				t.Fatal(err)
+			}
 
-	app := New()
-	app.stdout = &bytes.Buffer{}
-	app.stderr = testutil.IODiscard{}
-	app.env.Runner = testutil.FakeRunner{
-		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
-		Outputs: map[string]string{
-			"gh api repos/owner/repo/issues/1":          `{"labels":[]}`,
-			"gh api repos/owner/repo/issues/1/comments": `[{"id":101,"body":"@vigilanteai resume","created_at":"2026-03-10T12:30:00Z","user":{"login":"nicobistolfi"}}]`,
-			"gh api --method POST -H Accept: application/vnd.github+json repos/owner/repo/issues/comments/101/reactions -f content=eyes": "{}",
-			"codex --version": "codex 1.0.0",
-			issuePromptCommand(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", "vigilante/issue-1"): "done",
-			"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
-				Stage:      "Recovered",
-				Emoji:      "🫡",
-				Percent:    92,
-				ETAMinutes: 5,
-				Items: []string{
-					"The previous `provider_auth` block was cleared for `vigilante/issue-1`.",
-					"Resume source: `comment`.",
-					"Next step: Vigilante resumed `issue_execution` successfully.",
+			app := New()
+			app.stdout = &bytes.Buffer{}
+			app.stderr = testutil.IODiscard{}
+			app.env.Runner = testutil.FakeRunner{
+				LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+				Outputs: map[string]string{
+					"gh api repos/owner/repo/issues/1":          `{"labels":[{"name":"claude:opus"},{"name":"codex:sol"}]}`,
+					"gh api repos/owner/repo/issues/1/comments": `[{"id":101,"body":"@vigilanteai resume","created_at":"2026-03-10T12:30:00Z","user":{"login":"nicobistolfi"}}]`,
+					"gh api --method POST -H Accept: application/vnd.github+json repos/owner/repo/issues/comments/101/reactions -f content=eyes": "{}",
+					"codex --version": "codex 1.0.0",
+					issuePromptCommandForSession(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", state.Session{WorktreePath: worktreePath, Branch: "vigilante/issue-1", Provider: "codex", Model: model}): "done",
+					"gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+						Stage:      "Recovered",
+						Emoji:      "🫡",
+						Percent:    92,
+						ETAMinutes: 5,
+						Items: []string{
+							"The previous `provider_auth` block was cleared for `vigilante/issue-1`.",
+							"Resume source: `comment`.",
+							"Next step: Vigilante resumed `issue_execution` successfully.",
+						},
+						Tagline: "Back on the wire.",
+					}): "ok",
+					"gh api user --jq .login": "nicobistolfi\n",
+					"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
 				},
-				Tagline: "Back on the wire.",
-			}): "ok",
-			"gh api user --jq .login": "nicobistolfi\n",
-			"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
-		},
-	}
-	if err := app.state.EnsureLayout(); err != nil {
-		t.Fatal(err)
-	}
-	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
-		t.Fatal(err)
-	}
-	if err := app.state.SaveSessions([]state.Session{{
-		RepoPath:        repoPath,
-		Repo:            "owner/repo",
-		IssueNumber:     1,
-		IssueTitle:      "first",
-		IssueURL:        "https://github.com/owner/repo/issues/1",
-		Branch:          "vigilante/issue-1",
-		WorktreePath:    worktreePath,
-		Status:          state.SessionStatusBlocked,
-		BlockedAt:       "2026-03-11T13:19:12Z",
-		BlockedStage:    "issue_execution",
-		BlockedReason:   state.BlockedReason{Kind: "provider_auth", Operation: "codex exec", Summary: "session expired", Detail: "session expired"},
-		RetryPolicy:     "paused",
-		ResumeRequired:  true,
-		ResumeHint:      "vigilante resume --repo owner/repo --issue 1",
-		UpdatedAt:       "2026-03-11T13:19:12Z",
-		LastHeartbeatAt: "2026-03-11T13:19:12Z",
-	}}); err != nil {
-		t.Fatal(err)
-	}
+			}
+			if err := app.state.EnsureLayout(); err != nil {
+				t.Fatal(err)
+			}
+			if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
+				t.Fatal(err)
+			}
+			if err := app.state.SaveSessions([]state.Session{{
+				RepoPath:        repoPath,
+				Provider:        "codex",
+				Model:           model,
+				Repo:            "owner/repo",
+				IssueNumber:     1,
+				IssueTitle:      "first",
+				IssueURL:        "https://github.com/owner/repo/issues/1",
+				Branch:          "vigilante/issue-1",
+				WorktreePath:    worktreePath,
+				Status:          state.SessionStatusBlocked,
+				BlockedAt:       "2026-03-11T13:19:12Z",
+				BlockedStage:    "issue_execution",
+				BlockedReason:   state.BlockedReason{Kind: "provider_auth", Operation: "codex exec", Summary: "session expired", Detail: "session expired"},
+				RetryPolicy:     "paused",
+				ResumeRequired:  true,
+				ResumeHint:      "vigilante resume --repo owner/repo --issue 1",
+				UpdatedAt:       "2026-03-11T13:19:12Z",
+				LastHeartbeatAt: "2026-03-11T13:19:12Z",
+			}}); err != nil {
+				t.Fatal(err)
+			}
 
-	if err := app.ScanOnce(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	app.waitForSessions()
+			if err := app.ScanOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(sessions) != 1 {
-		t.Fatalf("unexpected sessions: %#v", sessions)
-	}
-	if sessions[0].Status != state.SessionStatusIncomplete {
-		t.Fatalf("expected resumed session to complete (incomplete without PR): %#v", sessions[0])
-	}
-	if sessions[0].LastResumeCommentID != 101 || sessions[0].LastResumeSource != "comment" {
-		t.Fatalf("expected claimed comment metadata to be persisted: %#v", sessions[0])
-	}
-	if sessions[0].RecoveredAt == "" {
-		t.Fatalf("expected recovery timestamp to be recorded: %#v", sessions[0])
+			sessions, err := app.state.LoadSessions()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(sessions) != 1 {
+				t.Fatalf("unexpected sessions: %#v", sessions)
+			}
+			if sessions[0].Status != state.SessionStatusIncomplete {
+				t.Fatalf("expected resumed session to complete (incomplete without PR): %#v", sessions[0])
+			}
+			if sessions[0].LastResumeCommentID != 101 || sessions[0].LastResumeSource != "comment" {
+				t.Fatalf("expected claimed comment metadata to be persisted: %#v", sessions[0])
+			}
+			if sessions[0].RecoveredAt == "" {
+				t.Fatalf("expected recovery timestamp to be recorded: %#v", sessions[0])
+			}
+
+			if sessions[0].Model != model || sessions[0].Provider != "codex" {
+				t.Fatalf("edited labels changed existing session: %#v", sessions[0])
+			}
+		})
 	}
 }
 
@@ -3832,6 +3844,78 @@ func TestResumeSessionCommentsSuccessForLocalCLIRequest(t *testing.T) {
 
 	if err := app.ResumeSession(context.Background(), "owner/repo", 1, "cli"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestResumeSessionPreservesCodexModelAfterRestart(t *testing.T) {
+	for _, model := range []string{"gpt-6-astra", "gpt-5.6-sol"} {
+		t.Run(model, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+			t.Setenv("HOME", home)
+			t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+			repoPath := filepath.Join(home, "repo")
+			worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+			if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+				t.Fatal(err)
+			}
+
+			app := New()
+			app.stdout = &bytes.Buffer{}
+			app.stderr = testutil.IODiscard{}
+			runner := &countingRunner{counts: map[string]int{}, base: testutil.FakeRunner{
+				LookPaths: map[string]string{"codex": "/usr/bin/codex"},
+				Outputs: map[string]string{
+					"codex --version": "codex 1.0.0",
+					issuePromptCommandForSession(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", state.Session{WorktreePath: worktreePath, Branch: "vigilante/issue-1", Provider: "codex", Model: model}): "done",
+					localResumeSuccessCommentCommand("owner/repo", 1, state.Session{Branch: "vigilante/issue-1"}, "issue_execution", "provider_auth"):                                                                                                 "ok",
+				},
+			}}
+			app.env.Runner = runner
+			if err := app.state.EnsureLayout(); err != nil {
+				t.Fatal(err)
+			}
+			if err := app.state.SaveSessions([]state.Session{{
+				RepoPath:        repoPath,
+				Repo:            "owner/repo",
+				IssueNumber:     1,
+				IssueTitle:      "first",
+				IssueURL:        "https://github.com/owner/repo/issues/1",
+				Branch:          "vigilante/issue-1",
+				WorktreePath:    worktreePath,
+				Status:          state.SessionStatusBlocked,
+				BlockedAt:       "2026-03-11T13:19:12Z",
+				BlockedStage:    "issue_execution",
+				BlockedReason:   state.BlockedReason{Kind: "provider_auth", Operation: "codex exec", Summary: "session expired", Detail: "session expired"},
+				RetryPolicy:     "paused",
+				ResumeRequired:  true,
+				ResumeHint:      "vigilante resume --repo owner/repo --issue 1",
+				UpdatedAt:       "2026-03-11T13:19:12Z",
+				LastHeartbeatAt: "2026-03-11T13:19:12Z",
+				Provider:        "codex",
+				Model:           model,
+			}}); err != nil {
+				t.Fatal(err)
+			}
+
+			app.state = state.NewStore()
+			if err := app.ResumeSession(context.Background(), "owner/repo", 1, "cli"); err != nil {
+				t.Fatal(err)
+			}
+
+			loaded, err := app.state.LoadSessions()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(loaded) != 1 || loaded[0].Model != model || loaded[0].Provider != "codex" {
+				t.Fatalf("model lost on resume: %#v", loaded)
+			}
+			command := issuePromptCommandForSession(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", state.Session{WorktreePath: worktreePath, Branch: "vigilante/issue-1", Provider: "codex", Model: model})
+			if runner.counts[command] != 1 {
+				t.Fatalf("resume did not invoke persisted model: %#v", runner.counts)
+			}
+		})
 	}
 }
 
@@ -5701,7 +5785,7 @@ func TestScanOnceAutoRecoversStaleBlockedMaintenanceSession(t *testing.T) {
 			"git rebase origin/main":                                     "Current branch vigilante/issue-1 is up to date.\n",
 			"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName,headRefOid": `{"number":31,"title":"Test PR","body":"body","url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null,"labels":[],"isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN","reviewDecision":"APPROVED","statusCheckRollup":[{"context":"test","state":"COMPLETED","conclusion":"SUCCESS"}]}`,
 			"gh issue comment --repo owner/repo 1 --body " + successComment: "ok",
-			"gh api repos/owner/repo/labels?per_page=100":                   `[{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:queued"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/labels?per_page=100":                   `[{"name":"vigilante:running"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:queued"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"codex:astra"},{"name":"codex:sol"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 			"gh api repos/owner/repo/issues/1":                              `{"labels":[{"name":"vigilante:blocked"},{"name":"vigilante:needs-git-fix"}]}`,
 			"gh issue edit --repo owner/repo 1 --add-label vigilante:recovering --remove-label vigilante:blocked --remove-label vigilante:needs-git-fix": "ok",
 			"gh issue edit --repo owner/repo 1 --add-label vigilante:awaiting-user-validation --remove-label vigilante:recovering":                       "ok",
@@ -6266,6 +6350,65 @@ func TestScanOnceUsesProviderLabelOverrideForSession(t *testing.T) {
 	}
 	if sessions[0].Provider != "codex" {
 		t.Fatalf("expected issue label override to persist codex provider: %#v", sessions[0])
+	}
+}
+
+func TestScanOnceCapturesCodexModel(t *testing.T) {
+	for _, tc := range []struct{ label, model string }{{"codex:astra", "gpt-6-astra"}, {"codex:sol", "gpt-5.6-sol"}} {
+		t.Run(tc.label, func(t *testing.T) {
+			home := t.TempDir()
+			repoPath := filepath.Join(home, "repo")
+			worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+			branch := "vigilante/issue-1-first"
+			t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+			t.Setenv("HOME", home)
+			t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+			app := New()
+			app.stdout = &bytes.Buffer{}
+			app.stderr = testutil.IODiscard{}
+			app.env.Runner = testutil.FakeRunner{
+				LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+				Outputs: mergeStringMaps(freshBaseBranchOutputs(repoPath, "main"), map[string]string{
+					"gh api user --jq .login": "nicobistolfi\n",
+					"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": `[{"number":1,"title":"first","createdAt":"2026-03-09T12:00:00Z","url":"https://github.com/owner/repo/issues/1","labels":[{"name":"` + tc.label + `"}]}]`,
+					"git worktree prune": "ok",
+					"git worktree add -b " + branch + " " + worktreePath + " origin/main":                    "ok",
+					sessionStartCommentCommand("owner/repo", 1, worktreePath, state.Session{Branch: branch}): "ok",
+					issuePromptCommandForSession(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", state.Session{WorktreePath: worktreePath, Branch: branch, Provider: "codex", Model: tc.model}): "done",
+				}),
+				Errors: map[string]error{
+					"git show-ref --verify --quiet refs/heads/" + branch:         errors.New("exit status 1"),
+					"git show-ref --verify --quiet refs/heads/vigilante/issue-1": errors.New("exit status 1"),
+				},
+			}
+			if err := app.state.EnsureLayout(); err != nil {
+				t.Fatal(err)
+			}
+			if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me", Provider: "claude"}}); err != nil {
+				t.Fatal(err)
+			}
+
+			if err := app.ScanOnce(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			app.waitForSessions()
+
+			sessions, err := app.state.LoadSessions()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(sessions) != 1 {
+				t.Fatalf("unexpected sessions: %#v", sessions)
+			}
+			if sessions[0].Provider != "codex" {
+				t.Fatalf("expected issue label override to persist codex provider: %#v", sessions[0])
+			}
+
+			if sessions[0].Model != tc.model {
+				t.Fatalf("model not captured: %#v", sessions[0])
+			}
+		})
 	}
 }
 
@@ -7472,7 +7615,7 @@ func TestCleanupClosedIssueSessionsStopsAfterAutomaticCleanupLimit(t *testing.T)
 	runner := &countingRunner{allowUnexpectedGH: true, base: testutil.FakeRunner{
 		Outputs: map[string]string{
 			"git worktree prune":                          "ok",
-			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"codex:astra"},{"name":"codex:sol"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 			"gh api repos/owner/repo/issues/1":            `{"labels":[]}`,
 		},
 		Errors: map[string]error{
@@ -8140,7 +8283,7 @@ func TestScanOnceReusesIssueDetailsAcrossMaintenanceAndLabelSync(t *testing.T) {
 			Outputs: map[string]string{
 				"gh api repos/owner/repo/issues/1":                                                                   `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"open","labels":[{"name":"vigilante:automerge"}]}`,
 				"gh api repos/owner/repo/issues/1/comments":                                                          "[]",
-				"gh api repos/owner/repo/labels?per_page=100":                                                        `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+				"gh api repos/owner/repo/labels?per_page=100":                                                        `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"codex:astra"},{"name":"codex:sol"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
 				"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt": `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
 				"git fetch origin main":                                                                              "ok",
 				"git status --porcelain":                                                                             "",
@@ -10207,11 +10350,12 @@ func issuePromptCommand(worktreePath string, repo string, repoPath string, issue
 }
 
 func issuePromptCommandForSession(worktreePath string, repo string, repoPath string, issueNumber int, title string, issueURL string, session state.Session) string {
-	return testutil.Key("codex", "exec", "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePromptForRuntime(skill.RuntimeCodex,
-		state.WatchTarget{Path: repoPath, Repo: repo},
-		ghcli.Issue{Number: issueNumber, Title: title, URL: issueURL},
-		session,
-	))
+	args := []string{"exec"}
+	if session.Model != "" {
+		args = append(args, "--model", session.Model)
+	}
+	args = append(args, "--cd", worktreePath, "--dangerously-bypass-approvals-and-sandbox", skill.BuildIssuePromptForRuntime(skill.RuntimeCodex, state.WatchTarget{Path: repoPath, Repo: repo}, ghcli.Issue{Number: issueNumber, Title: title, URL: issueURL}, session))
+	return testutil.Key("codex", args...)
 }
 
 func issuePromptCommandForProvider(providerID string, worktreePath string, repo string, repoPath string, issueNumber int, title string, issueURL string, branch string) string {

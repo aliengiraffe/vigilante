@@ -20,10 +20,15 @@ const ClaudeID = "claude"
 const GeminiID = "gemini"
 const OpenCodeID = "opencode"
 
-var claudeModelLabels = map[string]string{
-	"claude:sonnet": "sonnet",
-	"claude:opus":   "opus",
-	"claude:fable":  "fable",
+var modelLabels = map[string]struct {
+	provider string
+	model    string
+}{
+	"claude:sonnet": {ClaudeID, "sonnet"},
+	"claude:opus":   {ClaudeID, "opus"},
+	"claude:fable":  {ClaudeID, "fable"},
+	"codex:astra":   {CodexID, "gpt-6-astra"},
+	"codex:sol":     {CodexID, "gpt-5.6-sol"},
 }
 
 // DefaultID is the provider selected when no provider is specified by a flag,
@@ -116,17 +121,17 @@ func ResolveIssueLabels(labels []ghcli.Label) (string, string, error) {
 		}
 	}
 	models := make([]string, 0, 1)
-	for label, model := range claudeModelLabels {
+	for label := range modelLabels {
 		if ghcli.HasAnyLabel(labels, label) {
-			models = append(models, model)
+			models = append(models, label)
 		}
 	}
 	sort.Strings(models)
 	if len(models) > 1 {
-		return "", "", fmt.Errorf("multiple model labels: claude:%s", strings.Join(models, ", claude:"))
+		return "", "", fmt.Errorf("multiple model labels: %s", strings.Join(models, ", "))
 	}
-	if len(models) == 1 && !containsString(matches, ClaudeID) {
-		matches = append(matches, ClaudeID)
+	if len(models) == 1 && !containsString(matches, modelLabels[models[0]].provider) {
+		matches = append(matches, modelLabels[models[0]].provider)
 		sort.Strings(matches)
 	}
 	switch len(matches) {
@@ -134,7 +139,7 @@ func ResolveIssueLabels(labels []ghcli.Label) (string, string, error) {
 		return "", "", nil
 	case 1:
 		if len(models) == 1 {
-			return matches[0], models[0], nil
+			return matches[0], modelLabels[models[0]].model, nil
 		}
 		return matches[0], "", nil
 	default:
