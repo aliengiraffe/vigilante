@@ -758,8 +758,12 @@ Initial rules:
 - avoid duplicate work across multiple daemon scans
 - allow an issue label that exactly matches a registered provider id, such as `codex`, `claude`, `gemini`, or `opencode`, to override the watch target provider for that issue only
 - allow `claude:sonnet`, `claude:opus`, or `claude:fable` to route to Claude and select that model alias for the persisted session; the coding-agent launch comment echoes the active alias
-- allow bare `claude` together with one Claude model label; reject multiple Claude model labels or a Claude model label combined with another provider label
-- ignore unrecognized names such as `claude:haiku`, like any unrelated label
+- allow `codex:astra` to select Codex with runtime model `gpt-6-astra`, or `codex:sol` with `gpt-5.6-sol`; these explicit mappings were verified against the Codex CLI 0.153.4 runtime model catalog, and are passed with `--model`
+- allow a bare provider together with one model label for that same provider; reject multiple supported model labels or a model label combined with a different bare provider (including Claude/Codex model-only combinations)
+- capture the runtime model when the session starts and persist it across save/load, daemon restarts, resumes, and PR maintenance; later label edits do not change an existing session
+- use the persisted Codex model for preflight, implementation, conflict resolution, and CI remediation; launch comments display that model
+- preserve CLI defaults for bare `codex`, legacy sessions without a model, standalone issue creation, and package remediation; unavailable selected models surface through normal provider failure reporting without fallback
+- ignore unrecognized names such as `claude:haiku` or `codex:unknown`, like any unrelated label
 - prefer oldest eligible open issue first unless later prioritization rules are added
 
 Future policy can expand to richer label filters, assignment rules, and priority queues.
@@ -855,14 +859,14 @@ Label ownership rules:
 
 - Work-classification labels such as `bug`, `feature`, and `good first issue` remain repository-managed and should not be changed by Vigilante.
 - `vigilante:*` lifecycle and intervention labels are primarily informational and should be set or cleared by Vigilante as the issue moves through execution.
-- Provider-routing labels `codex`, `claude`, `gemini`, and `opencode` keep their existing control semantics and remain human-managed overrides. Human-managed `claude:sonnet`, `claude:opus`, and `claude:fable` labels additionally select a Claude model for the whole persisted session.
+- Provider-routing labels `codex`, `claude`, `gemini`, and `opencode` keep their existing control semantics and remain human-managed overrides. Human-managed `claude:sonnet`, `claude:opus`, and `claude:fable` labels additionally select a Claude model for the whole persisted session. Human-managed `codex:astra` and `codex:sol` select their mapped Codex runtime model with the same persistence.
 - `vigilante:resume` is the preferred control label for unblocking a paused session; `resume` remains a legacy-compatible alias.
 
 Proposed groups:
 
 - Execution state: `vigilante:queued`, `vigilante:running`, `vigilante:blocked`, `vigilante:ready-for-review`, `vigilante:awaiting-user-validation`, `vigilante:done`
 - Human-intervention state: `vigilante:needs-human-input`, `vigilante:needs-provider-fix`, `vigilante:needs-git-fix`
-- Provider routing controls: `codex`, `claude`, `gemini`, `opencode`, `claude:sonnet`, `claude:opus`, `claude:fable`
+- Provider routing controls: `codex`, `claude`, `gemini`, `opencode`, `claude:sonnet`, `claude:opus`, `claude:fable`, `codex:astra`, `codex:sol`
 - Explicit control labels: `vigilante:resume` and legacy `resume`
 
 Recommended lifecycle:

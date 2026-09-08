@@ -154,6 +154,8 @@ func TestBuildIssuePromptLaunchTitleIncludesSelectedModel(t *testing.T) {
 		{name: "Claude Opus", provider: "claude", model: "opus", want: "Coding Agent Launched: Claude Code (opus)"},
 		{name: "Claude Fable", provider: "claude", model: "fable", want: "Coding Agent Launched: Claude Code (fable)"},
 		{name: "Claude Without Model", provider: "claude", want: "Coding Agent Launched: Claude Code`"},
+		{name: "Codex Astra", provider: "codex", model: "gpt-6-astra", want: "Coding Agent Launched: Codex (gpt-6-astra)"},
+		{name: "Codex Sol", provider: "codex", model: "gpt-5.6-sol", want: "Coding Agent Launched: Codex (gpt-5.6-sol)"},
 		{name: "Codex Without Model", provider: "codex", want: "Coding Agent Launched: Codex`"},
 	}
 

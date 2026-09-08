@@ -143,6 +143,22 @@
       ]
     },
     {
+      "name": "codex:astra",
+      "color": "0052CC",
+      "group": "provider-routing",
+      "behavior": "control",
+      "applied_by": "human",
+      "description": "Routes the issue to Codex using gpt-6-astra."
+    },
+    {
+      "name": "codex:sol",
+      "color": "0052CC",
+      "group": "provider-routing",
+      "behavior": "control",
+      "applied_by": "human",
+      "description": "Routes the issue to Codex using gpt-5.6-sol."
+    },
+    {
       "name": "claude",
       "color": "0052CC",
       "group": "provider-routing",

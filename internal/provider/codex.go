@@ -26,49 +26,56 @@ func (codexProvider) EnsureRuntimeInstalled(store *state.Store) error {
 func (codexProvider) BuildIssuePreflightInvocation(task IssueTask) (Invocation, error) {
 	return Invocation{
 		Name: "codex",
-		Args: []string{
+		Args: codexSessionArgs(task.Session.Model, []string{
 			"exec",
 			"--cd", task.Session.WorktreePath,
 			"--dangerously-bypass-approvals-and-sandbox",
 			skill.BuildIssuePreflightPrompt(task.Target, task.Issue, task.Session),
-		},
+		}),
 	}, nil
 }
 
 func (codexProvider) BuildIssueInvocation(task IssueTask) (Invocation, error) {
 	return Invocation{
 		Name: "codex",
-		Args: []string{
+		Args: codexSessionArgs(task.Session.Model, []string{
 			"exec",
 			"--cd", task.Session.WorktreePath,
 			"--dangerously-bypass-approvals-and-sandbox",
 			skill.BuildIssuePromptForRuntime(skill.RuntimeCodex, task.Target, task.Issue, task.Session),
-		},
+		}),
 	}, nil
 }
 
 func (codexProvider) BuildConflictResolutionInvocation(task ConflictTask) (Invocation, error) {
 	return Invocation{
 		Name: "codex",
-		Args: []string{
+		Args: codexSessionArgs(task.Session.Model, []string{
 			"exec",
 			"--cd", task.Session.WorktreePath,
 			"--dangerously-bypass-approvals-and-sandbox",
 			skill.BuildConflictResolutionPromptForRuntime(skill.RuntimeCodex, task.Target, task.Session, task.PR),
-		},
+		}),
 	}, nil
 }
 
 func (codexProvider) BuildCIRemediationInvocation(task CIRemediationTask) (Invocation, error) {
 	return Invocation{
 		Name: "codex",
-		Args: []string{
+		Args: codexSessionArgs(task.Session.Model, []string{
 			"exec",
 			"--cd", task.Session.WorktreePath,
 			"--dangerously-bypass-approvals-and-sandbox",
 			skill.BuildCIRemediationPromptForRuntime(skill.RuntimeCodex, task.Target, task.Session, task.PR, task.FailingChecks),
-		},
+		}),
 	}, nil
+}
+
+func codexSessionArgs(model string, args []string) []string {
+	if model == "" {
+		return args
+	}
+	return append([]string{args[0], "--model", model}, args[1:]...)
 }
 
 func (codexProvider) BuildIssueCreateInvocation(task IssueCreateTask) (Invocation, error) {

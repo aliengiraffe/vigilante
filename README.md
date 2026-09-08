@@ -111,6 +111,11 @@ issue `claude:opus` routes it to Claude and launches that session with
 `--model opus`; resumes keep the model captured when the session started, and
 the coding-agent launch comment echoes the active model alias.
 
+For Codex, use `codex:astra` (`--model gpt-6-astra`) or `codex:sol`
+(`--model gpt-5.6-sol`). Each label selects Codex independently of the watch
+target provider. Choose only one model label; see [routing rules](DOCS.md#issue-selection-rules)
+for conflicts and session persistence.
+
 ## Quick Start
 
 Register a repository and let Vigilante manage the issue-to-PR loop:
