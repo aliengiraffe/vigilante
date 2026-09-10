@@ -447,8 +447,6 @@ func TestInternalCommandName(t *testing.T) {
 }
 
 func TestCaptureInternalCommandEmitsSanitizedOTELRecord(t *testing.T) {
-	t.Parallel()
-
 	root := t.TempDir()
 	exporter := &captureExporter{}
 	manager, err := Setup(context.Background(), SetupConfig{
@@ -472,10 +470,7 @@ func TestCaptureInternalCommandEmitsSanitizedOTELRecord(t *testing.T) {
 		t.Fatalf("Setup() error = %v", err)
 	}
 
-	SetDefault(manager)
-	t.Cleanup(func() {
-		SetDefault(nil)
-	})
+	useDefaultManager(t, manager)
 
 	CaptureInternalCommand(context.Background(), "codex", []string{"exec", "--cd", "/tmp/worktree", "--dangerously-bypass-approvals-and-sandbox", "top secret prompt"}, 7, 123)
 
@@ -533,8 +528,6 @@ func TestCaptureInternalCommandEmitsSanitizedOTELRecord(t *testing.T) {
 }
 
 func TestCaptureWorkflowEventUsesDefaultManagerAndBoundedProperties(t *testing.T) {
-	t.Parallel()
-
 	analytics := &captureAnalyticsExporter{}
 	manager := &Manager{
 		analytics: analytics,
@@ -543,10 +536,7 @@ func TestCaptureWorkflowEventUsesDefaultManagerAndBoundedProperties(t *testing.T
 		anonID:    "anon-123",
 	}
 
-	SetDefault(manager)
-	t.Cleanup(func() {
-		SetDefault(nil)
-	})
+	useDefaultManager(t, manager)
 
 	CaptureWorkflowEvent("issue_session_transition", map[string]any{
 		"feature_area": "issue_session",
@@ -580,8 +570,6 @@ func TestCaptureWorkflowEventUsesDefaultManagerAndBoundedProperties(t *testing.T
 }
 
 func TestCaptureDownstreamRateLimitEmitsBoundedProviderQuotaSignal(t *testing.T) {
-	t.Parallel()
-
 	root := t.TempDir()
 	exporter := &captureExporter{}
 	analytics := &captureAnalyticsExporter{}
@@ -606,10 +594,7 @@ func TestCaptureDownstreamRateLimitEmitsBoundedProviderQuotaSignal(t *testing.T)
 		t.Fatalf("Setup() error = %v", err)
 	}
 
-	SetDefault(manager)
-	t.Cleanup(func() {
-		SetDefault(nil)
-	})
+	useDefaultManager(t, manager)
 
 	CaptureDownstreamRateLimit("issue_execution", "codex exec", state.BlockedReason{Kind: "provider_quota"}, "You've hit your usage limit. Purchase more credits with token sk-live-secret.")
 	if err := manager.Shutdown(context.Background()); err != nil {
@@ -673,8 +658,6 @@ func TestCaptureDownstreamRateLimitEmitsBoundedProviderQuotaSignal(t *testing.T)
 }
 
 func TestCaptureDownstreamRateLimitDetectsGitHubRateLimit(t *testing.T) {
-	t.Parallel()
-
 	root := t.TempDir()
 	exporter := &captureExporter{}
 	manager, err := Setup(context.Background(), SetupConfig{
@@ -698,10 +681,7 @@ func TestCaptureDownstreamRateLimitDetectsGitHubRateLimit(t *testing.T) {
 		t.Fatalf("Setup() error = %v", err)
 	}
 
-	SetDefault(manager)
-	t.Cleanup(func() {
-		SetDefault(nil)
-	})
+	useDefaultManager(t, manager)
 
 	CaptureDownstreamRateLimit("dispatch", "gh api", state.BlockedReason{Kind: "provider_runtime_error"}, "API rate limit exceeded for github user 12345.")
 	if err := manager.Shutdown(context.Background()); err != nil {
@@ -835,6 +815,18 @@ func (e *captureAnalyticsExporter) Export(_ context.Context, events []analyticsE
 
 	e.events = append(e.events, events...)
 	return nil
+}
+
+// The default manager is process-global, so a test that installs one owns it
+// for the whole process and must not be parallel: a peer would otherwise export
+// this test's records through whichever manager it installed last.
+func useDefaultManager(t *testing.T, manager *Manager) {
+	t.Helper()
+
+	SetDefault(manager)
+	t.Cleanup(func() {
+		SetDefault(nil)
+	})
 }
 
 func newTestServer(t *testing.T, capture func(body string, method string, path string)) *httptest.Server {
