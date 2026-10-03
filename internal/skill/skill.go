@@ -43,6 +43,7 @@ const VigilanteIssueImplementationOnTerraform = "vigilante-issue-implementation-
 const VigilanteIssueImplementationOnRust = "vigilante-issue-implementation-on-rust"
 const VigilanteIssueImplementationOnRuby = "vigilante-issue-implementation-on-ruby"
 const VigilanteConflictResolution = "vigilante-conflict-resolution"
+const VigilanteAdversarialReview = "vigilante-adversarial-review"
 const VigilanteCreateIssue = "vigilante-create-issue"
 const VigilanteLocalServiceDependencies = "vigilante-local-service-dependencies"
 const DockerComposeLaunch = "docker-compose-launch"
@@ -76,6 +77,7 @@ func VigilanteSkillNames() []string {
 		VigilanteIssueImplementationOnRust,
 		VigilanteIssueImplementationOnRuby,
 		VigilanteConflictResolution,
+		VigilanteAdversarialReview,
 		VigilanteCreateIssue,
 		VigilanteLocalServiceDependencies,
 		DockerComposeLaunch,
@@ -730,6 +732,30 @@ func BuildCIRemediationPromptForRuntime(runtime string, target state.WatchTarget
 		"If GitHub exposes a failing check summary or log URL during your investigation, use it. At minimum, work from the failing check identifiers listed above.",
 		"If you cannot fix the failure safely, leave a concise GitHub comment explaining the blocker and exit with a non-zero status so Vigilante can stop and hand off to a human.",
 		"Keep the changes minimal and focused on restoring CI for the existing pull request.",
+	)
+	return strings.Join(lines, "\n")
+}
+
+// BuildAdversarialReviewPromptForRuntime generates the prompt for a solicited
+// adversarial review session of an existing Vigilante-opened pull request.
+func BuildAdversarialReviewPromptForRuntime(runtime string, target state.WatchTarget, prNumber int) string {
+	lines := []string{}
+	if runtimeUsesInlineSkillHeader(runtime) {
+		lines = append(lines, InlineSkillHeader(VigilanteAdversarialReview))
+	} else {
+		lines = append(lines, fmt.Sprintf("Use the `%s` skill for this task.", VigilanteAdversarialReview))
+	}
+	lines = append(lines,
+		fmt.Sprintf("Repository: %s", target.Repo),
+		fmt.Sprintf("Local repository path: %s", target.Path),
+		fmt.Sprintf("Pull Request: #%d", prNumber),
+		"Adversarial review context: a human explicitly requested a critical second-pass review of this pull request.",
+		fmt.Sprintf("Fetch the PR metadata and diff with `vigilante gh pr view %d` and `vigilante gh pr diff %d` before drawing conclusions.", prNumber, prNumber),
+		"Hunt for real defects in the PR diff: correctness bugs, security issues, unhandled edge cases, race conditions, and broken invariants. Do not produce a summary or a rubber-stamp approval.",
+		"For each finding, cite the file and line, describe a concrete failure scenario, and rate severity.",
+		fmt.Sprintf("Post the findings back to the pull request as a single review comment with `vigilante gh pr comment %d --body <findings>`. If no real defects survive scrutiny, post that conclusion explicitly with the reasoning behind it.", prNumber),
+		"This session is read-only with respect to the code: do not modify files, do not commit, do not push, and do not change the PR branch. Your only write is the posted review comment.",
+		"If the review cannot be completed, post a short comment explaining the blocker and exit with a non-zero status.",
 	)
 	return strings.Join(lines, "\n")
 }
