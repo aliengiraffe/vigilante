@@ -56,6 +56,13 @@ const defaultScanInterval = 1 * time.Minute
 const defaultAssigneeFilter = "me"
 const defaultStalledSessionThreshold = 10 * time.Minute
 const defaultStaleAutoRestartDelay = 20 * time.Minute
+
+// Continuation sources recorded on a session when Vigilante continues existing
+// implementation work instead of starting fresh.
+const (
+	continuationSourceIncompleteRerun = "incomplete_rerun"
+	continuationSourceBlockedResume   = "blocked_resume"
+)
 const defaultMaintenanceAutoRecoveryTimeout = 10 * time.Minute
 const defaultSuccessfulSessionPollInterval = 5 * time.Minute
 const issueDetailsCacheTTL = 3 * time.Minute
@@ -4042,6 +4049,7 @@ func (a *App) rerunIncompleteSessions(ctx context.Context, sessions []state.Sess
 		diffSummary, _ := summarizeIssueBranchDiff(ctx, a.env.Runner, session.RepoPath, effectiveSessionBaseBranch(*session, target), session.Branch)
 		session.BranchDiffSummary = diffSummary
 		session.ReusedRemoteBranch = session.Branch
+		session.ContinuationSource = continuationSourceIncompleteRerun
 
 		a.emitSessionTransition(previousStatus, *session, "incomplete_rerun")
 
@@ -4684,6 +4692,7 @@ func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Se
 		}
 		a.logger.Info("resume issue preflight succeeded", "repo", session.Repo, "issue", session.IssueNumber, "output", summarizeText(preflightOutput))
 	}
+	session.ContinuationSource = continuationSourceBlockedResume
 	invocation, err := selectedProvider.BuildIssueInvocation(provider.IssueTask{
 		Target:  target,
 		Issue:   issue,
@@ -4691,6 +4700,9 @@ func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Se
 	})
 	if err != nil {
 		return err
+	}
+	if strings.TrimSpace(session.WorktreePath) != "" {
+		a.commentOnIssueBestEffort(ctx, session.Repo, session.IssueNumber, issuerunner.SessionLaunchComment(*session, selectedProvider.DisplayName()), "resume launch")
 	}
 	output, err := a.env.Runner.Run(ctx, invocation.Dir, invocation.Name, invocation.Args...)
 	session.EndedAt = a.clock().Format(time.RFC3339)

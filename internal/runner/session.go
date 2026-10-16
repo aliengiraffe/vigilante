@@ -78,46 +78,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		session.ContributingGuide = guide
 		session.ContributingGuidePath = guidePath
 	}
-	startItems := []string{
-		fmt.Sprintf("Vigilante launched this implementation session in `%s`.", session.WorktreePath),
-		fmt.Sprintf("Branch: `%s`.", session.Branch),
-		fmt.Sprintf("Current stage: handing the issue off to the configured coding agent (`%s`) for investigation and implementation.", selectedProvider.DisplayName()),
-		"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
-	}
-	if strings.TrimSpace(session.PushRemote) != "" && strings.TrimSpace(session.PushRemote) != "origin" {
-		startItems = append(startItems[:2], append([]string{
-			fmt.Sprintf("Push target: `%s` (`%s`). Upstream issue and PR context remain `%s`.", session.PushRemote, fallbackSessionText(session.PushRepo, "fork repo pending"), session.Repo),
-		}, startItems[2:]...)...)
-	}
-	if strings.TrimSpace(session.ReusedRemoteBranch) != "" {
-		reusedRemote := fallbackSessionText(session.PushRemote, "origin")
-		if reusedRemote == "" {
-			reusedRemote = "origin"
-		}
-		baseBranch := strings.TrimSpace(session.BaseBranch)
-		if baseBranch == "" {
-			baseBranch = "main"
-		}
-		startItems = []string{
-			fmt.Sprintf("Vigilante launched this implementation session in `%s` from existing remote branch `%s/%s`.", session.WorktreePath, reusedRemote, session.ReusedRemoteBranch),
-			fmt.Sprintf("Diff summary against `%s`: %s", baseBranch, fallbackSessionText(session.BranchDiffSummary, "diff summary unavailable")),
-			fmt.Sprintf("Current stage: handing the issue off to the configured coding agent (`%s`) to continue the existing implementation.", selectedProvider.DisplayName()),
-			"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
-		}
-		if strings.TrimSpace(session.PushRemote) != "" && strings.TrimSpace(session.PushRemote) != "origin" {
-			startItems = append(startItems[:2], append([]string{
-				fmt.Sprintf("Push target: `%s` (`%s`). Upstream issue and PR context remain `%s`.", session.PushRemote, fallbackSessionText(session.PushRepo, "fork repo pending"), session.Repo),
-			}, startItems[2:]...)...)
-		}
-	}
-	startBody := ghcli.FormatProgressComment(ghcli.ProgressComment{
-		Stage:      "Vigilante Session Start",
-		Emoji:      "🧢",
-		Percent:    20,
-		ETAMinutes: 25,
-		Items:      startItems,
-		Tagline:    "Make it simple, but significant.",
-	})
+	startBody := SessionLaunchComment(session, selectedProvider.DisplayName())
 	// Open the session log writer for real-time streaming and lifecycle events.
 	logWriter, logWriterErr := openSessionLogWriter(logPath)
 	if logWriterErr == nil {
@@ -510,6 +471,87 @@ func markSessionBlocked(session *state.Session, stage string, blocked state.Bloc
 	session.ResumeHint = buildResumeHint(*session)
 	session.ProcessID = 0
 	session.RecoveredAt = ""
+}
+
+// SessionStartStage is the heading Vigilante posts when it launches a fresh
+// implementation session.
+const SessionStartStage = "Vigilante Session Start"
+
+// SessionResumedStage is the heading Vigilante posts when it continues an
+// existing implementation, such as an automatic incomplete-session rerun, an
+// explicit resume after a blocker, or a reused remote issue branch.
+const SessionResumedStage = "Vigilante Session Resumed"
+
+// IsSessionContinuation reports whether the session continues prior
+// implementation work rather than starting from scratch. It relies on the
+// recorded lifecycle context, not on committed diffs or remote-branch reuse
+// alone, so a saved worktree holding only uncommitted changes still counts.
+func IsSessionContinuation(session state.Session) bool {
+	return strings.TrimSpace(session.ContinuationSource) != "" || strings.TrimSpace(session.ReusedRemoteBranch) != ""
+}
+
+// SessionLaunchComment builds the issue comment Vigilante posts when it hands
+// an issue to the coding agent. Continuations use the resumed heading while
+// fresh launches keep the start heading; both preserve worktree, branch, diff,
+// provider, and resume-command context.
+func SessionLaunchComment(session state.Session, providerName string) string {
+	commandsItem := "Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue."
+	pushTargetItem := ""
+	if strings.TrimSpace(session.PushRemote) != "" && strings.TrimSpace(session.PushRemote) != "origin" {
+		pushTargetItem = fmt.Sprintf("Push target: `%s` (`%s`). Upstream issue and PR context remain `%s`.", session.PushRemote, fallbackSessionText(session.PushRepo, "fork repo pending"), session.Repo)
+	}
+	baseBranch := strings.TrimSpace(session.BaseBranch)
+	if baseBranch == "" {
+		baseBranch = "main"
+	}
+
+	stage := SessionStartStage
+	var items []string
+	switch {
+	case strings.TrimSpace(session.ReusedRemoteBranch) != "":
+		stage = SessionResumedStage
+		reusedRemote := fallbackSessionText(session.PushRemote, "origin")
+		if reusedRemote == "" {
+			reusedRemote = "origin"
+		}
+		items = []string{
+			fmt.Sprintf("Vigilante launched this implementation session in `%s` from existing remote branch `%s/%s`.", session.WorktreePath, reusedRemote, session.ReusedRemoteBranch),
+			fmt.Sprintf("Diff summary against `%s`: %s", baseBranch, fallbackSessionText(session.BranchDiffSummary, "diff summary unavailable")),
+			fmt.Sprintf("Current stage: handing the issue off to the configured coding agent (`%s`) to continue the existing implementation.", providerName),
+			commandsItem,
+		}
+	case IsSessionContinuation(session):
+		stage = SessionResumedStage
+		items = []string{
+			fmt.Sprintf("Vigilante resumed this implementation session in the existing worktree `%s`.", session.WorktreePath),
+			fmt.Sprintf("Branch: `%s`.", session.Branch),
+		}
+		if strings.TrimSpace(session.BranchDiffSummary) != "" {
+			items = append(items, fmt.Sprintf("Diff summary against `%s`: %s", baseBranch, session.BranchDiffSummary))
+		}
+		items = append(items,
+			fmt.Sprintf("Current stage: handing the issue off to the configured coding agent (`%s`) to continue the existing implementation.", providerName),
+			commandsItem,
+		)
+	default:
+		items = []string{
+			fmt.Sprintf("Vigilante launched this implementation session in `%s`.", session.WorktreePath),
+			fmt.Sprintf("Branch: `%s`.", session.Branch),
+			fmt.Sprintf("Current stage: handing the issue off to the configured coding agent (`%s`) for investigation and implementation.", providerName),
+			commandsItem,
+		}
+	}
+	if pushTargetItem != "" {
+		items = append(items[:2], append([]string{pushTargetItem}, items[2:]...)...)
+	}
+	return ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      stage,
+		Emoji:      "🧢",
+		Percent:    20,
+		ETAMinutes: 25,
+		Items:      items,
+		Tagline:    "Make it simple, but significant.",
+	})
 }
 
 func buildResumeHint(session state.Session) string {

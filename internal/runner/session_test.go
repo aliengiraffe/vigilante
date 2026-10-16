@@ -455,7 +455,7 @@ func TestRunIssueSessionStartCommentIncludesReusedRemoteBranchContext(t *testing
 		Outputs: map[string]string{
 			"codex --version": "codex 0.114.0",
 			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
-				Stage:      "Vigilante Session Start",
+				Stage:      "Vigilante Session Resumed",
 				Emoji:      "🧢",
 				Percent:    20,
 				ETAMinutes: 25,
@@ -1248,4 +1248,98 @@ func containsLine(items []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestSessionLaunchCommentHeadingReflectsContinuation(t *testing.T) {
+	base := state.Session{WorktreePath: "/tmp/worktree", Branch: "vigilante/issue-7", BaseBranch: "main"}
+
+	fresh := SessionLaunchComment(base, "Codex")
+	if !strings.Contains(fresh, "## 🧢 Vigilante Session Start") || strings.Contains(fresh, "Vigilante Session Resumed") {
+		t.Fatalf("expected fresh launch to use the start heading, got %q", fresh)
+	}
+	if !strings.Contains(fresh, "Branch: `vigilante/issue-7`.") || !strings.Contains(fresh, "`@vigilanteai resume`") {
+		t.Fatalf("expected fresh launch to keep branch and resume-command context, got %q", fresh)
+	}
+
+	local := base
+	local.ContinuationSource = "incomplete_rerun"
+	if !IsSessionContinuation(local) {
+		t.Fatalf("expected continuation source alone to mark a continuation: %#v", local)
+	}
+	resumed := SessionLaunchComment(local, "Codex")
+	if !strings.Contains(resumed, "## 🧢 Vigilante Session Resumed") || strings.Contains(resumed, "Vigilante Session Start") {
+		t.Fatalf("expected local continuation to use the resumed heading, got %q", resumed)
+	}
+	for _, want := range []string{
+		"Vigilante resumed this implementation session in the existing worktree `/tmp/worktree`.",
+		"Branch: `vigilante/issue-7`.",
+		"coding agent (`Codex`) to continue the existing implementation.",
+		"`@vigilanteai resume`",
+	} {
+		if !strings.Contains(resumed, want) {
+			t.Fatalf("expected resumed comment to contain %q, got %q", want, resumed)
+		}
+	}
+	if strings.Contains(resumed, "Diff summary") {
+		t.Fatalf("expected no diff line without a recorded diff summary, got %q", resumed)
+	}
+
+	withDiff := local
+	withDiff.BranchDiffSummary = "README.md | 2 ++"
+	if got := SessionLaunchComment(withDiff, "Codex"); !strings.Contains(got, "Diff summary against `main`: README.md | 2 ++") {
+		t.Fatalf("expected recorded diff summary to be preserved, got %q", got)
+	}
+
+	remote := base
+	remote.ReusedRemoteBranch = "vigilante/issue-7"
+	if got := SessionLaunchComment(remote, "Codex"); !strings.Contains(got, "## 🧢 Vigilante Session Resumed") || !strings.Contains(got, "from existing remote branch `origin/vigilante/issue-7`") {
+		t.Fatalf("expected reused remote branch to use the resumed heading with branch context, got %q", got)
+	}
+}
+
+func TestRunIssueSessionPostsResumedCommentForLocalContinuationWithoutDiff(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	session := state.Session{
+		RepoPath:           "/tmp/repo",
+		IssueNumber:        7,
+		WorktreePath:       "/tmp/worktree",
+		Provider:           "codex",
+		Branch:             "vigilante/issue-7",
+		BaseBranch:         "main",
+		ContinuationSource: "incomplete_rerun",
+		Status:             state.SessionStatusRunning,
+	}
+	runner := testutil.FakeRunner{
+		Outputs: map[string]string{
+			"codex --version": "codex 0.114.0",
+			"gh issue comment --repo owner/repo 7 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+				Stage:      "Vigilante Session Resumed",
+				Emoji:      "🧢",
+				Percent:    20,
+				ETAMinutes: 25,
+				Items: []string{
+					"Vigilante resumed this implementation session in the existing worktree `/tmp/worktree`.",
+					"Branch: `vigilante/issue-7`.",
+					"Current stage: handing the issue off to the configured coding agent (`Codex`) to continue the existing implementation.",
+					"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
+				},
+				Tagline: "Make it simple, but significant.",
+			}): "ok",
+			preflightPromptCommandForSession("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", session): "baseline ok",
+			issuePromptCommandForSession("/tmp/worktree", "owner/repo", "/tmp/repo", 7, "Demo", "https://github.com/owner/repo/issues/7", session):     "done",
+		},
+	}
+	env := &environment.Environment{OS: "darwin", Runner: runner}
+	store := state.NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	got := RunIssueSession(context.Background(), env, store, githubbackend.NewBackend(&env.Runner), state.WatchTarget{Path: "/tmp/repo", Repo: "owner/repo"}, ghcli.Issue{Number: 7, Title: "Demo", URL: "https://github.com/owner/repo/issues/7"}, session)
+	if got.Status != state.SessionStatusIncomplete {
+		t.Fatalf("unexpected status (expected incomplete without PR): %s (%s)", got.Status, got.LastError)
+	}
+	if got.ContinuationSource != "incomplete_rerun" {
+		t.Fatalf("expected continuation source to persist through the run: %#v", got)
+	}
 }
