@@ -131,6 +131,8 @@ const DefaultMaxParallelSessions = 0
 const DefaultBlockedSessionInactivityTimeout = 20 * time.Minute
 
 type ServiceConfig struct {
+	GitHubBackgroundBudget          int    `json:"github_background_budget,omitempty"`
+	GitHubInactivePollInterval      string `json:"github_inactive_poll_interval,omitempty"`
 	BlockedSessionInactivityTimeout string `json:"blocked_session_inactivity_timeout,omitempty"`
 	PackageHardeningEnabled         *bool  `json:"package_hardening_enabled,omitempty"`
 	SandboxEnabled                  *bool  `json:"sandbox_enabled,omitempty"`
@@ -265,6 +267,7 @@ type Session struct {
 	LastBlockedStage               string              `json:"last_blocked_stage,omitempty"`
 	BlockedReason                  BlockedReason       `json:"blocked_reason,omitempty"`
 	RetryPolicy                    string              `json:"retry_policy,omitempty"`
+	NextCommentPollAt              string              `json:"next_comment_poll_at,omitempty"`
 	ResumeAfter                    string              `json:"resume_after,omitempty"`
 	ResumeRequired                 bool                `json:"resume_required,omitempty"`
 	ResumeHint                     string              `json:"resume_hint,omitempty"`

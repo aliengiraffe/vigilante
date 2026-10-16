@@ -113,7 +113,79 @@ Once a folder is registered, `vigilante` should:
 
 In the current implementation, that worker loop already covers repository onboarding, issue intake, isolated worktrees, provider orchestration, repo-aware execution skills, local session recovery, and part of the pull request maintenance path. CI/CD promotion and richer deployment control are planned next-stage capabilities.
 
-Vigilante also monitors GitHub REST API quota through `gh api /rate_limit` before GitHub-heavy orchestration work. When the REST core bucket drops below `100` remaining requests, Vigilante posts one delay notice per affected issue for that reset window, pauses additional GitHub-backed work, and resumes automatically after GitHub's reported reset time.
+Vigilante monitors GitHub REST quota through `gh api /rate_limit` and a shared
+request guard for background scans and PR maintenance. It reserves 100 REST
+requests for other work and defers requests that would cross that reserve. A
+primary rate-limit response stops subsequent background requests until reset;
+secondary throttling waits at least one hour, or longer if `Retry-After` requires
+it. Quota probes are coalesced to at most one per minute in the daemon, including
+failed probes. Probe failures defer background requests rather than guessing that
+quota is available. Delay state is recorded locally; Vigilante does not attempt
+to post delay comments using an exhausted quota.
+
+### Background GitHub request budget
+
+The daemon additionally reserves at most **2,000 background request units per
+one-hour window**, starting with its first budgeted request. This leaves room in
+a standard 5,000-request allowance for productive work and other clients. The
+ledger and throttle deadline are saved to `github-budget.json` before dispatch,
+so a daemon restart does not replenish the allowance or bypass a throttle.
+
+Each explicit `gh api` page costs one unit. Other `gh` commands reserve ten units
+because the CLI can make multiple requests internally. These are conservative
+reservations, **not exact HTTP counts**; opaque CLI commands and provider child
+processes cannot be fully accounted for at this boundary. Interactive CLI commands
+and provider sessions are outside the background allowance. Live quota probes
+observe their consumption, and API response headers update remaining core quota.
+Background GitHub commands are serialized through the guard, including concurrent
+PR maintenance. This guard coordinates the daemon instance; operators should run
+one daemon per state directory.
+
+Comment snapshots (including empty results and failures) are shared across
+cleanup, recreate, resume, iteration, and maintenance readers in a scan. Issue,
+PR conversation, and PR review comments are paged explicitly, so each page is
+budgeted and logged; commands beyond the first page remain visible. Failed,
+successful, and other inactive sessions are due every **30 minutes** by default;
+running, resuming, and blocked sessions are due every minute. These intervals are
+minimum delays after a completed poll. Actual command-detection latency includes
+the scan duration and daemon delay, and grows when budget or GitHub quota defers
+work. Oldest due sessions are serviced first; due times persist across restart.
+Failed sessions periodically refresh issue/PR state: closed or unavailable issues
+stop monitoring, and closed/merged/unavailable PRs stop PR polling while their open
+issue can still receive recreate commands. History and local worktrees are retained.
+
+Optional `config.json` settings (restart the daemon after changing them):
+
+```json
+{
+  "github_background_budget": 2000,
+  "github_inactive_poll_interval": "30m"
+}
+```
+
+`github_background_budget` accepts 1–4,000 units per window; absent, zero, negative,
+or larger values use 2,000. `github_inactive_poll_interval` accepts durations of
+at least five minutes; absent or invalid values use 30 minutes. Existing config
+and session files remain valid; no manual session cleanup is required. Budget
+settings too small for a command's reservation defer that command until the
+configuration is raised. Longer polling intervals reduce demand but do not replace
+the request guard.
+
+Use `vigilante logs --access` to see actual dispatched polling pages and their
+execution context, duration, and outcome. Scan summaries report logical fetches,
+cache hits, failures, deferred sessions, reserved units, window end, and GitHub
+quota/reset state. Cached snapshots make no network call. Guard rejections can
+also appear as failed command attempts; their error contains `GitHub request
+deferred by quota budget`, so exclude these when counting dispatched calls. A
+logical comment fetch may span several access-log page records. No response
+comment bodies or authorization headers are added to access logs.
+
+A deterministic simulated-hour regression test uses 116 historical sessions,
+93 open PRs, and six watched repositories. It performs 302 comment-page reads
+(one complete shared sweep), 578 background commands in total, and reserves
+2,000 units; subsequent work is deferred by the budget. These synthetic counts
+are not a production HTTP benchmark. The incident preceding this change recorded
+4,888 successful comment fetch operations in approximately 36 minutes.
 
 ## Telemetry
 
@@ -456,7 +528,7 @@ Remove a repository from the watchlist without deleting the repository itself.
 ### `vigilante daemon run`
 
 Run the long-lived watcher loop in the foreground. This is the process the OS service should execute.
-By default it scans watched repositories every 1 minute. Use `--interval` to override that cadence for manual runs.
+By default the daemon waits one minute after a scan completes before starting the next scan. Long scans do not accumulate ticks or trigger immediate catch-up scans. Use `--interval` to override this delay for manual runs; `--once` still performs one scan without waiting.
 
 ### `vigilante setup [--provider <codex|claude|gemini|opencode>]`
 

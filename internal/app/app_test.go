@@ -10577,9 +10577,9 @@ func TestCollectSessionCommentsMergesIssueAndPRComments(t *testing.T) {
 	}
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/issues/7/comments":            `[{"id":10,"body":"@vigilanteai resume","created_at":"2026-03-12T12:00:00Z","user":{"login":"alice"}}]`,
-			"gh api repos/owner/repo/issues/12/comments":           `[{"id":20,"body":"@vigilanteai cleanup","created_at":"2026-03-12T12:01:00Z","user":{"login":"bob"}}]`,
-			"gh api repos/owner/repo/pulls/12/comments --paginate": `[{"id":30,"body":"@vigilanteai please fix","created_at":"2026-03-12T12:02:00Z","user":{"login":"carol"}}]`,
+			"gh api repos/owner/repo/issues/7/comments":  `[{"id":10,"body":"@vigilanteai resume","created_at":"2026-03-12T12:00:00Z","user":{"login":"alice"}}]`,
+			"gh api repos/owner/repo/issues/12/comments": `[{"id":20,"body":"@vigilanteai cleanup","created_at":"2026-03-12T12:01:00Z","user":{"login":"bob"}}]`,
+			"gh api repos/owner/repo/pulls/12/comments":  `[{"id":30,"body":"@vigilanteai please fix","created_at":"2026-03-12T12:02:00Z","user":{"login":"carol"}}]`,
 		},
 	}
 	env := &environment.Environment{Runner: runner}
@@ -10665,8 +10665,8 @@ func TestCollectSessionCommentsGracefulPRFailure(t *testing.T) {
 			"gh api repos/owner/repo/issues/7/comments": `[{"id":10,"body":"hello","created_at":"2026-03-12T12:00:00Z","user":{"login":"alice"}}]`,
 		},
 		Errors: map[string]error{
-			"gh api repos/owner/repo/issues/12/comments":           errors.New("rate limited"),
-			"gh api repos/owner/repo/pulls/12/comments --paginate": errors.New("rate limited"),
+			"gh api repos/owner/repo/issues/12/comments": errors.New("rate limited"),
+			"gh api repos/owner/repo/pulls/12/comments":  errors.New("rate limited"),
 		},
 	}
 	env := &environment.Environment{Runner: runner}
@@ -10707,9 +10707,9 @@ func TestCollectSessionCommentsDeduplicatesAcrossSurfaces(t *testing.T) {
 	// same API. Simulate overlapping comment IDs to ensure deduplication.
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/issues/7/comments":            `[{"id":10,"body":"issue comment","created_at":"2026-03-12T12:00:00Z","user":{"login":"alice"}}]`,
-			"gh api repos/owner/repo/issues/12/comments":           `[{"id":10,"body":"issue comment","created_at":"2026-03-12T12:00:00Z","user":{"login":"alice"}},{"id":20,"body":"pr comment","created_at":"2026-03-12T12:01:00Z","user":{"login":"bob"}}]`,
-			"gh api repos/owner/repo/pulls/12/comments --paginate": `[]`,
+			"gh api repos/owner/repo/issues/7/comments":  `[{"id":10,"body":"issue comment","created_at":"2026-03-12T12:00:00Z","user":{"login":"alice"}}]`,
+			"gh api repos/owner/repo/issues/12/comments": `[{"id":10,"body":"issue comment","created_at":"2026-03-12T12:00:00Z","user":{"login":"alice"}},{"id":20,"body":"pr comment","created_at":"2026-03-12T12:01:00Z","user":{"login":"bob"}}]`,
+			"gh api repos/owner/repo/pulls/12/comments":  `[]`,
 		},
 	}
 	env := &environment.Environment{Runner: runner}

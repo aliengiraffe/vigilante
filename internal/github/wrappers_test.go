@@ -123,7 +123,7 @@ func TestGhWrapperInvocations(t *testing.T) {
 		},
 		{
 			name:    "ListPullRequestFiles paginates the pulls files endpoint",
-			command: "gh api repos/owner/repo/pulls/4/files --paginate",
+			command: "gh api repos/owner/repo/pulls/4/files",
 			output:  `[{"filename":"a.go","status":"modified"}]`,
 			invoke: func(t *testing.T, r testutil.FakeRunner) error {
 				files, err := ListPullRequestFiles(context.Background(), r, "owner/repo", 4)
@@ -408,7 +408,7 @@ func TestListIssueCommentsForPolling(t *testing.T) {
 func TestListPullRequestReviewCommentsForPolling(t *testing.T) {
 	t.Parallel()
 
-	const command = "gh api repos/owner/repo/pulls/4/comments --paginate"
+	const command = "gh api repos/owner/repo/pulls/4/comments"
 
 	t.Run("returns review comments", func(t *testing.T) {
 		t.Parallel()
@@ -487,7 +487,7 @@ func TestHasAnyLabel(t *testing.T) {
 func TestListPullRequestFilesErrors(t *testing.T) {
 	t.Parallel()
 
-	const command = "gh api repos/owner/repo/pulls/4/files --paginate"
+	const command = "gh api repos/owner/repo/pulls/4/files"
 
 	t.Run("runner failure", func(t *testing.T) {
 		t.Parallel()

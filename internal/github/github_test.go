@@ -730,7 +730,7 @@ func TestLatestUserCommentTimeIgnoresAutomationComments(t *testing.T) {
 func TestListPullRequestReviewComments(t *testing.T) {
 	runner := testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/pulls/12/comments --paginate": `[{"id":100,"body":"@vigilanteai resume","created_at":"2026-03-12T12:00:00Z","user":{"login":"alice"}},{"id":101,"body":"looks good","created_at":"2026-03-12T12:01:00Z","user":{"login":"bob"}}]`,
+			"gh api repos/owner/repo/pulls/12/comments": `[{"id":100,"body":"@vigilanteai resume","created_at":"2026-03-12T12:00:00Z","user":{"login":"alice"}},{"id":101,"body":"looks good","created_at":"2026-03-12T12:01:00Z","user":{"login":"bob"}}]`,
 		},
 	}
 

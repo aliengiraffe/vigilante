@@ -63,7 +63,7 @@ const staleAutoRestartAttemptLimit = 3
 const maxAutomaticCleanupAttempts = 3
 const maxConsecutiveCIRemediationAttempts = 3
 const ciRemediationNoProgressTimeout = 30 * time.Minute
-const githubCoreLowQuotaThreshold = 5
+const githubCoreLowQuotaThreshold = 100
 const unsetMaxParallel = -2147483648
 const autoRecoverySource = "auto_recovery"
 
@@ -134,6 +134,7 @@ type App struct {
 	repoLabelsProvisionedOnce map[string]bool
 	githubRateLimitMu         sync.Mutex
 	githubRateLimitState      githubRateLimitState
+	githubBudget              *environment.GitHubBudgetRunner
 	proxyExec                 func(context.Context, io.Reader, io.Writer, io.Writer, string, ...string) (int, error)
 	sandboxManager            *sandbox.Manager
 }
@@ -194,8 +195,10 @@ func New() *App {
 	if err != nil {
 		logger = logging.Discard()
 	}
+	config, _ := store.LoadServiceConfig()
+	budget := &environment.GitHubBudgetRunner{Base: environment.ExecRunner{}, Path: filepath.Join(store.Root(), "github-budget.json"), Limit: config.GitHubBackgroundBudget, AccessLog: store.AppendAccessLogEntry}
 	runner := environment.LoggingRunner{
-		Base:             environment.ExecRunner{},
+		Base:             budget,
 		CaptureCommand:   telemetry.CaptureInternalCommand,
 		AccessLog:        store.AppendAccessLogEntry,
 		Logger:           logger,
@@ -212,6 +215,7 @@ func New() *App {
 		stdout:       os.Stdout,
 		stderr:       os.Stderr,
 		state:        store,
+		githubBudget: budget,
 		logger:       logger,
 		clock:        func() time.Time { return time.Now().UTC() },
 		version:      build.Version,
@@ -2077,9 +2081,6 @@ func (a *App) DaemonRun(ctx context.Context, interval time.Duration, once bool) 
 		return nil
 	}
 
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
 	for {
 		if err := a.ScanOnce(ctx); err != nil {
 			a.logger.Error("scan error", "err", err)
@@ -2088,10 +2089,8 @@ func (a *App) DaemonRun(ctx context.Context, interval time.Duration, once bool) 
 
 		a.sweepLogsDir()
 
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
+		if err := waitForNextScan(ctx, interval); err != nil {
+			return err
 		}
 	}
 }
@@ -2109,7 +2108,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 		CorrelationID:    accessLogCorrelationID("scan", "all", 0),
 	})
 	a.logger.Info("scan start")
-	locked, err := a.state.TryWithScanLock(func() error {
+	locked, err := a.state.TryWithScanLock(func() (scanErr error) {
 		if err := a.state.EnsureLayout(); err != nil {
 			return err
 		}
@@ -2139,6 +2138,15 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			a.logger.Info("scan paused by github rate limit")
 			return nil
 		}
+		ctx, finishPolling := a.prepareCommentPolling(ctx, sessions)
+		defer func() {
+			if scanErr != nil && sessions == nil {
+				return
+			}
+			finishPolling(sessions)
+			scanErr = errors.Join(scanErr, a.state.SaveSessions(sessions))
+		}()
+		a.reconcileFailedPolling(ctx, sessions, issueDetailsCache)
 		sessions, err = a.processGitHubCleanupRequests(ctx, sessions)
 		if err != nil {
 			return err
@@ -2575,7 +2583,7 @@ func (a *App) enforceGitHubRateLimit(ctx context.Context, sessions []state.Sessi
 		}
 		return a.clearExpiredGitHubResumeState(sessions, now), false, nil
 	}
-	if snapshot.Core.Remaining >= githubCoreLowQuotaThreshold {
+	if snapshot.Core.Remaining > githubCoreLowQuotaThreshold {
 		if cachedActive {
 			a.clearGitHubRateLimitState(false)
 			a.logger.Info("github rate limit pause cleared by live snapshot", "core_remaining", snapshot.Core.Remaining, "reset_at", snapshot.Core.ResetAt.Format(time.RFC3339))
@@ -2643,27 +2651,16 @@ func (a *App) clearGitHubRateLimitState(emit bool) {
 	}
 }
 
-func (a *App) notifyGitHubLowQuotaSessions(ctx context.Context, sessions []state.Session, snapshot ghcli.RateLimitSnapshot) []state.Session {
+// notifyGitHubLowQuotaSessions records the delay locally. Posting a GitHub
+// notice here used to spend the last requests and retry failed writes each scan.
+func (a *App) notifyGitHubLowQuotaSessions(_ context.Context, sessions []state.Session, snapshot ghcli.RateLimitSnapshot) []state.Session {
 	resetAt := snapshot.Core.ResetAt.Format(time.RFC3339)
 	for i := range sessions {
-		session := &sessions[i]
-		if !sessionAffectedByGitHubRateLimitPause(*session) {
+		if !sessionAffectedByGitHubRateLimitPause(sessions[i]) {
 			continue
 		}
-		session.ResumeAfter = resetAt
-		if session.LastGitHubDelayResetAt == resetAt {
-			continue
-		}
-
-		body := ghcli.FormatGitHubRateLimitDelayComment(snapshot, githubCoreLowQuotaThreshold, a.clock())
-		if err := a.commentOnIssue(ctx, session.Repo, session.IssueNumber, body, "rate_limit_delay", "github_rate_limit"); err != nil {
-			a.logger.Error("github rate limit delay comment failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
-			session.LastError = err.Error()
-			session.UpdatedAt = a.clock().Format(time.RFC3339)
-			continue
-		}
-		session.LastGitHubDelayResetAt = resetAt
-		session.LastGitHubDelayCommentedAt = a.clock().Format(time.RFC3339)
+		sessions[i].ResumeAfter = resetAt
+		sessions[i].LastGitHubDelayResetAt = resetAt
 	}
 	return sessions
 }
@@ -2941,6 +2938,7 @@ func (a *App) launchPullRequestMaintenance(ctx context.Context, session state.Se
 		}
 
 		result.PullRequestMaintenanceInFlight = false
+		result.NextCommentPollAt = latest.NextCommentPollAt
 		cachedResult := []state.Session{result}
 		a.persistScanIssueDetailsCache(cachedResult, issueCache)
 		result = cachedResult[0]
@@ -2990,7 +2988,7 @@ func (a *App) runPullRequestMaintenance(ctx context.Context, session *state.Sess
 		if err != nil {
 			session.UpdatedAt = a.clock().Format(time.RFC3339)
 			a.logger.Error("pr maintenance failed", "repo", session.Repo, "issue", session.IssueNumber, "pr", pr.Number, "branch", session.Branch, "err", err)
-			if shouldCommentMaintenanceFailure(*session, err) {
+			if !errors.Is(err, environment.ErrGitHubDeferred) && shouldCommentMaintenanceFailure(*session, err) {
 				blocked := classifyBlockedReason("pr_maintenance", "git fetch origin main", err)
 				previousStatus := session.Status
 				markSessionBlocked(session, "pr_maintenance", blocked, a.clock())
@@ -3589,7 +3587,22 @@ func (a *App) listRunningSessions() error {
 // associated open PR, also fetches PR timeline comments and PR review comments.
 // All surfaces are merged and deduplicated by comment ID so that the same
 // command is never processed twice regardless of where it was posted.
-func (a *App) collectSessionComments(ctx context.Context, session state.Session, purpose string) ([]ghcli.IssueComment, error) {
+func (a *App) collectSessionComments(ctx context.Context, session state.Session, purpose string) (result []ghcli.IssueComment, pollErr error) {
+	ctx = withSessionAccessLogContext(ctx, "", session)
+	if !commentPollDue(ctx, session) {
+		return nil, nil
+	}
+	complete := true
+	defer func() {
+		if pollErr == nil && complete {
+			if schedule, ok := ctx.Value(pollingContextKey{}).(*pollingSchedule); ok {
+				schedule.mu.Lock()
+				schedule.completed[sessionKey(session.Repo, session.IssueNumber)] = true
+				schedule.mu.Unlock()
+			}
+		}
+	}()
+
 	issueTracker := a.issueTrackerForSession(session)
 	project := a.issueProjectForSession(session)
 
@@ -3609,6 +3622,10 @@ func (a *App) collectSessionComments(ctx context.Context, session state.Session,
 		if a.logger != nil {
 			a.logger.Warn("pr comment poll failed, continuing with issue comments only", "repo", session.Repo, "pr", session.PullRequestNumber, "purpose", purpose, "err", err)
 		}
+		complete = false
+		if errors.Is(err, environment.ErrGitHubDeferred) {
+			return nil, err
+		}
 		return issueComments, nil
 	}
 
@@ -3616,6 +3633,10 @@ func (a *App) collectSessionComments(ctx context.Context, session state.Session,
 	if err != nil {
 		if a.logger != nil {
 			a.logger.Warn("pr review comment poll failed, continuing with issue+pr comments", "repo", session.Repo, "pr", session.PullRequestNumber, "purpose", purpose, "err", err)
+		}
+		complete = false
+		if errors.Is(err, environment.ErrGitHubDeferred) {
+			return nil, err
 		}
 		return ghcli.MergeCommentSurfaces(issueComments, prComments), nil
 	}
@@ -3626,6 +3647,9 @@ func (a *App) collectSessionComments(ctx context.Context, session state.Session,
 func (a *App) processGitHubCleanupRequests(ctx context.Context, sessions []state.Session) ([]state.Session, error) {
 	for i := range sessions {
 		session := &sessions[i]
+		if !commentPollDue(ctx, *session) {
+			continue
+		}
 		if session.Status == state.SessionStatusClosed {
 			continue
 		}
@@ -3688,6 +3712,9 @@ func (a *App) processGitHubCleanupRequests(ctx context.Context, sessions []state
 func (a *App) processGitHubRecreateRequests(ctx context.Context, sessions []state.Session) ([]state.Session, error) {
 	for i := range sessions {
 		session := &sessions[i]
+		if !commentPollDue(ctx, *session) {
+			continue
+		}
 		if session.Status == state.SessionStatusClosed {
 			continue
 		}
@@ -3825,6 +3852,9 @@ func (a *App) recreateSessionInline(ctx context.Context, session *state.Session,
 func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.Session, issueCache scanIssueDetailsCache) ([]state.Session, error) {
 	for i := range sessions {
 		session := &sessions[i]
+		if !commentPollDue(ctx, *session) {
+			continue
+		}
 		if session.Status != state.SessionStatusBlocked {
 			continue
 		}
@@ -5514,6 +5544,9 @@ func blockedIssueSessionForDispatchFailure(target state.WatchTarget, issue ghcli
 }
 
 func (a *App) recordSessionFailure(session *state.Session, stage string, operation string, err error) {
+	if errors.Is(err, environment.ErrGitHubDeferred) {
+		return
+	}
 	previous := session.Status
 	markSessionBlocked(session, stage, classifyBlockedReason(stage, operation, err), a.clock())
 	session.LastError = err.Error()
@@ -5569,6 +5602,9 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 	needsSave := false
 	for i := range sessions {
 		session := &sessions[i]
+		if !commentPollDue(ctx, *session) {
+			continue
+		}
 		if session.Repo != target.Repo {
 			continue
 		}

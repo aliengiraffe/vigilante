@@ -850,15 +850,7 @@ func issueAPIPath(repo string, number int) string {
 }
 
 func runIssueCommentsCommand(ctx context.Context, runner environment.Runner, repo string, number int) (string, error) {
-	path := issueAPIPath(repo, number) + "/comments"
-	switch typed := runner.(type) {
-	case environment.LoggingRunner:
-		return typed.Base.Run(ctx, "", "gh", "api", path)
-	case *environment.LoggingRunner:
-		return typed.Base.Run(ctx, "", "gh", "api", path)
-	default:
-		return runner.Run(ctx, "", "gh", "api", path)
-	}
+	return fetchCommentPages(ctx, runner, issueAPIPath(repo, number)+"/comments")
 }
 
 func parseIssueComments(output string) ([]IssueComment, error) {
@@ -905,7 +897,7 @@ type PullRequestFile struct {
 
 // ListPullRequestFiles returns the files changed in a pull request.
 func ListPullRequestFiles(ctx context.Context, runner environment.Runner, repo string, number int) ([]PullRequestFile, error) {
-	output, err := runner.Run(ctx, "", "gh", "api", fmt.Sprintf("repos/%s/pulls/%d/files", repo, number), "--paginate")
+	output, err := readArrayPages(ctx, runner, fmt.Sprintf("repos/%s/pulls/%d/files", repo, number))
 	if err != nil {
 		return nil, fmt.Errorf("list pr files: %w", err)
 	}
@@ -959,7 +951,7 @@ func AddPullRequestCommentReaction(ctx context.Context, runner environment.Runne
 
 // ListPullRequestCommentsForPolling is a polling-safe variant of
 // ListPullRequestComments that logs failures without propagating through
-// access logging.
+// verbose command logging; access logging remains enabled.
 func ListPullRequestCommentsForPolling(ctx context.Context, runner environment.Runner, repo string, number int, purpose string, logger *slog.Logger) ([]IssueComment, error) {
 	output, err := runPullRequestCommentsCommand(ctx, runner, repo, number)
 	if err != nil {
@@ -981,25 +973,16 @@ func ListPullRequestCommentsForPolling(ctx context.Context, runner environment.R
 	return comments, nil
 }
 
-// runPullRequestCommentsCommand fetches PR issue comments bypassing the
-// access logger, mirroring runIssueCommentsCommand for the PR number.
+// runPullRequestCommentsCommand shares issue-comment snapshots for PRs.
 func runPullRequestCommentsCommand(ctx context.Context, runner environment.Runner, repo string, number int) (string, error) {
-	path := issueAPIPath(repo, number) + "/comments"
-	switch typed := runner.(type) {
-	case environment.LoggingRunner:
-		return typed.Base.Run(ctx, "", "gh", "api", path)
-	case *environment.LoggingRunner:
-		return typed.Base.Run(ctx, "", "gh", "api", path)
-	default:
-		return runner.Run(ctx, "", "gh", "api", path)
-	}
+	return fetchCommentPages(ctx, runner, issueAPIPath(repo, number)+"/comments")
 }
 
 // ListPullRequestReviewComments returns inline review comments on a pull
 // request. These are code-level comments left during a PR review, fetched
 // from the pulls review comments API endpoint.
 func ListPullRequestReviewComments(ctx context.Context, runner environment.Runner, repo string, number int) ([]IssueComment, error) {
-	output, err := runner.Run(ctx, "", "gh", "api", pullReviewCommentsAPIPath(repo, number), "--paginate")
+	output, err := runPullRequestReviewCommentsCommand(ctx, runner, repo, number)
 	if err != nil {
 		return nil, err
 	}
@@ -1008,7 +991,7 @@ func ListPullRequestReviewComments(ctx context.Context, runner environment.Runne
 
 // ListPullRequestReviewCommentsForPolling is a polling-safe variant of
 // ListPullRequestReviewComments that logs failures without propagating
-// through access logging.
+// through verbose command logging.
 func ListPullRequestReviewCommentsForPolling(ctx context.Context, runner environment.Runner, repo string, number int, purpose string, logger *slog.Logger) ([]IssueComment, error) {
 	output, err := runPullRequestReviewCommentsCommand(ctx, runner, repo, number)
 	if err != nil {
@@ -1031,15 +1014,7 @@ func ListPullRequestReviewCommentsForPolling(ctx context.Context, runner environ
 }
 
 func runPullRequestReviewCommentsCommand(ctx context.Context, runner environment.Runner, repo string, number int) (string, error) {
-	path := pullReviewCommentsAPIPath(repo, number)
-	switch typed := runner.(type) {
-	case environment.LoggingRunner:
-		return typed.Base.Run(ctx, "", "gh", "api", path, "--paginate")
-	case *environment.LoggingRunner:
-		return typed.Base.Run(ctx, "", "gh", "api", path, "--paginate")
-	default:
-		return runner.Run(ctx, "", "gh", "api", path, "--paginate")
-	}
+	return fetchCommentPages(ctx, runner, pullReviewCommentsAPIPath(repo, number))
 }
 
 func pullReviewCommentsAPIPath(repo string, number int) string {
