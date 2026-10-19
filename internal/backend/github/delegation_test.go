@@ -185,7 +185,7 @@ func TestBackendDelegationTargets(t *testing.T) {
 			// Review comments live on a different endpoint than issue comments.
 			// Conflating the two silently loses inline review feedback.
 			name:    "ListPullRequestReviewComments reads the pulls comments endpoint",
-			command: "gh api repos/owner/repo/pulls/7/comments --paginate",
+			command: "gh api repos/owner/repo/pulls/7/comments",
 			output:  `[{"id":2,"body":"inline","user":{"login":"u"}}]`,
 			invoke: func(t *testing.T, b *Backend) error {
 				comments, err := b.ListPullRequestReviewComments(context.Background(), "owner/repo", 7)
@@ -197,7 +197,7 @@ func TestBackendDelegationTargets(t *testing.T) {
 		},
 		{
 			name:    "ListPullRequestReviewCommentsForPolling reads the pulls comments endpoint",
-			command: "gh api repos/owner/repo/pulls/7/comments --paginate",
+			command: "gh api repos/owner/repo/pulls/7/comments",
 			output:  `[{"id":2,"body":"inline","user":{"login":"u"}}]`,
 			invoke: func(_ *testing.T, b *Backend) error {
 				_, err := b.ListPullRequestReviewCommentsForPolling(context.Background(), "owner/repo", 7, "purpose", discardLogger())
@@ -342,7 +342,7 @@ func TestListPullRequestFilesMapsGhFieldsToBackendFields(t *testing.T) {
 
 	b := newTestBackend(testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/pulls/7/files --paginate": `[
+			"gh api repos/owner/repo/pulls/7/files": `[
 				{"filename":"go.mod","status":"modified"},
 				{"filename":"main.go","status":"added"}
 			]`,
@@ -369,7 +369,7 @@ func TestListPullRequestFilesPropagatesErrors(t *testing.T) {
 
 	b := newTestBackend(testutil.FakeRunner{
 		Errors: map[string]error{
-			"gh api repos/owner/repo/pulls/7/files --paginate": errors.New("boom"),
+			"gh api repos/owner/repo/pulls/7/files": errors.New("boom"),
 		},
 	})
 
@@ -387,7 +387,7 @@ func TestListPullRequestFilesHandlesEmptyList(t *testing.T) {
 
 	b := newTestBackend(testutil.FakeRunner{
 		Outputs: map[string]string{
-			"gh api repos/owner/repo/pulls/7/files --paginate": `[]`,
+			"gh api repos/owner/repo/pulls/7/files": `[]`,
 		},
 	})
 
