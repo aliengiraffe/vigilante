@@ -45,7 +45,11 @@ coverage:
 
 comment:
   layout: "condensed_header, diff, flags, components"
-  require_changes: true
+  # Comment only when coverage drops. The default (true) comments on any
+  # coverage change and marks the comment with a red cross whenever changed lines
+  # are uncovered, even when the patch status passes its target, which reads as a
+  # failure. The patch status above is what gates a pull request.
+  require_changes: "coverage_drop"
 
 ignore:
   - "internal/testutil/**"     # test helpers, exercised only by other tests
