@@ -242,6 +242,7 @@ type Session struct {
 	ContributingGuidePath          string              `json:"contributing_guide_path,omitempty"`
 	ReusedRemoteBranch             string              `json:"reused_remote_branch,omitempty"`
 	BranchDiffSummary              string              `json:"branch_diff_summary,omitempty"`
+	ContinuationSource             string              `json:"continuation_source,omitempty"`
 	Status                         SessionStatus       `json:"status"`
 	PullRequestNumber              int                 `json:"pull_request_number,omitempty"`
 	PullRequestURL                 string              `json:"pull_request_url,omitempty"`

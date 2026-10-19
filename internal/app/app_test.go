@@ -21,6 +21,7 @@ import (
 	ghcli "github.com/nicobistolfi/vigilante/internal/github"
 	"github.com/nicobistolfi/vigilante/internal/provider"
 	"github.com/nicobistolfi/vigilante/internal/repo"
+	issuerunner "github.com/nicobistolfi/vigilante/internal/runner"
 	"github.com/nicobistolfi/vigilante/internal/skill"
 	"github.com/nicobistolfi/vigilante/internal/state"
 	"github.com/nicobistolfi/vigilante/internal/telemetry"
@@ -6247,6 +6248,201 @@ func TestScanOnceReusesExistingRemoteIssueBranchAndPersistsDiffContext(t *testin
 	if !strings.Contains(sessions[0].BranchDiffSummary, "README.md | 2 ++") {
 		t.Fatalf("expected branch diff summary to persist: %#v", sessions[0])
 	}
+	if sessions[0].Status == state.SessionStatusFailed {
+		t.Fatalf("expected reused remote branch session to launch with the resumed heading, got failure: %#v", sessions[0])
+	}
+}
+
+func TestRerunIncompleteSessionsPostsResumedLaunchComment(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	now := time.Date(2026, 3, 10, 15, 0, 0, 0, time.UTC)
+	app.clock = func() time.Time { return now }
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+
+	branch := "vigilante/issue-1"
+	previous := state.Session{
+		RepoPath:         repoPath,
+		Repo:             "owner/repo",
+		Provider:         "codex",
+		IssueNumber:      1,
+		IssueTitle:       "first",
+		IssueURL:         "https://github.com/owner/repo/issues/1",
+		BaseBranch:       "main",
+		Branch:           branch,
+		WorktreePath:     worktreePath,
+		Status:           state.SessionStatusIncomplete,
+		IncompleteReason: "uncommitted_changes",
+		StartedAt:        now.Add(-30 * time.Minute).Format(time.RFC3339),
+		EndedAt:          now.Add(-20 * time.Minute).Format(time.RFC3339),
+		UpdatedAt:        now.Add(-20 * time.Minute).Format(time.RFC3339),
+	}
+	// The rerun reuses the saved worktree even though the branch has no committed diff.
+	expected := previous
+	expected.Status = state.SessionStatusRunning
+	expected.StartedAt = now.Format(time.RFC3339)
+	expected.EndedAt = ""
+	expected.LastHeartbeatAt = now.Format(time.RFC3339)
+	expected.UpdatedAt = now.Format(time.RFC3339)
+	expected.ProcessID = os.Getpid()
+	expected.ReusedRemoteBranch = branch
+	expected.BranchDiffSummary = "No diff detected between `main` and `" + branch + "`."
+	expected.ContinuationSource = "incomplete_rerun"
+	resumedComment := sessionStartCommentCommand("owner/repo", 1, worktreePath, expected)
+	if !strings.Contains(resumedComment, "Vigilante Session Resumed") || strings.Contains(resumedComment, "Vigilante Session Start") {
+		t.Fatalf("expected rerun comment helper to use the resumed heading, got %q", resumedComment)
+	}
+
+	runner := &countingRunner{base: testutil.FakeRunner{
+		LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"codex --version": "codex 1.0.0",
+			"gh pr list --repo owner/repo --head " + branch + " --state all --json number,url,state,mergedAt": `[]`,
+			"git diff --stat main..." + branch: "",
+			resumedComment:                     "ok",
+			preflightPromptCommandForSession(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", expected): "baseline ok",
+			issuePromptCommandForSession(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", expected):     "done",
+			"git status --porcelain": " M README.md\n",
+		},
+	}}
+	app.env.Runner = runner
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	app.sessionMu.Lock()
+	sessions, err := app.rerunIncompleteSessions(context.Background(), []state.Session{previous}, nil)
+	if err != nil {
+		app.sessionMu.Unlock()
+		t.Fatal(err)
+	}
+	if err := app.state.SaveSessions(sessions); err != nil {
+		app.sessionMu.Unlock()
+		t.Fatal(err)
+	}
+	app.sessionMu.Unlock()
+	app.waitForSessions()
+
+	if sessions[0].ContinuationSource != "incomplete_rerun" {
+		t.Fatalf("expected rerun to record the continuation source: %#v", sessions[0])
+	}
+	runner.mu.Lock()
+	posted := runner.counts[resumedComment]
+	runner.mu.Unlock()
+	if posted != 1 {
+		t.Fatalf("expected exactly one resumed launch comment, got %d (counts: %#v)", posted, runner.counts)
+	}
+	stored, err := app.state.LoadSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 1 || stored[0].Status == state.SessionStatusFailed {
+		t.Fatalf("expected rerun session to proceed past the launch comment: %#v", stored)
+	}
+	if stored[0].ContinuationSource != "incomplete_rerun" || stored[0].WorktreePath != worktreePath {
+		t.Fatalf("expected continuation context and worktree to persist: %#v", stored[0])
+	}
+}
+
+func TestResumeBlockedSessionPostsResumedLaunchComment(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	repoPath := filepath.Join(home, "repo")
+	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	app := New()
+	app.stdout = &bytes.Buffer{}
+	app.stderr = testutil.IODiscard{}
+	session := state.Session{
+		RepoPath:       repoPath,
+		Repo:           "owner/repo",
+		Provider:       "codex",
+		IssueNumber:    1,
+		IssueTitle:     "first",
+		IssueURL:       "https://github.com/owner/repo/issues/1",
+		BaseBranch:     "main",
+		Branch:         "vigilante/issue-1",
+		WorktreePath:   worktreePath,
+		Status:         state.SessionStatusBlocked,
+		BlockedStage:   "issue_execution",
+		BlockedReason:  state.BlockedReason{Kind: "git_signing", Operation: "git commit", Summary: "signing approval pending", Detail: "waiting for 1Password approval"},
+		ResumeRequired: true,
+		ResumeHint:     "vigilante resume --repo owner/repo --issue 1",
+	}
+	resumedComment := "gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Vigilante Session Resumed",
+		Emoji:      "🧢",
+		Percent:    20,
+		ETAMinutes: 25,
+		Items: []string{
+			"Vigilante resumed this implementation session in the existing worktree `" + worktreePath + "`.",
+			"Branch: `vigilante/issue-1`.",
+			"Current stage: handing the issue off to the configured coding agent (`Codex`) to continue the existing implementation.",
+			"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
+		},
+		Tagline: "Make it simple, but significant.",
+	})
+	recoveredComment := ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Recovered",
+		Emoji:      "🫡",
+		Percent:    92,
+		ETAMinutes: 5,
+		Items: []string{
+			"The previous `git_signing` block was cleared for `vigilante/issue-1`.",
+			"Resume source: `comment`.",
+			"Next step: Vigilante resumed `issue_execution` successfully.",
+		},
+		Tagline: "Back on the wire.",
+	})
+
+	runner := &countingRunner{base: testutil.FakeRunner{
+		LookPaths: map[string]string{"codex": "/usr/bin/codex"},
+		Outputs: map[string]string{
+			"codex --version": "codex 1.0.0",
+			resumedComment:    "ok",
+			issuePromptCommand(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", "vigilante/issue-1"): "done",
+			"gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt":                                `[]`,
+			"gh issue comment --repo owner/repo 1 --body " + recoveredComment:                                                                   "ok",
+			"git rev-list --count origin/main..HEAD":                                                                                            "0\n",
+			"git status --porcelain":                                                                                                            " M README.md\n",
+		},
+	}}
+	app.env.Runner = runner
+
+	if err := app.resumeBlockedSession(context.Background(), &session, "comment"); err != nil {
+		t.Fatal(err)
+	}
+	runner.mu.Lock()
+	posted := runner.counts[resumedComment]
+	runner.mu.Unlock()
+	if posted != 1 {
+		t.Fatalf("expected exactly one resumed launch comment before the provider ran, got %d (counts: %#v)", posted, runner.counts)
+	}
+	if session.ContinuationSource != "blocked_resume" {
+		t.Fatalf("expected explicit resume to record the continuation source: %#v", session)
+	}
+	if session.Status != state.SessionStatusIncomplete || session.IncompleteReason != "uncommitted_changes" {
+		t.Fatalf("expected resumed session with only local changes to stay incomplete: %#v", session)
+	}
 }
 
 func TestScanOnceBlocksIssueWhenReusedRemoteBranchDiffAnalysisFails(t *testing.T) {
@@ -9859,8 +10055,12 @@ func sessionStartCommentCommand(repo string, issueNumber int, worktreePath strin
 			"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
 		}
 	}
+	stage := issuerunner.SessionStartStage
+	if session.ReusedRemoteBranch != "" {
+		stage = issuerunner.SessionResumedStage
+	}
 	return "gh issue comment --repo " + repo + " " + fmt.Sprintf("%d", issueNumber) + " --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
-		Stage:      "Vigilante Session Start",
+		Stage:      stage,
 		Emoji:      "🧢",
 		Percent:    20,
 		ETAMinutes: 25,

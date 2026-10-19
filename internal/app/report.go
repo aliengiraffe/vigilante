@@ -16,6 +16,7 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/backend"
 	"github.com/nicobistolfi/vigilante/internal/environment"
 	"github.com/nicobistolfi/vigilante/internal/provider"
+	issuerunner "github.com/nicobistolfi/vigilante/internal/runner"
 )
 
 // reportCSVHeaders defines the stable column order for the report CSV.
@@ -258,11 +259,13 @@ func listIssueCommentsForReport(ctx context.Context, runner environment.Runner, 
 	return all, nil
 }
 
-// findTimingMarkers scans comments for the first "Vigilante Session Start" and
-// the first subsequent "PR Opened" comment.
+// findTimingMarkers scans comments for the first session launch marker
+// ("Vigilante Session Start" or "Vigilante Session Resumed") and the first
+// subsequent "PR Opened" comment. Later resumed-session comments never replace
+// an earlier marker, so the original start time is preserved.
 func findTimingMarkers(comments []backend.WorkItemComment) (sessionStart *backend.WorkItemComment, prOpened *backend.WorkItemComment) {
 	for i := range comments {
-		if sessionStart == nil && strings.Contains(comments[i].Body, "Vigilante Session Start") {
+		if sessionStart == nil && isSessionLaunchComment(comments[i].Body) {
 			sessionStart = &comments[i]
 			continue
 		}
@@ -272,6 +275,10 @@ func findTimingMarkers(comments []backend.WorkItemComment) (sessionStart *backen
 		}
 	}
 	return sessionStart, prOpened
+}
+
+func isSessionLaunchComment(body string) bool {
+	return strings.Contains(body, issuerunner.SessionStartStage) || strings.Contains(body, issuerunner.SessionResumedStage)
 }
 
 // resolveCodingAgent determines the coding agent for an issue.

@@ -55,6 +55,41 @@ func TestFindTimingMarkers_BothPresent(t *testing.T) {
 	}
 }
 
+func TestFindTimingMarkers_ResumedAfterStartKeepsOriginalStart(t *testing.T) {
+	t0 := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	comments := []backend.WorkItemComment{
+		makeComment(1, "## 🧢 Vigilante Session Start\nWorking branch: `feat`", t0),
+		makeComment(2, "## ⚠️ Incomplete\nProgress saved", t0.Add(5*time.Minute)),
+		makeComment(3, "## 🧢 Vigilante Session Resumed\nWorking branch: `feat`", t0.Add(6*time.Minute)),
+		makeComment(4, "## PR Opened\nhttps://github.com/owner/repo/pull/42", t0.Add(12*time.Minute)),
+	}
+
+	start, pr := findTimingMarkers(comments)
+	if start == nil || start.ID != 1 {
+		t.Fatalf("expected original session start comment to remain the marker, got %#v", start)
+	}
+	if pr == nil || pr.ID != 4 {
+		t.Fatalf("expected PR opened comment ID 4, got %#v", pr)
+	}
+}
+
+func TestFindTimingMarkers_ResumedOnlyHistory(t *testing.T) {
+	t0 := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	comments := []backend.WorkItemComment{
+		makeComment(1, "Some discussion", t0),
+		makeComment(2, "## 🧢 Vigilante Session Resumed\nWorking branch: `feat`", t0.Add(2*time.Minute)),
+		makeComment(3, "## PR Opened\nhttps://github.com/owner/repo/pull/42", t0.Add(9*time.Minute)),
+	}
+
+	start, pr := findTimingMarkers(comments)
+	if start == nil || start.ID != 2 {
+		t.Fatalf("expected resumed comment to serve as the session marker, got %#v", start)
+	}
+	if pr == nil || pr.ID != 3 {
+		t.Fatalf("expected PR opened comment ID 3, got %#v", pr)
+	}
+}
+
 func TestFindTimingMarkers_MissingSessionStart(t *testing.T) {
 	t0 := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
 	comments := []backend.WorkItemComment{
