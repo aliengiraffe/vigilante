@@ -96,3 +96,22 @@ func TestCommentPollingCoalescesConcurrentReaders(t *testing.T) {
 		t.Fatal(base.calls)
 	}
 }
+
+func TestCommentPollingSuppressesVerboseLoggingForRunnerVariants(t *testing.T) {
+	for name, wrap := range map[string]func(environment.LoggingRunner) environment.Runner{
+		"value":   func(r environment.LoggingRunner) environment.Runner { return r },
+		"pointer": func(r environment.LoggingRunner) environment.Runner { return &r },
+	} {
+		t.Run(name, func(t *testing.T) {
+			base := &commentPageRunner{calls: map[string]int{}}
+			var records []environment.AccessLogEntry
+			runner := wrap(environment.LoggingRunner{Base: base, AccessLog: func(e environment.AccessLogEntry) { records = append(records, e) }})
+			if _, err := ListPullRequestCommentsForPolling(context.Background(), runner, "o/r", 8, "cleanup", nil); err != nil {
+				t.Fatal(err)
+			}
+			if len(records) != 1 {
+				t.Fatalf("access records=%d", len(records))
+			}
+		})
+	}
+}

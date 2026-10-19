@@ -26,6 +26,9 @@ type pollingFixtureRunner struct {
 	comments    string
 	closedIssue bool
 	closedPR    bool
+	gone        bool   // issue reads return HTTP 410
+	prGone      bool   // pull request reads return HTTP 410
+	failPath    string // comment endpoints containing this text fail
 }
 
 func (r *pollingFixtureRunner) LookPath(s string) (string, error) { return s, nil }
@@ -40,10 +43,16 @@ func (r *pollingFixtureRunner) Run(_ context.Context, _ string, name string, arg
 			return fmt.Sprintf(`{"resources":{"core":{"limit":5000,"remaining":5000,"reset":%d}}}`, r.now().Add(time.Hour).Unix()), nil
 		}
 		if strings.Contains(endpoint, "/comments") {
+			if r.failPath != "" && strings.Contains(endpoint, r.failPath) {
+				return "", fmt.Errorf("temporary failure")
+			}
 			if r.comments != "" {
 				return r.comments, nil
 			}
 			return "[]", nil
+		}
+		if r.gone {
+			return "", fmt.Errorf("HTTP 410: Gone")
 		}
 		issueState := "open"
 		if r.closedIssue {
@@ -52,6 +61,9 @@ func (r *pollingFixtureRunner) Run(_ context.Context, _ string, name string, arg
 		return fmt.Sprintf(`{"state":%q,"labels":[],"assignees":[]}`, issueState), nil
 	}
 	if len(args) > 1 && args[0] == "pr" && args[1] == "view" {
+		if r.prGone {
+			return "", fmt.Errorf("HTTP 410: Gone")
+		}
 		prState := "OPEN"
 		if r.closedPR {
 			prState = "MERGED"
@@ -276,5 +288,96 @@ func TestInactiveSessionProcessesNewCommandWhenDueWithoutReplay(t *testing.T) {
 	}
 	if writes != 1 {
 		t.Fatalf("command replayed: %d replies", writes)
+	}
+}
+
+func TestCommentPollingNonGitHubBackendsAreAlwaysDueAndNeverRescheduled(t *testing.T) {
+	now := time.Date(2026, 10, 16, 11, 0, 0, 0, time.UTC)
+	app, _ := pollingTestApp(t, &now)
+	sessions := []state.Session{
+		{Repo: "owner/repo", IssueNumber: 1, IssueBackend: "linear", Status: state.SessionStatusFailed},
+		{Repo: "owner/repo", IssueNumber: 2, Status: state.SessionStatusFailed},
+	}
+	ctx, finish := app.prepareCommentPolling(context.Background(), sessions)
+	if !commentPollDue(ctx, sessions[0]) {
+		t.Fatal("non-GitHub session must not be gated by the GitHub schedule")
+	}
+	finish(sessions)
+	for _, s := range sessions {
+		if s.IssueBackend == "linear" && s.NextCommentPollAt != "" {
+			t.Fatal("non-GitHub session was scheduled")
+		}
+	}
+	// reconcile must leave them alone and make no GitHub calls.
+	sessions[0].PullRequestNumber, sessions[0].PullRequestState = 3, "OPEN"
+	app, base := pollingTestApp(t, &now)
+	app.reconcileFailedPolling(context.Background(), sessions[:1], make(scanIssueDetailsCache))
+	if len(base.calls) != 0 || sessions[0].PullRequestState != "OPEN" {
+		t.Fatal(base.calls, sessions[0])
+	}
+}
+
+func TestReconcileFailedPollingClosesUnavailableIssuesAndPullRequests(t *testing.T) {
+	now := time.Now()
+	app, base := pollingTestApp(t, &now)
+	base.gone = true
+	sessions := []state.Session{{Repo: "owner/repo", IssueNumber: 1, Status: state.SessionStatusFailed, WorktreePath: "keep-this"}}
+	app.reconcileFailedPolling(context.Background(), sessions, make(scanIssueDetailsCache))
+	if sessions[0].Status != state.SessionStatusClosed || sessions[0].WorktreePath != "keep-this" {
+		t.Fatal(sessions)
+	}
+
+	base.gone, base.prGone = false, true
+	sessions = []state.Session{{Repo: "owner/repo", IssueNumber: 1, Status: state.SessionStatusFailed, PullRequestNumber: 2, PullRequestState: "OPEN"}}
+	app.reconcileFailedPolling(context.Background(), sessions, make(scanIssueDetailsCache))
+	if sessions[0].PullRequestState != "CLOSED" || sessions[0].Status != state.SessionStatusFailed {
+		t.Fatal(sessions)
+	}
+}
+
+func TestCollectSessionCommentsDegradesWhenPullRequestSurfacesFail(t *testing.T) {
+	now := time.Date(2026, 10, 16, 11, 0, 0, 0, time.UTC)
+	for _, failPath := range []string{"pulls/2/comments", "issues/2/comments"} {
+		t.Run(failPath, func(t *testing.T) {
+			app, base := pollingTestApp(t, &now)
+			base.failPath = failPath
+			session := state.Session{Repo: "owner/repo", IssueNumber: 1, Status: state.SessionStatusBlocked, PullRequestNumber: 2, PullRequestState: "OPEN"}
+			sessions := []state.Session{session}
+			ctx, finish := app.prepareCommentPolling(context.Background(), sessions)
+			if _, err := app.collectSessionComments(ctx, session, "iteration"); err != nil {
+				t.Fatalf("partial PR failure should keep issue comments: %v", err)
+			}
+			finish(sessions)
+			if sessions[0].NextCommentPollAt != "" {
+				t.Fatal("incomplete poll must stay due for the next scan")
+			}
+		})
+	}
+}
+
+func TestCommentLookupFailuresAreRecordedAndStaySchedulable(t *testing.T) {
+	now := time.Date(2026, 10, 16, 11, 0, 0, 0, time.UTC)
+	process := map[string]func(*App, context.Context, []state.Session) ([]state.Session, error){
+		"cleanup":  (*App).processGitHubCleanupRequests,
+		"recreate": (*App).processGitHubRecreateRequests,
+		"resume": func(a *App, ctx context.Context, s []state.Session) ([]state.Session, error) {
+			return a.processGitHubResumeRequests(ctx, s, make(scanIssueDetailsCache))
+		},
+	}
+	for name, run := range process {
+		t.Run(name, func(t *testing.T) {
+			app, base := pollingTestApp(t, &now)
+			base.failPath = "issues/1/comments"
+			sessions := []state.Session{{Repo: "owner/repo", IssueNumber: 1, Status: state.SessionStatusFailed}}
+			ctx, finish := app.prepareCommentPolling(context.Background(), sessions)
+			out, err := run(app, ctx, sessions)
+			if err != nil {
+				t.Fatal(err)
+			}
+			finish(out)
+			if out[0].NextCommentPollAt != "" {
+				t.Fatalf("failed lookup was marked complete: %+v", out[0])
+			}
+		})
 	}
 }

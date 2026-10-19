@@ -249,3 +249,97 @@ func TestGitHubBudgetHeadersUpdateCoreResetAndDateRetry(t *testing.T) {
 		t.Fatal("missing clock")
 	}
 }
+
+func TestGitHubBudgetLedgerIOFailuresFailClosed(t *testing.T) {
+	now := time.Now()
+	t.Run("unreadable ledger", func(t *testing.T) {
+		base := &budgetFake{remaining: 5000, reset: now.Add(time.Hour)}
+		r := &GitHubBudgetRunner{Base: base, Path: t.TempDir(), Clock: func() time.Time { return now }}
+		if _, err := r.Run(budgetContext(), "", "gh", "api", "test"); err == nil {
+			t.Fatal("unreadable ledger accepted")
+		}
+		if base.requests+base.probes != 0 {
+			t.Fatal("dispatched before loading ledger")
+		}
+	})
+	t.Run("unwritable directory", func(t *testing.T) {
+		blocker := filepath.Join(t.TempDir(), "file")
+		if err := os.WriteFile(blocker, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		base := &budgetFake{remaining: 5000, reset: now.Add(time.Hour)}
+		r := &GitHubBudgetRunner{Base: base, Path: filepath.Join(blocker, "budget.json"), Clock: func() time.Time { return now }}
+		if _, err := r.Run(budgetContext(), "", "gh", "api", "test"); err == nil || errors.Is(err, ErrGitHubDeferred) {
+			t.Fatal(err)
+		}
+		if base.requests != 0 {
+			t.Fatal("dispatched without persisting the reservation")
+		}
+	})
+	t.Run("read-only directory", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Chmod(dir, 0500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0700) })
+		if f, err := os.CreateTemp(dir, "probe"); err == nil {
+			f.Close()
+			t.Skip("directory permissions are not enforced")
+		}
+		r := &GitHubBudgetRunner{Base: &budgetFake{}, Path: filepath.Join(dir, "budget.json")}
+		if err := r.save(); err == nil {
+			t.Fatal("saved into a read-only directory")
+		}
+	})
+	t.Run("pause cannot be persisted", func(t *testing.T) {
+		dir := filepath.Join(t.TempDir(), "ledger")
+		base := &budgetFake{remaining: 5000, reset: now.Add(time.Hour), failure: "API rate limit exceeded"}
+		r := &GitHubBudgetRunner{Base: &breakLedgerRunner{budgetFake: base, dir: dir}, Path: filepath.Join(dir, "budget.json"), Clock: func() time.Time { return now }}
+		_, err := r.Run(budgetContext(), "", "gh", "api", "test")
+		if !errors.Is(err, ErrGitHubDeferred) || strings.Count(err.Error(), "\n") < 2 {
+			t.Fatalf("pause save failure not reported: %v", err)
+		}
+	})
+}
+
+// breakLedgerRunner replaces the ledger directory with a file after dispatch so
+// the follow-up pause write fails.
+type breakLedgerRunner struct {
+	*budgetFake
+	dir string
+}
+
+func (r *breakLedgerRunner) Run(ctx context.Context, dir, name string, args ...string) (string, error) {
+	output, err := r.budgetFake.Run(ctx, dir, name, args...)
+	if len(args) > 1 && args[1] != "/rate_limit" {
+		_ = os.RemoveAll(r.dir)
+		_ = os.WriteFile(r.dir, nil, 0600)
+	}
+	return output, err
+}
+
+func TestGitHubBudgetLogsProbeAndHandlesMalformedResponses(t *testing.T) {
+	now := time.Now()
+	base := &budgetFake{remaining: 5000, reset: now.Add(time.Hour)}
+	var logged []AccessLogEntry
+	r := &GitHubBudgetRunner{Base: base, Clock: func() time.Time { return now }, AccessLog: func(e AccessLogEntry) { logged = append(logged, e) }}
+	if _, err := r.Run(budgetContext(), "", "gh", "api", "test"); err != nil {
+		t.Fatal(err)
+	}
+	if len(logged) != 1 || logged[0].Tool != "gh" {
+		t.Fatalf("implicit quota probe was not access logged: %+v", logged)
+	}
+	// A body shorter than its Content-Length must fall back to the raw output.
+	truncated := "HTTP/1.1 200 OK\r\nContent-Length: 50\r\n\r\n[]"
+	if got := r.readHeaders(truncated); got != truncated {
+		t.Fatalf("got %q", got)
+	}
+	if got := r.readHeaders("not an http response"); got != "not an http response" {
+		t.Fatalf("got %q", got)
+	}
+	// A corrupt cached snapshot is returned verbatim instead of being rewritten.
+	r.snapshotJSON = "broken"
+	if got := r.snapshot(); got != "broken" {
+		t.Fatalf("got %q", got)
+	}
+}
