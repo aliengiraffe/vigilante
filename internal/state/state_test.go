@@ -420,3 +420,23 @@ func TestCodexSessionModelsSurviveRestart(t *testing.T) {
 		}
 	}
 }
+
+func TestParseRetentionSupportsDaysAndFallsBack(t *testing.T) {
+	fallback := DefaultFailedSessionPollRetention
+	cases := map[string]time.Duration{
+		"":     fallback,
+		"14d":  14 * 24 * time.Hour,
+		"1.5d": 36 * time.Hour,
+		"336h": 336 * time.Hour,
+		"30m":  30 * time.Minute,
+		"0":    fallback,
+		"-5d":  fallback,
+		"junk": fallback,
+		" 2D ": 48 * time.Hour,
+	}
+	for raw, want := range cases {
+		if got := ParseRetention(raw, fallback); got != want {
+			t.Fatalf("ParseRetention(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}

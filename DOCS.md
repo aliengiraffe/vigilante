@@ -125,67 +125,92 @@ to post delay comments using an exhausted quota.
 
 ### Background GitHub request budget
 
-The daemon additionally reserves at most **2,000 background request units per
-one-hour window**, starting with its first budgeted request. This leaves room in
-a standard 5,000-request allowance for productive work and other clients. The
-ledger and throttle deadline are saved to `github-budget.json` before dispatch,
-so a daemon restart does not replenish the allowance or bypass a throttle.
+GitHub meters REST (`resources.core`) and GraphQL (`resources.graphql`)
+separately, and the daemon keeps one reservation ledger per API, each capped at
+**2,000 units per one-hour window** by default. Explicit `gh api` REST calls
+reserve one REST unit. GraphQL-backed CLI subcommands (`gh issue list`,
+`gh pr view`, `gh pr list`, `gh pr edit`, `gh pr merge`, …) reserve one GraphQL
+unit and no REST units. Opaque subcommands whose transport is unknown reserve one
+of each. A conditional request answered `304 Not Modified` is refunded because
+GitHub does not count it. Both ledgers and the throttle deadline are saved to
+`github-budget.json` before dispatch, so a daemon restart does not replenish the
+allowance or bypass a throttle. Live probes keep 100 requests of each API in
+reserve for interactive and provider work.
 
-Each explicit `gh api` page costs one unit. Other `gh` commands reserve ten units
-because the CLI can make multiple requests internally. These are conservative
-reservations, **not exact HTTP counts**; opaque CLI commands and provider child
-processes cannot be fully accounted for at this boundary. Interactive CLI commands
-and provider sessions are outside the background allowance. Live quota probes
-observe their consumption, and API response headers update remaining core quota.
-Background GitHub commands are serialized through the guard, including concurrent
-PR maintenance. This guard coordinates the daemon instance; operators should run
-one daemon per state directory.
+New-issue intake (`gh issue list` per watch target and the assignee lookup) is
+marked as an intake operation: it is accounted but never deferred by the local
+ledgers, so a large backlog of historical sessions cannot stall dispatch of new
+work. The live reserve still applies to intake.
 
-Comment snapshots (including empty results and failures) are shared across
-cleanup, recreate, resume, iteration, and maintenance readers in a scan. Issue,
-PR conversation, and PR review comments are paged explicitly, so each page is
-budgeted and logged; commands beyond the first page remain visible. Failed,
-successful, and other inactive sessions are due every **30 minutes** by default;
-running, resuming, and blocked sessions are due every minute. These intervals are
-minimum delays after a completed poll. Actual command-detection latency includes
-the scan duration and daemon delay, and grows when budget or GitHub quota defers
-work. Oldest due sessions are serviced first; due times persist across restart.
-Failed sessions periodically refresh issue/PR state: closed or unavailable issues
-stop monitoring, and closed/merged/unavailable PRs stop PR polling while their open
-issue can still receive recreate commands. History and local worktrees are retained.
+### Repository comment sweep
+
+Command detection (`@vigilanteai cleanup|recreate|resume|iterate`) no longer
+polls each tracked issue. Every scan performs one repository-wide sweep per
+watched GitHub repository that has sessions eligible for polling: one request to
+`repos/{repo}/issues/comments?since=…` (issue and pull request conversation
+comments) and one to `repos/{repo}/pulls/comments?since=…` (review comments),
+each paged only while a page is full. Comments are routed to tracked sessions by
+issue or pull request number; comments on untracked issues are ignored. The
+`since` cursor and the ETags of both surfaces are persisted on the watch target
+(`comment_sweep` in `watchlist.json`). `since` advances only when comments
+arrive, so the request URL stays stable and unchanged repositories answer `304`.
+Steady-state cost is therefore two unmetered requests per repository per scan.
+When a sweep fails, that repository's due sessions fall back to the scheduled,
+budgeted per-issue polling path for that scan.
+
+Failed, successful, and other inactive sessions remain due for issue-state
+refreshes every **30 minutes** by default; running, resuming, and blocked
+sessions every minute. A session with new comments from the sweep is processed
+in the same scan regardless of its timer. Failed sessions retire from background
+polling after `github_failed_session_poll_retention` (default **14 days**,
+measured from when the session ended) or as soon as their pull request is closed
+or merged; they stay in `sessions.json` and in `vigilante list`, and can still be
+recreated from the CLI. Retained failed sessions refresh pull request state once
+per retention window. Issue-detail lookups that fail repeatedly without an HTTP
+status (network errors, `gh` exiting without a response) back off exponentially
+after five consecutive failures instead of retrying every scan.
 
 Optional `config.json` settings (restart the daemon after changing them):
 
 ```json
 {
   "github_background_budget": 2000,
-  "github_inactive_poll_interval": "30m"
+  "github_graphql_background_budget": 2000,
+  "github_inactive_poll_interval": "30m",
+  "github_failed_session_poll_retention": "14d"
 }
 ```
 
-`github_background_budget` accepts 1–4,000 units per window; absent, zero, negative,
-or larger values use 2,000. `github_inactive_poll_interval` accepts durations of
-at least five minutes; absent or invalid values use 30 minutes. Existing config
-and session files remain valid; no manual session cleanup is required. Budget
-settings too small for a command's reservation defer that command until the
-configuration is raised. Longer polling intervals reduce demand but do not replace
-the request guard.
+The budgets accept 1–4,000 units per window; absent, zero, negative, or larger
+values use 2,000. `github_inactive_poll_interval` accepts durations of at least
+five minutes; absent or invalid values use 30 minutes.
+`github_failed_session_poll_retention` accepts Go durations or a `d` suffix for
+days. Existing config, watch list, and session files remain valid; the first
+sweep after an upgrade starts from `now - github_inactive_poll_interval` so
+history is not replayed, and no manual session cleanup is required.
 
-Use `vigilante logs --access` to see actual dispatched polling pages and their
-execution context, duration, and outcome. Scan summaries report logical fetches,
-cache hits, failures, deferred sessions, reserved units, window end, and GitHub
-quota/reset state. Cached snapshots make no network call. Guard rejections can
-also appear as failed command attempts; their error contains `GitHub request
-deferred by quota budget`, so exclude these when counting dispatched calls. A
-logical comment fetch may span several access-log page records. No response
-comment bodies or authorization headers are added to access logs.
+Use `vigilante logs --access` to see dispatched requests with their execution
+context, duration, and outcome. Each scan logs one `comment sweep` line per
+repository (requests, 304 answers, comments, routed, new, untracked) and a
+`github background budget` line with both ledgers and the live quota estimates.
+Guard rejections appear as failed command attempts whose error contains `GitHub
+request deferred by quota budget`; exclude these when counting dispatched calls.
 
-A deterministic simulated-hour regression test uses 116 historical sessions,
-93 open PRs, and six watched repositories. It performs 302 comment-page reads
-(one complete shared sweep), 578 background commands in total, and reserves
-2,000 units; subsequent work is deferred by the budget. These synthetic counts
-are not a production HTTP benchmark. The incident preceding this change recorded
-4,888 successful comment fetch operations in approximately 36 minutes.
+A deterministic simulated-hour regression test uses 118 recent failed sessions,
+91 open PRs, and seven watched repositories at a one-minute scan interval. It
+asserts that `gh issue list` runs for every target in every one of the 60 scans,
+that metered REST requests stay under 500 for the hour, that at most two sweep
+requests per repository per scan are made and unchanged repositories answer
+`304`, and that per-issue comment endpoints are never called. These synthetic
+counts are not a production HTTP benchmark. The incident preceding this change
+recorded about 4,900 comment polls per hour, the whole REST allowance.
+
+### Build identification
+
+`vigilante --version --verbose` prints the version followed by `commit: <sha>`.
+The `daemon run start` log line carries `version=` and `commit=`, and
+`vigilante status` shows the configured daemon binary's version and commit, so a
+stale installed binary is visible without inspecting the file system.
 
 ## Telemetry
 

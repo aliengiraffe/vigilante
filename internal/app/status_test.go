@@ -299,7 +299,7 @@ func TestStatusCommandOutputPreservesServiceState(t *testing.T) {
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
 			"systemctl --user show --property=LoadState,ActiveState vigilante.service": "LoadState=loaded\nActiveState=active\n",
-			"/home/test/.local/bin/vigilante --version":                                "vigilante 1.2.3\n",
+			"/home/test/.local/bin/vigilante --version --verbose":                      "vigilante 1.2.3\ncommit: abc123def456\n",
 		},
 		Errors: map[string]error{
 			"gh api /rate_limit": nil,
@@ -317,6 +317,7 @@ func TestStatusCommandOutputPreservesServiceState(t *testing.T) {
 		"installed: yes",
 		"running: yes",
 		"daemon version: 1.2.3",
+		"daemon commit: abc123def456",
 	} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("expected output to contain %q, got:\n%s", want, stdout.String())
@@ -353,7 +354,7 @@ func TestStatusCommandOutputShowsConfiguredDaemonVersionWhenStopped(t *testing.T
 	app.env.Runner = testutil.FakeRunner{
 		Outputs: map[string]string{
 			"systemctl --user show --property=LoadState,ActiveState vigilante.service": "LoadState=loaded\nActiveState=inactive\n",
-			"/home/test/.local/bin/vigilante --version":                                "vigilante 1.2.3\n",
+			"/home/test/.local/bin/vigilante --version --verbose":                      "vigilante 1.2.3\ncommit: abc123def456\n",
 		},
 		Errors: map[string]error{
 			"gh api /rate_limit": nil,

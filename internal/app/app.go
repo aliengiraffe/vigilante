@@ -142,6 +142,8 @@ type App struct {
 	githubRateLimitMu         sync.Mutex
 	githubRateLimitState      githubRateLimitState
 	githubBudget              *environment.GitHubBudgetRunner
+	commentSweepMu            sync.Mutex
+	commentSweepSeen          map[string]map[int64]time.Time
 	proxyExec                 func(context.Context, io.Reader, io.Writer, io.Writer, string, ...string) (int, error)
 	sandboxManager            *sandbox.Manager
 }
@@ -203,7 +205,7 @@ func New() *App {
 		logger = logging.Discard()
 	}
 	config, _ := store.LoadServiceConfig()
-	budget := &environment.GitHubBudgetRunner{Base: environment.ExecRunner{}, Path: filepath.Join(store.Root(), "github-budget.json"), Limit: config.GitHubBackgroundBudget, AccessLog: store.AppendAccessLogEntry}
+	budget := &environment.GitHubBudgetRunner{Base: environment.ExecRunner{}, Path: filepath.Join(store.Root(), "github-budget.json"), Limit: config.GitHubBackgroundBudget, GraphQLLimit: config.GitHubGraphQLBackgroundBudget, AccessLog: store.AppendAccessLogEntry}
 	runner := environment.LoggingRunner{
 		Base:             budget,
 		CaptureCommand:   telemetry.CaptureInternalCommand,
@@ -696,6 +698,9 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "version", "--version":
 		fmt.Fprintln(a.stdout, a.version)
+		if len(args) > 1 && (args[1] == "--verbose" || args[1] == "-v") {
+			fmt.Fprintf(a.stdout, "commit: %s\n", build.CommitHash())
+		}
 		return nil
 	case "commit":
 		return a.runCommitCommand(ctx, args[1:])
@@ -1696,6 +1701,7 @@ func (a *App) statusServiceSection(ctx context.Context) (serviceStatusInfo, erro
 		Installed:     status.Installed,
 		Running:       status.Running,
 		DaemonVersion: status.DaemonVersion,
+		DaemonCommit:  status.DaemonCommit,
 	}, nil
 }
 
@@ -2042,7 +2048,7 @@ func (a *App) DaemonRun(ctx context.Context, interval time.Duration, once bool) 
 		return errors.New("interval must be positive")
 	}
 	startedAt := time.Now().UTC()
-	a.logger.Info("daemon run start", "once", once, "interval", interval)
+	a.logger.Info("daemon run start", "once", once, "interval", interval, "version", a.version, "commit", build.CommitHash())
 	telemetry.CaptureWorkflowEvent("daemon_execution_started", map[string]any{
 		"feature_area":     "daemon",
 		"invocation":       "daemon",
@@ -2153,6 +2159,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			finishPolling(sessions)
 			scanErr = errors.Join(scanErr, a.state.SaveSessions(sessions))
 		}()
+		a.runCommentSweeps(ctx, targets, sessions)
 		a.reconcileFailedPolling(ctx, sessions, issueDetailsCache)
 		sessions, err = a.processGitHubCleanupRequests(ctx, sessions)
 		if err != nil {
@@ -2221,14 +2228,15 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			a.logger.Info("scan repo start", "repo", target.Repo, "path", target.Path, "max_parallel", target.MaxParallel)
 			issueTracker := a.issueTrackerForTarget(*target)
 			projectRef := a.issueProjectForTarget(*target)
-			resolvedAssignee, err := a.resolveWatchTargetAssignee(targetCtx, target, issueTracker, resolvedAssignees)
+			intakeCtx := environment.WithAccessLogContext(targetCtx, environment.AccessLogContext{Operation: environment.OperationIntake})
+			resolvedAssignee, err := a.resolveWatchTargetAssignee(intakeCtx, target, issueTracker, resolvedAssignees)
 			if err != nil {
 				target.LastScanAt = a.clock().Format(time.RFC3339)
 				a.logger.Error("scan repo issues failed", "repo", target.Repo, "err", err)
 				fmt.Fprintf(a.stdout, "repo: %s scan failed: %s\n", target.Repo, summarizeText(err.Error()))
 				continue
 			}
-			issues, err := issueTracker.ListOpenWorkItems(targetCtx, projectRef, resolvedAssignee)
+			issues, err := issueTracker.ListOpenWorkItems(intakeCtx, projectRef, resolvedAssignee)
 			target.LastScanAt = a.clock().Format(time.RFC3339)
 			if err != nil {
 				a.logger.Error("scan repo issues failed", "repo", target.Repo, "err", err)
@@ -2738,8 +2746,11 @@ func (a *App) cleanupClosedIssueSessions(ctx context.Context, sessions []state.S
 			continue
 		}
 
-		issue, err := a.loadIssueDetailsForScan(sessionCtx, issueCache, session.Repo, session.IssueNumber)
+		issue, err := a.loadSessionIssueDetails(sessionCtx, issueCache, session)
 		if err != nil {
+			if errors.Is(err, errIssueLookupBackoff) {
+				continue
+			}
 			if ghcli.IsIssueUnavailableError(err) {
 				a.stopMonitoringUnavailableIssueSession(sessionCtx, session, "issue_deleted", err)
 				continue
@@ -3610,6 +3621,11 @@ func (a *App) collectSessionComments(ctx context.Context, session state.Session,
 		}
 	}()
 
+	if comments, covered := sweptSessionComments(ctx, session); covered {
+		// The repository sweep already read every surface for this scan.
+		return comments, nil
+	}
+
 	issueTracker := a.issueTrackerForSession(session)
 	project := a.issueProjectForSession(session)
 
@@ -3866,8 +3882,11 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 			continue
 		}
 
-		details, err := a.loadIssueDetailsForScan(ctx, issueCache, session.Repo, session.IssueNumber)
+		details, err := a.loadSessionIssueDetails(ctx, issueCache, session)
 		if err != nil {
+			if errors.Is(err, errIssueLookupBackoff) {
+				continue
+			}
 			if ghcli.IsIssueUnavailableError(err) {
 				a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
 				continue
@@ -5624,20 +5643,6 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 			continue
 		}
 
-		details, err := a.loadIssueDetailsForScan(ctx, issueCache, session.Repo, session.IssueNumber)
-		if err != nil {
-			if ghcli.IsIssueUnavailableError(err) {
-				a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
-				needsSave = true
-				continue
-			}
-			a.logger.Error("iteration issue details failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
-			session.LastError = err.Error()
-			session.UpdatedAt = a.clock().Format(time.RFC3339)
-			needsSave = true
-			continue
-		}
-
 		comments, err := a.collectSessionComments(ctx, *session, "iteration")
 		if err != nil {
 			a.logger.Error("iteration comment lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
@@ -5649,6 +5654,25 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 
 		comment := ghcli.FindIterationComment(comments, session.LastIterationCommentID, session.LastIterationCommentAt)
 		if comment == nil {
+			continue
+		}
+
+		// Issue details are only needed once a candidate command exists; reading
+		// them for every due session was a REST request per session per sweep.
+		details, err := a.loadSessionIssueDetails(ctx, issueCache, session)
+		if err != nil {
+			if errors.Is(err, errIssueLookupBackoff) {
+				continue
+			}
+			if ghcli.IsIssueUnavailableError(err) {
+				a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
+				needsSave = true
+				continue
+			}
+			a.logger.Error("iteration issue details failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
+			session.LastError = err.Error()
+			session.UpdatedAt = a.clock().Format(time.RFC3339)
+			needsSave = true
 			continue
 		}
 

@@ -19,32 +19,91 @@ import (
 // ErrGitHubDeferred means work must wait for the local budget or GitHub reset.
 var ErrGitHubDeferred = errors.New("GitHub request deferred by quota budget")
 
-// GitHubBudgetRunner serializes background GitHub commands through a shared,
-// restart-safe hourly allowance. Opaque gh commands reserve ten request units;
-// explicit API calls reserve one. The quota probe itself is primary-quota free.
-// Child provider processes are outside this runner; live probes account for
-// their consumption and that of other clients.
+// DefaultGitHubBudgetLimit is the hourly reservation ceiling for each ledger.
+const DefaultGitHubBudgetLimit = 2000
+
+// MaxGitHubBudgetLimit bounds operator configuration for each ledger.
+const MaxGitHubBudgetLimit = 4000
+
+// githubBudgetReserve is the live quota kept free for interactive and provider work.
+const githubBudgetReserve = 100
+
+// GitHubBudgetRunner serializes background GitHub commands through shared,
+// restart-safe hourly allowances. GitHub meters REST (`core`) and GraphQL
+// separately, so the runner keeps one ledger per API: explicit `gh api` REST
+// calls reserve one REST unit, GraphQL-backed CLI subcommands such as
+// `gh issue list` and `gh pr view` reserve one GraphQL unit and no REST units,
+// and opaque subcommands whose transport is unknown reserve one of each.
+// A `304 Not Modified` answer refunds its REST reservation because GitHub does
+// not count it. Commands marked OperationIntake are charged but never deferred
+// by the local ledgers, so a large session backlog cannot starve new-issue
+// discovery; the live-quota reserve still applies to them. Child provider
+// processes are outside this runner; live probes account for their consumption.
 type GitHubBudgetRunner struct {
-	Base         Runner
-	Path         string
-	Limit        int
-	Clock        func() time.Time
-	AccessLog    func(AccessLogEntry)
-	mu           sync.Mutex
-	loaded       bool
-	state        githubBudgetState
-	remaining    int
-	reset        time.Time
-	checked      time.Time
-	snapshotJSON string
-	probeErr     error
-	retryAt      time.Time
+	Base             Runner
+	Path             string
+	Limit            int
+	GraphQLLimit     int
+	Clock            func() time.Time
+	AccessLog        func(AccessLogEntry)
+	mu               sync.Mutex
+	loaded           bool
+	state            githubBudgetState
+	remaining        int
+	graphqlRemaining int
+	graphqlKnown     bool
+	reset            time.Time
+	checked          time.Time
+	snapshotJSON     string
+	probeErr         error
+	retryAt          time.Time
+	lastStatus       int
+	lastETag         string
+	headersRemaining bool
 }
 
 type githubBudgetState struct {
-	Window     time.Time `json:"window"`
-	Used       int       `json:"used"`
-	PauseUntil time.Time `json:"pause_until"`
+	Window      time.Time `json:"window"`
+	Used        int       `json:"used"`
+	GraphQLUsed int       `json:"graphql_used,omitempty"`
+	PauseUntil  time.Time `json:"pause_until"`
+}
+
+// GitHubCommandCost is the reservation a background gh command requires.
+type GitHubCommandCost struct {
+	REST    int
+	GraphQL int
+}
+
+// graphQLSubcommands are gh CLI commands implemented on the GraphQL API. They
+// consume `resources.graphql`, never `resources.core`.
+var graphQLSubcommands = map[string]bool{
+	"issue list": true, "issue view": true, "issue edit": true, "issue status": true, "issue close": true, "issue reopen": true,
+	"pr list": true, "pr view": true, "pr edit": true, "pr status": true, "pr checks": true, "pr merge": true, "pr close": true, "pr reopen": true, "pr ready": true,
+	"repo view": true, "search issues": true, "search prs": true, "search repos": true, "search commits": true, "search code": true,
+}
+
+// ClassifyGitHubCommand returns the reservation for a gh command line.
+func ClassifyGitHubCommand(args []string) GitHubCommandCost {
+	if len(args) == 0 {
+		return GitHubCommandCost{REST: 1, GraphQL: 1}
+	}
+	if args[0] == "api" {
+		for _, a := range args[1:] {
+			if strings.HasPrefix(a, "-") {
+				continue
+			}
+			if strings.HasPrefix(strings.TrimPrefix(a, "/"), "graphql") {
+				return GitHubCommandCost{GraphQL: 1}
+			}
+			break
+		}
+		return GitHubCommandCost{REST: 1}
+	}
+	if len(args) > 1 && graphQLSubcommands[args[0]+" "+args[1]] {
+		return GitHubCommandCost{GraphQL: 1}
+	}
+	return GitHubCommandCost{REST: 1, GraphQL: 1}
 }
 
 func (r *GitHubBudgetRunner) now() time.Time {
@@ -57,6 +116,18 @@ func (r *GitHubBudgetRunner) now() time.Time {
 func backgroundGitHub(ctx context.Context, name string) bool {
 	meta, _ := ctx.Value(accessLogContextKey{}).(AccessLogContext)
 	return filepath.Base(name) == "gh" && (meta.ExecutionContext == "scan" || meta.ExecutionContext == "maintenance")
+}
+
+func intakeOperation(ctx context.Context) bool {
+	meta, _ := ctx.Value(accessLogContextKey{}).(AccessLogContext)
+	return meta.Operation == OperationIntake
+}
+
+func normalizeBudgetLimit(limit int) int {
+	if limit <= 0 || limit > MaxGitHubBudgetLimit {
+		return DefaultGitHubBudgetLimit
+	}
+	return limit
 }
 
 // Run executes a command after reserving background quota, when applicable.
@@ -110,14 +181,7 @@ func (r *GitHubBudgetRunner) run(ctx context.Context, dir, name string, args []s
 	if r.state.Window.IsZero() || now.Sub(r.state.Window) >= time.Hour {
 		r.state.Window = now
 		r.state.Used = 0
-	}
-	limit := r.Limit
-	if limit <= 0 || limit > 4000 {
-		limit = 2000
-	}
-	cost := 10
-	if len(args) > 0 && args[0] == "api" {
-		cost = 1
+		r.state.GraphQLUsed = 0
 	}
 	// Unbounded CLI pagination cannot be reserved safely. Background callers must
 	// issue pages separately so every page passes through this guard.
@@ -126,8 +190,12 @@ func (r *GitHubBudgetRunner) run(ctx context.Context, dir, name string, args []s
 			return "", fmt.Errorf("%w: use individually budgeted pages", ErrGitHubDeferred)
 		}
 	}
-	if r.state.Used+cost > limit {
-		return "", ErrGitHubDeferred
+	cost := ClassifyGitHubCommand(args)
+	intake := intakeOperation(ctx)
+	if !intake {
+		if r.state.Used+cost.REST > normalizeBudgetLimit(r.Limit) || r.state.GraphQLUsed+cost.GraphQL > normalizeBudgetLimit(r.GraphQLLimit) {
+			return "", ErrGitHubDeferred
+		}
 	}
 	if r.checked.IsZero() || now.Sub(r.checked) >= time.Minute {
 		started := r.now()
@@ -144,17 +212,45 @@ func (r *GitHubBudgetRunner) run(ctx context.Context, dir, name string, args []s
 	if r.probeErr != nil {
 		return "", fmt.Errorf("%w: quota probe failed", ErrGitHubDeferred)
 	}
-	if r.remaining-cost < 100 {
+	if cost.REST > 0 && r.remaining-cost.REST < githubBudgetReserve {
 		return "", ErrGitHubDeferred
 	}
-	r.state.Used += cost
-	r.remaining -= cost
+	if cost.GraphQL > 0 && r.graphqlKnown && r.graphqlRemaining-cost.GraphQL < githubBudgetReserve {
+		return "", ErrGitHubDeferred
+	}
+	r.state.Used += cost.REST
+	r.state.GraphQLUsed += cost.GraphQL
+	r.remaining -= cost.REST
+	if r.graphqlKnown {
+		r.graphqlRemaining -= cost.GraphQL
+	}
 	// Persist before dispatch: a crash must not refund already dispatched work.
 	if err := r.save(); err != nil {
 		return "", fmt.Errorf("save GitHub budget: %w", err)
 	}
 	r.retryAt = time.Time{}
+	r.lastStatus, r.lastETag, r.headersRemaining = 0, "", false
 	output, err := call()
+	if sink := ResponseHeadersFromContext(ctx); sink != nil {
+		sink.set(r.lastStatus, r.lastETag)
+	}
+	if r.lastStatus == http.StatusNotModified {
+		// `gh api` exits non-zero for any status above 299, including 304, so a
+		// conditional request that found nothing new looks like a failure to the
+		// shell. It is a success here, and GitHub does not count it: refund the
+		// REST reservation. Response headers already reflect the live quota, so
+		// the estimate is only adjusted when no quota header arrived.
+		err = nil
+		if cost.REST > 0 {
+			r.state.Used -= cost.REST
+			if !r.headersRemaining {
+				r.remaining += cost.REST
+			}
+			if saveErr := r.save(); saveErr != nil {
+				return output, fmt.Errorf("save GitHub budget: %w", saveErr)
+			}
+		}
+	}
 	if err != nil {
 		lower := strings.ToLower(output + " " + err.Error())
 		if strings.Contains(lower, "rate limit") || strings.Contains(lower, "abuse detection") || strings.Contains(lower, "http 429") {
@@ -177,7 +273,8 @@ func (r *GitHubBudgetRunner) run(ctx context.Context, dir, name string, args []s
 
 // readHeaders consumes response headers internally; callers and access logs see
 // only the ordinary gh body. Retry-After is honored even when it exceeds the
-// conservative one-hour secondary-limit fallback.
+// conservative one-hour secondary-limit fallback. The status code and ETag are
+// retained for the response header sink of the current call.
 func (r *GitHubBudgetRunner) readHeaders(output string) string {
 	response, err := http.ReadResponse(bufio.NewReader(strings.NewReader(output)), nil)
 	if err != nil {
@@ -188,9 +285,12 @@ func (r *GitHubBudgetRunner) readHeaders(output string) string {
 	if err != nil {
 		return output
 	}
+	r.lastStatus = response.StatusCode
+	r.lastETag = response.Header.Get("ETag")
 	if response.Header.Get("X-RateLimit-Resource") == "core" {
 		if remaining, err := strconv.Atoi(response.Header.Get("X-RateLimit-Remaining")); err == nil {
 			r.remaining = remaining
+			r.headersRemaining = true
 		}
 		if reset, err := strconv.ParseInt(response.Header.Get("X-RateLimit-Reset"), 10, 64); err == nil {
 			r.reset = time.Unix(reset, 0)
@@ -212,6 +312,10 @@ func (r *GitHubBudgetRunner) observeSnapshot(output string, now time.Time) error
 				Limit, Remaining int
 				Reset            int64
 			}
+			GraphQL struct {
+				Limit, Remaining int
+				Reset            int64
+			}
 		}
 	}
 	if err := json.Unmarshal([]byte(output), &v); err != nil || v.Resources.Core.Limit <= 0 {
@@ -219,6 +323,8 @@ func (r *GitHubBudgetRunner) observeSnapshot(output string, now time.Time) error
 	}
 	r.remaining = v.Resources.Core.Remaining
 	r.reset = time.Unix(v.Resources.Core.Reset, 0)
+	r.graphqlKnown = v.Resources.GraphQL.Limit > 0
+	r.graphqlRemaining = v.Resources.GraphQL.Remaining
 	r.checked = now
 	r.snapshotJSON = output
 	return nil
@@ -235,29 +341,41 @@ func (r *GitHubBudgetRunner) snapshot() string {
 			bucket["remaining"] = r.remaining
 		}
 	}
+	if bucket, ok := resources["graphql"].(map[string]any); ok && r.graphqlKnown {
+		bucket["remaining"] = r.graphqlRemaining
+	}
 	data, _ := json.Marshal(snapshot)
 	return string(data)
 }
 
-// BudgetStatus reports the background reservation ledger, not exact HTTP usage.
+// BudgetStatus reports the background reservation ledgers, not exact HTTP usage.
 type BudgetStatus struct {
-	Used          int
-	Limit         int
-	WindowEnd     time.Time
-	PauseUntil    time.Time
-	CoreRemaining int
-	CoreReset     time.Time
+	Used             int
+	Limit            int
+	GraphQLUsed      int
+	GraphQLLimit     int
+	WindowEnd        time.Time
+	PauseUntil       time.Time
+	CoreRemaining    int
+	GraphQLRemaining int
+	CoreReset        time.Time
 }
 
 // Status returns a consistent view of the request budget for scan summaries.
 func (r *GitHubBudgetRunner) Status() BudgetStatus {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	limit := r.Limit
-	if limit <= 0 || limit > 4000 {
-		limit = 2000
+	return BudgetStatus{
+		Used:             r.state.Used,
+		Limit:            normalizeBudgetLimit(r.Limit),
+		GraphQLUsed:      r.state.GraphQLUsed,
+		GraphQLLimit:     normalizeBudgetLimit(r.GraphQLLimit),
+		WindowEnd:        r.state.Window.Add(time.Hour),
+		PauseUntil:       r.state.PauseUntil,
+		CoreRemaining:    r.remaining,
+		GraphQLRemaining: r.graphqlRemaining,
+		CoreReset:        r.reset,
 	}
-	return BudgetStatus{r.state.Used, limit, r.state.Window.Add(time.Hour), r.state.PauseUntil, r.remaining, r.reset}
 }
 
 func (r *GitHubBudgetRunner) save() error {
