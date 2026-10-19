@@ -181,12 +181,14 @@ func sweepSurface(ctx context.Context, runner environment.Runner, path string, e
 		if err != nil && status != http.StatusNotModified {
 			return nil, "", err
 		}
+		if status == http.StatusNotModified {
+			// Keep the validator that matched: GitHub answers 304 with the strong
+			// form of the ETag it was sent, and the stored one keeps matching.
+			result.NotModified++
+			return nil, etag, nil
+		}
 		if page == 1 && pageETag != "" {
 			newETag = pageETag
-		}
-		if status == http.StatusNotModified {
-			result.NotModified++
-			return nil, newETag, nil
 		}
 		var items []sweptIssueComment
 		if err := json.Unmarshal([]byte(strings.TrimSpace(body)), &items); err != nil {
