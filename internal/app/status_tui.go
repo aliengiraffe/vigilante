@@ -308,6 +308,9 @@ func (m statusModel) serviceLines() []string {
 	}
 	if s.Installed {
 		lines = append(lines, statusField("daemon version", statusDaemonVersion(s)))
+		if s.DaemonCommit != "" {
+			lines = append(lines, statusField("daemon commit", s.DaemonCommit))
+		}
 	}
 	return lines
 }

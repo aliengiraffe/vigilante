@@ -17,7 +17,13 @@ type AccessLogContext struct {
 	Branch           string `json:"branch,omitempty"`
 	WorktreePath     string `json:"worktree_path,omitempty"`
 	CorrelationID    string `json:"correlation_id,omitempty"`
+	// Operation names a privileged background operation. OperationIntake marks
+	// new-issue intake so the request budget never defers it behind history polling.
+	Operation string `json:"operation,omitempty"`
 }
+
+// OperationIntake marks commands that discover new work for a watched repository.
+const OperationIntake = "intake"
 
 type AccessLogEntry struct {
 	Timestamp        string   `json:"timestamp"`
@@ -65,6 +71,9 @@ func WithAccessLogContext(ctx context.Context, meta AccessLogContext) context.Co
 	}
 	if strings.TrimSpace(meta.CorrelationID) != "" {
 		current.CorrelationID = strings.TrimSpace(meta.CorrelationID)
+	}
+	if strings.TrimSpace(meta.Operation) != "" {
+		current.Operation = strings.TrimSpace(meta.Operation)
 	}
 	return context.WithValue(ctx, accessLogContextKey{}, current)
 }

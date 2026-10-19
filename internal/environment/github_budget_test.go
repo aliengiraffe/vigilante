@@ -19,9 +19,11 @@ type budgetFake struct {
 	mu               sync.Mutex
 	probes, requests int
 	remaining        int
+	graphqlRemaining int
 	reset            time.Time
 	failure          string
 	headers          string
+	body             string
 	probeFailure     bool
 }
 
@@ -34,11 +36,18 @@ func (f *budgetFake) Run(_ context.Context, _ string, _ string, args ...string) 
 		if f.probeFailure {
 			return "", errors.New("offline")
 		}
-		return fmt.Sprintf(`{"resources":{"core":{"limit":5000,"remaining":%d,"reset":%d},"graphql":{"limit":5000,"remaining":4999,"reset":%d}}}`, f.remaining, f.reset.Unix(), f.reset.Unix()), nil
+		graphql := f.graphqlRemaining
+		if graphql == 0 {
+			graphql = 4999
+		}
+		return fmt.Sprintf(`{"resources":{"core":{"limit":5000,"remaining":%d,"reset":%d},"graphql":{"limit":5000,"remaining":%d,"reset":%d}}}`, f.remaining, f.reset.Unix(), graphql, f.reset.Unix()), nil
 	}
 	f.requests++
 	if f.failure != "" {
 		return f.headers + f.failure, errors.New("HTTP 403")
+	}
+	if f.headers != "" && f.body != "" || f.headers != "" && strings.Contains(f.headers, "304") {
+		return f.headers + f.body, nil
 	}
 	return f.headers + `[]`, nil
 }
@@ -137,10 +146,10 @@ func TestGitHubBudgetExternalConsumptionAndProbeFailures(t *testing.T) {
 	}
 }
 
-func TestGitHubBudgetSerializesMaintenanceAndCountsOpaqueCommands(t *testing.T) {
+func TestGitHubBudgetSerializesMaintenanceAndChargesGraphQLCommandsSeparately(t *testing.T) {
 	now := time.Now()
 	base := &budgetFake{remaining: 5000, reset: now.Add(time.Hour)}
-	r := &GitHubBudgetRunner{Base: base, Limit: 50, Clock: func() time.Time { return now }}
+	r := &GitHubBudgetRunner{Base: base, Limit: 50, GraphQLLimit: 5, Clock: func() time.Time { return now }}
 	var wg sync.WaitGroup
 	for i := 0; i < 40; i++ {
 		wg.Add(1)
@@ -151,12 +160,120 @@ func TestGitHubBudgetSerializesMaintenanceAndCountsOpaqueCommands(t *testing.T) 
 		}()
 	}
 	wg.Wait()
-	if base.requests != 5 || r.Status().Used != 50 {
-		t.Fatalf("requests=%d status=%+v", base.requests, r.Status())
+	status := r.Status()
+	if base.requests != 5 || status.GraphQLUsed != 5 || status.Used != 0 {
+		t.Fatalf("requests=%d status=%+v", base.requests, status)
 	}
 	// Interactive commands remain available; they are not background allowance.
 	if _, err := r.Run(context.Background(), "", "gh", "pr", "view", "1"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestClassifyGitHubCommand(t *testing.T) {
+	cases := map[string]GitHubCommandCost{
+		"api repos/o/r/issues/1/comments": {REST: 1},
+		"api graphql -f query=x":          {GraphQL: 1},
+		"api -X POST repos/o/r/issues":    {REST: 1},
+		"issue list --repo o/r":           {GraphQL: 1},
+		"pr view 1":                       {GraphQL: 1},
+		"pr list --head b":                {GraphQL: 1},
+		"issue comment 1 --body x":        {REST: 1, GraphQL: 1},
+		"label create x":                  {REST: 1, GraphQL: 1},
+		"":                                {REST: 1, GraphQL: 1},
+	}
+	for line, want := range cases {
+		var args []string
+		if line != "" {
+			args = strings.Fields(line)
+		}
+		if got := ClassifyGitHubCommand(args); got != want {
+			t.Fatalf("%q: got %+v want %+v", line, got, want)
+		}
+	}
+}
+
+func TestGitHubBudgetRESTLedgerIgnoresGraphQLCommandsAndGraphQLReserveApplies(t *testing.T) {
+	now := time.Now()
+	base := &budgetFake{remaining: 5000, reset: now.Add(time.Hour)}
+	r := &GitHubBudgetRunner{Base: base, Limit: 1, Clock: func() time.Time { return now }}
+	for _, args := range [][]string{{"issue", "list", "--repo", "o/r"}, {"pr", "view", "1"}, {"pr", "list", "--head", "x"}} {
+		if _, err := r.Run(budgetContext(), "", "gh", args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if status := r.Status(); status.Used != 0 || status.GraphQLUsed != 3 {
+		t.Fatalf("GraphQL commands touched the REST ledger: %+v", status)
+	}
+	// The single REST unit is still available for a REST call.
+	if _, err := r.Run(budgetContext(), "", "gh", "api", "repos/o/r/issues/1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(budgetContext(), "", "gh", "api", "repos/o/r/issues/2"); !errors.Is(err, ErrGitHubDeferred) {
+		t.Fatalf("REST ledger limit ignored: %v", err)
+	}
+	// Live GraphQL quota below the reserve defers GraphQL commands only.
+	base.graphqlRemaining = 50
+	now = now.Add(time.Minute)
+	if _, err := r.Run(budgetContext(), "", "gh", "pr", "view", "1"); !errors.Is(err, ErrGitHubDeferred) {
+		t.Fatalf("GraphQL reserve ignored: %v", err)
+	}
+}
+
+func TestGitHubBudgetRefundsNotModifiedAndReportsHeadersThroughSink(t *testing.T) {
+	now := time.Now()
+	base := &budgetFake{remaining: 5000, reset: now.Add(time.Hour), headers: "HTTP/1.1 304 Not Modified\r\nETag: W/\"abc\"\r\nX-RateLimit-Resource: core\r\nX-RateLimit-Remaining: 4000\r\n\r\n", body: ""}
+	path := filepath.Join(t.TempDir(), "budget.json")
+	r := &GitHubBudgetRunner{Base: base, Path: path, Clock: func() time.Time { return now }}
+	ctx, sink := WithResponseHeaders(budgetContext())
+	base.failure = "gh: HTTP 304\n" // gh exits non-zero for 304; the runner must not.
+	output, err := r.Run(ctx, "", "gh", "api", "repos/o/r/issues/comments?since=x", "-H", "If-None-Match: W/\"abc\"")
+	if err != nil || strings.TrimSpace(output) != "" {
+		t.Fatalf("output=%q err=%v", output, err)
+	}
+	base.failure = ""
+	if status, etag := sink.Snapshot(); status != http.StatusNotModified || etag != `W/"abc"` {
+		t.Fatalf("sink: %d %q", status, etag)
+	}
+	if status := r.Status(); status.Used != 0 || status.CoreRemaining != 4000 {
+		t.Fatalf("304 was charged: %+v", status)
+	}
+	data, _ := os.ReadFile(path)
+	if !strings.Contains(string(data), `"used":0`) {
+		t.Fatalf("refund not persisted: %s", data)
+	}
+	base.headers = "HTTP/1.1 200 OK\r\nETag: W/\"def\"\r\n\r\n"
+	base.body = "[]"
+	if _, err := r.Run(ctx, "", "gh", "api", "repos/o/r/issues/comments?since=x"); err != nil {
+		t.Fatal(err)
+	}
+	if status, etag := sink.Snapshot(); status != http.StatusOK || etag != `W/"def"` || r.Status().Used != 1 {
+		t.Fatalf("200 response: %d %q %+v", status, etag, r.Status())
+	}
+}
+
+func TestGitHubBudgetIntakeBypassesLedgerLimitsButNotLiveReserve(t *testing.T) {
+	now := time.Now()
+	base := &budgetFake{remaining: 5000, reset: now.Add(time.Hour)}
+	r := &GitHubBudgetRunner{Base: base, Limit: 1, GraphQLLimit: 1, Clock: func() time.Time { return now }}
+	ctx := WithAccessLogContext(budgetContext(), AccessLogContext{Operation: OperationIntake})
+	for i := 0; i < 3; i++ {
+		if _, err := r.Run(ctx, "", "gh", "issue", "list", "--repo", "o/r"); err != nil {
+			t.Fatalf("intake deferred by exhausted ledger: %v", err)
+		}
+	}
+	if status := r.Status(); status.GraphQLUsed != 3 {
+		t.Fatalf("intake must still be accounted: %+v", status)
+	}
+	// Ordinary background work is deferred by the exhausted ledger.
+	if _, err := r.Run(budgetContext(), "", "gh", "pr", "view", "1"); !errors.Is(err, ErrGitHubDeferred) {
+		t.Fatalf("ledger not enforced for non-intake: %v", err)
+	}
+	// Live quota reserve still protects interactive use.
+	base.remaining = 20
+	now = now.Add(time.Minute)
+	if _, err := r.Run(ctx, "", "gh", "api", "repos/o/r/issues"); !errors.Is(err, ErrGitHubDeferred) {
+		t.Fatalf("intake crossed the live reserve: %v", err)
 	}
 }
 

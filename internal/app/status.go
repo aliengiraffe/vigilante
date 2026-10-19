@@ -446,6 +446,9 @@ func writeStatusServiceSection(w io.Writer, s serviceStatusInfo) {
 		default:
 			fmt.Fprintln(w, "  daemon version: unavailable (service not running)")
 		}
+		if s.DaemonCommit != "" {
+			fmt.Fprintf(w, "  daemon commit: %s\n", s.DaemonCommit)
+		}
 	}
 }
 
@@ -457,4 +460,5 @@ type serviceStatusInfo struct {
 	Installed     bool
 	Running       bool
 	DaemonVersion string
+	DaemonCommit  string
 }

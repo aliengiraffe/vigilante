@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -50,6 +51,18 @@ type WatchTarget struct {
 	ProjectRef            string              `json:"project_ref,omitempty"`
 	SandboxMode           bool                `json:"sandbox_mode,omitempty"`
 	SandboxImage          string              `json:"sandbox_image,omitempty"`
+	CommentSweep          *CommentSweepCursor `json:"comment_sweep,omitempty"`
+}
+
+// CommentSweepCursor records where the repository-wide comment sweep left off.
+// Since is the `since` query value sent to GitHub; it only advances after a
+// response that carried comments, so the ETags stay valid for the same URL and
+// unchanged repositories answer 304 Not Modified, which GitHub does not meter.
+type CommentSweepCursor struct {
+	Since              string `json:"since,omitempty"`
+	IssueCommentsETag  string `json:"issue_comments_etag,omitempty"`
+	ReviewCommentsETag string `json:"review_comments_etag,omitempty"`
+	LastSweepAt        string `json:"last_sweep_at,omitempty"`
 }
 
 type BranchMode string
@@ -130,19 +143,46 @@ func (t WatchTarget) EffectivePushRemote() string {
 const DefaultMaxParallelSessions = 0
 const DefaultBlockedSessionInactivityTimeout = 20 * time.Minute
 
+// DefaultFailedSessionPollRetention bounds how long a failed session keeps
+// receiving background GitHub command polling after it ended.
+const DefaultFailedSessionPollRetention = 14 * 24 * time.Hour
+
+// ParseRetention parses a duration that may use a `d` (days) suffix in addition
+// to Go duration syntax. Empty, invalid, or non-positive values return fallback.
+func ParseRetention(raw string, fallback time.Duration) time.Duration {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	if raw == "" {
+		return fallback
+	}
+	if strings.HasSuffix(raw, "d") {
+		days, err := strconv.ParseFloat(strings.TrimSuffix(raw, "d"), 64)
+		if err != nil || days <= 0 {
+			return fallback
+		}
+		return time.Duration(days * float64(24*time.Hour))
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
+}
+
 type ServiceConfig struct {
-	GitHubBackgroundBudget          int    `json:"github_background_budget,omitempty"`
-	GitHubInactivePollInterval      string `json:"github_inactive_poll_interval,omitempty"`
-	BlockedSessionInactivityTimeout string `json:"blocked_session_inactivity_timeout,omitempty"`
-	PackageHardeningEnabled         *bool  `json:"package_hardening_enabled,omitempty"`
-	SandboxEnabled                  *bool  `json:"sandbox_enabled,omitempty"`
-	SandboxImage                    string `json:"sandbox_image,omitempty"`
-	SandboxDefaultTTL               string `json:"sandbox_default_ttl,omitempty"`
-	SandboxMemoryLimit              string `json:"sandbox_memory_limit,omitempty"`
-	SandboxCPUs                     string `json:"sandbox_cpus,omitempty"`
-	LogMaxTotalSize                 string `json:"log_max_total_size,omitempty"`
-	LogMaxFileSize                  string `json:"log_max_file_size,omitempty"`
-	LogMaxBackups                   *int   `json:"log_max_backups,omitempty"`
+	GitHubBackgroundBudget           int    `json:"github_background_budget,omitempty"`
+	GitHubGraphQLBackgroundBudget    int    `json:"github_graphql_background_budget,omitempty"`
+	GitHubInactivePollInterval       string `json:"github_inactive_poll_interval,omitempty"`
+	GitHubFailedSessionPollRetention string `json:"github_failed_session_poll_retention,omitempty"`
+	BlockedSessionInactivityTimeout  string `json:"blocked_session_inactivity_timeout,omitempty"`
+	PackageHardeningEnabled          *bool  `json:"package_hardening_enabled,omitempty"`
+	SandboxEnabled                   *bool  `json:"sandbox_enabled,omitempty"`
+	SandboxImage                     string `json:"sandbox_image,omitempty"`
+	SandboxDefaultTTL                string `json:"sandbox_default_ttl,omitempty"`
+	SandboxMemoryLimit               string `json:"sandbox_memory_limit,omitempty"`
+	SandboxCPUs                      string `json:"sandbox_cpus,omitempty"`
+	LogMaxTotalSize                  string `json:"log_max_total_size,omitempty"`
+	LogMaxFileSize                   string `json:"log_max_file_size,omitempty"`
+	LogMaxBackups                    *int   `json:"log_max_backups,omitempty"`
 }
 
 // LogRotationLimits returns the log rotation limits for the logs directory.
@@ -269,6 +309,9 @@ type Session struct {
 	BlockedReason                  BlockedReason       `json:"blocked_reason,omitempty"`
 	RetryPolicy                    string              `json:"retry_policy,omitempty"`
 	NextCommentPollAt              string              `json:"next_comment_poll_at,omitempty"`
+	FailedPollReconciledAt         string              `json:"failed_poll_reconciled_at,omitempty"`
+	IssueLookupFailures            int                 `json:"issue_lookup_failures,omitempty"`
+	IssueLookupBackoffUntil        string              `json:"issue_lookup_backoff_until,omitempty"`
 	ResumeAfter                    string              `json:"resume_after,omitempty"`
 	ResumeRequired                 bool                `json:"resume_required,omitempty"`
 	ResumeHint                     string              `json:"resume_hint,omitempty"`

@@ -17,6 +17,8 @@ type pollingSchedule struct {
 	due       map[string]bool
 	completed map[string]bool
 	interval  time.Duration
+	retention time.Duration
+	sweeps    map[string]*repoSweepResult
 }
 
 func (a *App) prepareCommentPolling(ctx context.Context, sessions []state.Session) (context.Context, func([]state.Session)) {
@@ -25,13 +27,15 @@ func (a *App) prepareCommentPolling(ctx context.Context, sessions []state.Sessio
 	if err != nil || interval < 5*time.Minute {
 		interval = 30 * time.Minute
 	}
-	schedule := &pollingSchedule{due: make(map[string]bool), completed: make(map[string]bool), interval: interval}
+	retention := state.ParseRetention(config.GitHubFailedSessionPollRetention, state.DefaultFailedSessionPollRetention)
+	schedule := &pollingSchedule{due: make(map[string]bool), completed: make(map[string]bool), interval: interval, retention: retention, sweeps: make(map[string]*repoSweepResult)}
 	// Oldest due sessions go first. Sessions deferred by a budget retain their due
 	// time and move ahead of serviced sessions on the next scan (also on restart).
 	sort.SliceStable(sessions, func(i, j int) bool { return sessions[i].NextCommentPollAt < sessions[j].NextCommentPollAt })
+	now := a.clock()
 	for _, s := range sessions {
 		due, _ := time.Parse(time.RFC3339, s.NextCommentPollAt)
-		schedule.due[sessionKey(s.Repo, s.IssueNumber)] = s.Status != state.SessionStatusClosed && !a.clock().Before(due)
+		schedule.due[sessionKey(s.Repo, s.IssueNumber)] = s.Status != state.SessionStatusClosed && !sessionRetiredFromPolling(s, now, retention) && !now.Before(due)
 	}
 	ctx = context.WithValue(ctx, pollingContextKey{}, schedule)
 	ctx, cache := ghcli.WithCommentCache(ctx)
@@ -59,10 +63,10 @@ func (a *App) prepareCommentPolling(ctx context.Context, sessions []state.Sessio
 		}
 		if a.githubBudget != nil {
 			budget := a.githubBudget.Status()
-			a.logger.Info("github background budget", "used_units", budget.Used, "limit_units", budget.Limit, "window_end", budget.WindowEnd, "pause_until", budget.PauseUntil, "core_remaining_estimate", budget.CoreRemaining, "core_reset", budget.CoreReset)
+			a.logger.Info("github background budget", "rest_used_units", budget.Used, "rest_limit_units", budget.Limit, "graphql_used_units", budget.GraphQLUsed, "graphql_limit_units", budget.GraphQLLimit, "window_end", budget.WindowEnd, "pause_until", budget.PauseUntil, "core_remaining_estimate", budget.CoreRemaining, "graphql_remaining_estimate", budget.GraphQLRemaining, "core_reset", budget.CoreReset)
 		}
 		fetches, hits, failures := cache.Counts()
-		a.logger.Info("comment polling summary", "fetches", fetches, "cache_hits", hits, "failures", failures, "deferred_sessions", deferred)
+		a.logger.Info("comment polling summary", "fetches", fetches, "cache_hits", hits, "failures", failures, "deferred_sessions", deferred, "swept_repos", len(schedule.sweeps))
 	}
 }
 
@@ -78,12 +82,18 @@ func commentPollDue(ctx context.Context, session state.Session) bool {
 // its history. Closed issues stop automatic command monitoring; closed PRs on
 // open issues stop PR polling while issue recreate commands remain available.
 func (a *App) reconcileFailedPolling(ctx context.Context, sessions []state.Session, cache scanIssueDetailsCache) {
+	now := a.clock()
+	schedule, _ := ctx.Value(pollingContextKey{}).(*pollingSchedule)
+	retention := state.DefaultFailedSessionPollRetention
+	if schedule != nil {
+		retention = schedule.retention
+	}
 	for i := range sessions {
 		s := &sessions[i]
 		if (s.IssueBackend != "" && s.IssueBackend != "github") || s.Status != state.SessionStatusFailed || !commentPollDue(ctx, *s) {
 			continue
 		}
-		issue, err := a.loadIssueDetailsForScan(ctx, cache, s.Repo, s.IssueNumber)
+		issue, err := a.loadSessionIssueDetails(ctx, cache, s)
 		if err != nil {
 			if ghcli.IsIssueUnavailableError(err) {
 				s.Status = state.SessionStatusClosed
@@ -94,6 +104,12 @@ func (a *App) reconcileFailedPolling(ctx context.Context, sessions []state.Sessi
 			s.Status = state.SessionStatusClosed
 			continue
 		}
+		// The pull request state read is a GraphQL command per session; once per
+		// retention window is enough to notice a PR that closed or merged.
+		if last, err := time.Parse(time.RFC3339, strings.TrimSpace(s.FailedPollReconciledAt)); err == nil && retention > 0 && now.Sub(last) < retention {
+			continue
+		}
+		s.FailedPollReconciledAt = now.UTC().Format(time.RFC3339)
 		if s.PullRequestNumber > 0 && s.PullRequestState == "OPEN" {
 			pr, err := a.prManagerForSession(*s).GetPullRequestDetails(ctx, s.Repo, s.PullRequestNumber)
 			if err == nil && pr != nil {

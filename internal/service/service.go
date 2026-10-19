@@ -46,6 +46,7 @@ type Status struct {
 	Installed     bool
 	Running       bool
 	DaemonVersion string
+	DaemonCommit  string
 }
 
 var daemonNightlyVersionPattern = regexp.MustCompile(`\b0\.0\.0-nightly\.\d{14}\.([0-9a-fA-F]{12})\b`)
@@ -221,26 +222,35 @@ func ServiceStatus(ctx context.Context, env *environment.Environment) (Status, e
 	} else {
 		status.State = StatusStopped
 	}
-	status.DaemonVersion = detectConfiguredDaemonVersion(ctx, env, status)
+	status.DaemonVersion, status.DaemonCommit = detectConfiguredDaemonVersion(ctx, env, status)
 
 	return status, nil
 }
 
-func detectConfiguredDaemonVersion(ctx context.Context, env *environment.Environment, status Status) string {
+var daemonCommitPattern = regexp.MustCompile(`(?m)^commit:\s*(\S+)`)
+
+// detectConfiguredDaemonVersion runs the configured daemon binary's version
+// command. Binaries that predate the verbose flag print only the version, so
+// the commit is empty for them.
+func detectConfiguredDaemonVersion(ctx context.Context, env *environment.Environment, status Status) (string, string) {
 	if !status.Installed {
-		return ""
+		return "", ""
 	}
 
 	executable, err := daemonExecutableFromServiceDefinition(env.OS, status.FilePath)
 	if err != nil || strings.TrimSpace(executable) == "" {
-		return ""
+		return "", ""
 	}
 
-	output, err := env.Runner.Run(ctx, "", executable, "--version")
+	output, err := env.Runner.Run(ctx, "", executable, "--version", "--verbose")
 	if err != nil {
-		return ""
+		return "", ""
 	}
-	return normalizeDaemonVersionOutput(output)
+	commit := ""
+	if match := daemonCommitPattern.FindStringSubmatch(output); len(match) == 2 {
+		commit = match[1]
+	}
+	return normalizeDaemonVersionOutput(output), commit
 }
 
 func Restart(ctx context.Context, env *environment.Environment) error {

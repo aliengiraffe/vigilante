@@ -238,8 +238,8 @@ func TestServiceStatusReportsLaunchdRunning(t *testing.T) {
 		OS: "darwin",
 		Runner: testutil.FakeRunner{
 			Outputs: map[string]string{
-				testutil.Key("launchctl", "print", launchdTarget()):           "pid = 412\nstate = running\n",
-				testutil.Key("/Users/test/.local/bin/vigilante", "--version"): "vigilante 1.2.3\n",
+				testutil.Key("launchctl", "print", launchdTarget()):                        "pid = 412\nstate = running\n",
+				testutil.Key("/Users/test/.local/bin/vigilante", "--version", "--verbose"): "vigilante 1.2.3\ncommit: abc123def456\n",
 			},
 		},
 	}
@@ -326,7 +326,7 @@ func TestServiceStatusReportsSystemdRunning(t *testing.T) {
 		Runner: testutil.FakeRunner{
 			Outputs: map[string]string{
 				testutil.Key("systemctl", "--user", "show", "--property=LoadState,ActiveState", systemdUnitName): "LoadState=loaded\nActiveState=active\n",
-				testutil.Key("/home/test/.local/bin/vigilante", "--version"):                                     "vigilante 1.2.3\n",
+				testutil.Key("/home/test/.local/bin/vigilante", "--version", "--verbose"):                        "vigilante 1.2.3\n",
 			},
 		},
 	}
@@ -359,7 +359,7 @@ func TestServiceStatusReportsSystemdStoppedWithConfiguredDaemonVersion(t *testin
 		Runner: testutil.FakeRunner{
 			Outputs: map[string]string{
 				testutil.Key("systemctl", "--user", "show", "--property=LoadState,ActiveState", systemdUnitName): "LoadState=loaded\nActiveState=inactive\n",
-				testutil.Key("/home/test/.local/bin/vigilante", "--version"):                                     "vigilante 1.2.3\n",
+				testutil.Key("/home/test/.local/bin/vigilante", "--version", "--verbose"):                        "vigilante 1.2.3\n",
 			},
 		},
 	}
