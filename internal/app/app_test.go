@@ -7802,69 +7802,79 @@ func TestScanOnceCleansUpClosedIssueSession(t *testing.T) {
 }
 
 func TestCleanupClosedIssueSessionsStopsAfterAutomaticCleanupLimit(t *testing.T) {
-	repoPath := t.TempDir()
-	worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
-	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	runner := &countingRunner{allowUnexpectedGH: true, base: testutil.FakeRunner{
-		Outputs: map[string]string{
-			"git worktree prune":                          "ok",
-			"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"codex:astra"},{"name":"codex:sol"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
-			"gh api repos/owner/repo/issues/1":            `{"labels":[]}`,
-		},
-		Errors: map[string]error{
-			"git worktree remove --force " + worktreePath: errors.New("corrupt worktree gitdir"),
-		},
-	}}
-	app := New()
-	app.stdout = testutil.IODiscard{}
-	app.stderr = testutil.IODiscard{}
-	app.env.Runner = runner
-	sessions := []state.Session{{
-		RepoPath: repoPath, Repo: "owner/repo", IssueNumber: 1, Branch: "vigilante/issue-1",
-		WorktreePath: worktreePath, Status: state.SessionStatusSuccess,
-	}}
-	issue := &ghcli.IssueDetails{State: "closed"}
-	cache := scanIssueDetailsCache{sessionKey("owner/repo", 1): {details: issue}}
-
-	for range maxAutomaticCleanupAttempts + 1 {
-		var err error
-		sessions, err = app.cleanupClosedIssueSessions(context.Background(), sessions, cache)
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	session := sessions[0]
-	if got := runner.counts["git worktree remove --force "+worktreePath]; got != maxAutomaticCleanupAttempts {
-		t.Fatalf("cleanup attempts = %d, want %d", got, maxAutomaticCleanupAttempts)
-	}
-	if session.CleanupAttempts != maxAutomaticCleanupAttempts || session.Status != state.SessionStatusClosed || session.MonitoringStoppedAt == "" {
-		t.Fatalf("expected terminal capped session, got %#v", session)
-	}
-	if session.CleanupError != "corrupt worktree gitdir" {
-		t.Fatalf("CleanupError = %q, want verbatim git error", session.CleanupError)
-	}
-	commentCount := 0
-	gitFixLabelCount := 0
-	for command, count := range runner.counts {
-		if strings.HasPrefix(command, "gh issue comment --repo owner/repo 1 --body ") {
-			commentCount += count
-			if !strings.Contains(command, worktreePath) || !strings.Contains(command, "corrupt worktree gitdir") || !strings.Contains(command, "git worktree prune") {
-				t.Fatalf("cleanup comment is missing actionable details: %s", command)
+	for _, status := range []state.SessionStatus{state.SessionStatusFailed, state.SessionStatusBlocked, state.SessionStatusSuccess, state.SessionStatusIncomplete, state.SessionStatusClosed} {
+		t.Run(string(status), func(t *testing.T) {
+			repoPath := t.TempDir()
+			worktreePath := filepath.Join(repoPath, ".worktrees", "vigilante", "issue-1")
+			if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+				t.Fatal(err)
 			}
-		}
-		if strings.Contains(command, "gh issue edit --repo owner/repo 1") && strings.Contains(command, "--add-label vigilante:needs-git-fix") {
-			gitFixLabelCount += count
-		}
-	}
-	if commentCount != 1 {
-		t.Fatalf("cleanup comments = %d, want 1", commentCount)
-	}
-	if gitFixLabelCount != 1 {
-		t.Fatalf("needs-git-fix applications = %d, want 1; commands=%#v", gitFixLabelCount, runner.counts)
+
+			runner := &countingRunner{allowUnexpectedGH: true, base: testutil.FakeRunner{
+				Outputs: map[string]string{
+					"git worktree prune":                          "ok",
+					"gh api repos/owner/repo/labels?per_page=100": `[{"name":"vigilante:queued"},{"name":"vigilante:running"},{"name":"vigilante:iterating"},{"name":"vigilante:blocked"},{"name":"vigilante:recovering"},{"name":"vigilante:ready-for-review"},{"name":"vigilante:awaiting-user-validation"},{"name":"vigilante:done"},{"name":"vigilante:needs-review"},{"name":"vigilante:needs-human-input"},{"name":"vigilante:needs-provider-fix"},{"name":"vigilante:needs-git-fix"},{"name":"vigilante:flagged-security-review"},{"name":"codex"},{"name":"claude"},{"name":"gemini"},{"name":"claude:sonnet"},{"name":"claude:opus"},{"name":"claude:fable"},{"name":"codex:astra"},{"name":"codex:sol"},{"name":"vigilante:resume"},{"name":"vigilante:automerge"},{"name":"resume"}]`,
+					"gh api repos/owner/repo/issues/1":            `{"labels":[]}`,
+				},
+				Errors: map[string]error{
+					"git worktree remove --force " + worktreePath: errors.New("corrupt worktree gitdir"),
+				},
+			}}
+			app := New()
+			app.stdout = testutil.IODiscard{}
+			app.stderr = testutil.IODiscard{}
+			app.env.Runner = runner
+			sessions := []state.Session{{
+				RepoPath: repoPath, Repo: "owner/repo", IssueNumber: 1, Branch: "vigilante/issue-1",
+				WorktreePath: worktreePath, Status: status,
+			}}
+			issue := &ghcli.IssueDetails{State: "closed"}
+			cache := scanIssueDetailsCache{sessionKey("owner/repo", 1): {details: issue}}
+
+			for range maxAutomaticCleanupAttempts + 1 {
+				var err error
+				sessions, err = app.cleanupClosedIssueSessions(context.Background(), sessions, cache)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			session := sessions[0]
+			if got := runner.counts["git worktree remove --force "+worktreePath]; got != maxAutomaticCleanupAttempts {
+				t.Fatalf("cleanup attempts = %d, want %d", got, maxAutomaticCleanupAttempts)
+			}
+			if session.CleanupAttempts != maxAutomaticCleanupAttempts || session.Status != state.SessionStatusClosed || session.MonitoringStoppedAt == "" {
+				t.Fatalf("expected terminal capped session, got %#v", session)
+			}
+			if session.CleanupError != "corrupt worktree gitdir" {
+				t.Fatalf("CleanupError = %q, want verbatim git error", session.CleanupError)
+			}
+			commentCount := 0
+			gitFixLabelCount := 0
+			for command, count := range runner.counts {
+				if strings.HasPrefix(command, "gh issue comment --repo owner/repo 1 --body ") {
+					commentCount += count
+					if !strings.Contains(command, worktreePath) || !strings.Contains(command, "corrupt worktree gitdir") || !strings.Contains(command, "git worktree prune") {
+						t.Fatalf("cleanup comment is missing actionable details: %s", command)
+					}
+				}
+				if strings.Contains(command, "gh issue edit --repo owner/repo 1") && strings.Contains(command, "--add-label vigilante:needs-git-fix") {
+					gitFixLabelCount += count
+				}
+			}
+			if commentCount != 1 {
+				t.Fatalf("cleanup comments = %d, want 1", commentCount)
+			}
+			if gitFixLabelCount != 1 {
+				t.Fatalf("needs-git-fix applications = %d, want 1; commands=%#v", gitFixLabelCount, runner.counts)
+			}
+			if commentPollDue(context.Background(), session) {
+				t.Fatal("closed session remained due for polling")
+			}
+			if got := runner.counts["gh api repos/owner/repo/issues/1"]; got != 0 {
+				t.Fatalf("cleanup retries fetched issue details %d times", got)
+			}
+		})
 	}
 }
 
@@ -7991,7 +8001,7 @@ func TestScanOnceKeepsSuccessStatusForOpenIssue(t *testing.T) {
 	}
 }
 
-func TestScanOnceDoesNotMarkClosedOnCleanupFailure(t *testing.T) {
+func TestScanOnceMarksClosedOnCleanupFailure(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 	t.Setenv("HOME", home)
@@ -8040,11 +8050,8 @@ func TestScanOnceDoesNotMarkClosedOnCleanupFailure(t *testing.T) {
 	if len(sessions) != 1 {
 		t.Fatalf("unexpected sessions: %#v", sessions)
 	}
-	if sessions[0].Status == state.SessionStatusClosed {
-		t.Fatalf("session must not be marked closed when cleanup fails")
-	}
-	if sessions[0].Status != state.SessionStatusSuccess {
-		t.Fatalf("expected session to remain success when cleanup fails, got %q", sessions[0].Status)
+	if sessions[0].Status != state.SessionStatusClosed || sessions[0].CleanupAttempts != 1 {
+		t.Fatalf("expected closed session with pending cleanup, got %#v", sessions[0])
 	}
 }
 
