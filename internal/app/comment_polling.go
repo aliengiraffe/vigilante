@@ -71,6 +71,9 @@ func (a *App) prepareCommentPolling(ctx context.Context, sessions []state.Sessio
 }
 
 func commentPollDue(ctx context.Context, session state.Session) bool {
+	if session.Status == state.SessionStatusClosed {
+		return false
+	}
 	if session.IssueBackend != "" && session.IssueBackend != "github" {
 		return true
 	}
@@ -78,8 +81,8 @@ func commentPollDue(ctx context.Context, session state.Session) bool {
 	return schedule == nil || schedule.due[sessionKey(session.Repo, session.IssueNumber)]
 }
 
-// reconcileFailedPolling refreshes remote state without deleting failed work or
-// its history. Closed issues stop automatic command monitoring; closed PRs on
+// reconcileFailedPolling refreshes remote state and cleans up closed issues.
+// Closed issues stop automatic command monitoring; closed PRs on
 // open issues stop PR polling while issue recreate commands remain available.
 func (a *App) reconcileFailedPolling(ctx context.Context, sessions []state.Session, cache scanIssueDetailsCache) {
 	now := a.clock()
@@ -96,12 +99,12 @@ func (a *App) reconcileFailedPolling(ctx context.Context, sessions []state.Sessi
 		issue, err := a.loadSessionIssueDetails(ctx, cache, s)
 		if err != nil {
 			if ghcli.IsIssueUnavailableError(err) {
-				s.Status = state.SessionStatusClosed
+				a.closeIssueSession(ctx, s, nil, cache)
 			}
 			continue
 		}
 		if strings.EqualFold(issue.State, "closed") {
-			s.Status = state.SessionStatusClosed
+			a.closeIssueSession(ctx, s, issue, cache)
 			continue
 		}
 		// The pull request state read is a GraphQL command per session; once per
