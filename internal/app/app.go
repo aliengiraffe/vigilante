@@ -133,7 +133,6 @@ type App struct {
 	labelManagers map[string]backend.LabelManager
 	prManagers    map[string]backend.PullRequestManager
 
-	sessionMu                 sync.Mutex
 	sessionWG                 sync.WaitGroup
 	cancelMu                  sync.Mutex
 	cancels                   map[string]context.CancelFunc
@@ -823,6 +822,8 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		return a.runStatusCommand(ctx, args[1:])
 	case "logs":
 		return a.runLogsCommand(ctx, args[1:])
+	case "state":
+		return a.runStateCommand(ctx, args[1:])
 	case "cleanup":
 		return a.runCleanupCommand(ctx, args[1:])
 	case "redispatch":
@@ -1319,17 +1320,12 @@ func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumbe
 		defer a.shutdownSandbox(ctx)
 	}
 
-	a.sessionMu.Lock()
-	defer a.sessionMu.Unlock()
-
-	sessions, err := a.state.LoadSessions()
+	existing, found, err := a.state.GetSession(info.Repo, issueNumber)
 	if err != nil {
 		return err
 	}
-	if existing, ok := findSession(sessions, info.Repo, issueNumber); ok {
-		if existing.Status == state.SessionStatusRunning {
-			return fmt.Errorf("a session is already running for %s#%d", info.Repo, issueNumber)
-		}
+	if found && existing.Status == state.SessionStatusRunning {
+		return fmt.Errorf("a session is already running for %s#%d", info.Repo, issueNumber)
 	}
 
 	wt, err := worktree.CreateIssueWorktree(ctx, a.env.Runner, target, ghIssue.Number, ghIssue.Title)
@@ -1367,8 +1363,7 @@ func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumbe
 	if enableSandbox {
 		session.SandboxMode = true
 	}
-	sessions = upsertSession(sessions, session)
-	if err := a.state.SaveSessions(sessions); err != nil {
+	if err := a.state.PutSession(session); err != nil {
 		return err
 	}
 
@@ -1395,14 +1390,9 @@ func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumbe
 	stopStream()
 	<-streamDone
 
-	sessions, err = a.state.LoadSessions()
-	if err != nil {
-		a.logger.Error("start session result load failed", "repo", info.Repo, "issue", issueNumber, "err", err)
-		return fmt.Errorf("session completed with status %s but result could not be saved: %w", result.Status, err)
-	}
-	sessions = upsertSession(sessions, result)
-	if err := a.state.SaveSessions(sessions); err != nil {
+	if err := a.state.PutSession(result); err != nil {
 		a.logger.Error("start session result save failed", "repo", info.Repo, "issue", issueNumber, "err", err)
+		return fmt.Errorf("session completed with status %s but result could not be saved: %w", result.Status, err)
 	}
 
 	a.syncSessionIssueLabelsBestEffort(ctx, &result, nil, nil, nil)
@@ -2131,9 +2121,11 @@ func (a *App) ScanOnce(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		a.sessionMu.Lock()
-		defer a.sessionMu.Unlock()
-		sessions, err := a.state.LoadSessions()
+		// No process-wide session lock: every write below goes through the
+		// snapshot, which only touches rows this scan changed and leaves rows
+		// another writer changed alone. Session results that land while the
+		// scan is talking to GitHub are persisted by their own goroutine.
+		snap, sessions, err := a.state.LoadSessionSnapshot(true)
 		if err != nil {
 			return err
 		}
@@ -2144,7 +2136,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			return err
 		}
 		if throttled {
-			if err := a.state.SaveSessions(sessions); err != nil {
+			if _, err := a.commitSessions(snap, sessions, "rate_limit"); err != nil {
 				return err
 			}
 			fmt.Fprintln(a.stdout, "scan paused: GitHub REST core quota is below the low-quota threshold")
@@ -2157,7 +2149,8 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				return
 			}
 			finishPolling(sessions)
-			scanErr = errors.Join(scanErr, a.state.SaveSessions(sessions))
+			_, commitErr := a.commitSessions(snap, sessions, "scan_end")
+			scanErr = errors.Join(scanErr, commitErr)
 		}()
 		a.runCommentSweeps(ctx, targets, sessions)
 		a.reconcileFailedPolling(ctx, sessions, issueDetailsCache)
@@ -2194,7 +2187,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			return err
 		}
 		a.persistScanIssueDetailsCache(sessions, issueDetailsCache)
-		if err := a.state.SaveSessions(sessions); err != nil {
+		if sessions, err = a.commitSessions(snap, sessions, "maintenance"); err != nil {
 			return err
 		}
 		startedCount := 0
@@ -2219,7 +2212,7 @@ func (a *App) ScanOnce(ctx context.Context) error {
 				}
 			}
 			var started int
-			sessions, started, err = a.processGitHubIterationRequestsForTarget(targetCtx, *target, sessions, issueDetailsCache)
+			sessions, started, err = a.processGitHubIterationRequestsForTarget(targetCtx, *target, snap, sessions, issueDetailsCache)
 			if err != nil {
 				return err
 			}
@@ -2284,9 +2277,11 @@ func (a *App) ScanOnce(ctx context.Context) error {
 					a.commentDispatchFailure(ctx, previous, &session, "dispatch")
 					a.logger.Info("scan repo dispatch blocked", "repo", target.Repo, "issue", next.Number, "err", err)
 					sessions = upsertSession(sessions, session)
-					if err := a.state.SaveSessions(sessions); err != nil {
-						return err
+					committed, commitErr := a.commitSessions(snap, sessions, "dispatch")
+					if commitErr != nil {
+						return commitErr
 					}
+					sessions = committed
 					a.emitSessionTransition(previous.Status, session, "dispatch")
 					a.syncSessionIssueLabelsBestEffort(ctx, &session, nil, nil, issueDetailsCache)
 					fmt.Fprintf(a.stdout, "repo: %s blocked issue #%d: %s\n", target.Repo, next.Number, summarizeText(err.Error()))
@@ -2300,9 +2295,11 @@ func (a *App) ScanOnce(ctx context.Context) error {
 					a.commentDispatchFailure(ctx, previous, &session, "dispatch")
 					a.logger.Info("scan repo dispatch blocked", "repo", target.Repo, "issue", next.Number, "err", err)
 					sessions = upsertSession(sessions, session)
-					if err := a.state.SaveSessions(sessions); err != nil {
-						return err
+					committed, commitErr := a.commitSessions(snap, sessions, "dispatch")
+					if commitErr != nil {
+						return commitErr
 					}
+					sessions = committed
 					a.emitSessionTransition(previous.Status, session, "dispatch")
 					a.syncSessionIssueLabelsBestEffort(ctx, &session, nil, nil, issueDetailsCache)
 					fmt.Fprintf(a.stdout, "repo: %s blocked issue #%d: %s\n", target.Repo, next.Number, summarizeText(err.Error()))
@@ -2317,9 +2314,11 @@ func (a *App) ScanOnce(ctx context.Context) error {
 					a.commentDispatchFailure(ctx, previous, &session, "dispatch")
 					a.logger.Info("scan repo dispatch blocked", "repo", target.Repo, "issue", next.Number, "err", err)
 					sessions = upsertSession(sessions, session)
-					if err := a.state.SaveSessions(sessions); err != nil {
-						return err
+					committed, commitErr := a.commitSessions(snap, sessions, "dispatch")
+					if commitErr != nil {
+						return commitErr
 					}
+					sessions = committed
 					a.emitSessionTransition(previous.Status, session, "dispatch")
 					a.syncSessionIssueLabelsBestEffort(ctx, &session, nil, nil, issueDetailsCache)
 					fmt.Fprintf(a.stdout, "repo: %s blocked issue #%d: %s\n", target.Repo, next.Number, summarizeText(err.Error()))
@@ -2341,9 +2340,11 @@ func (a *App) ScanOnce(ctx context.Context) error {
 						session.ReusedRemoteBranch = wt.ReusedRemoteBranch
 						a.logger.Info("scan repo dispatch blocked", "repo", target.Repo, "issue", next.Number, "branch", wt.Branch, "err", err)
 						sessions = upsertSession(sessions, session)
-						if err := a.state.SaveSessions(sessions); err != nil {
-							return err
+						committed, commitErr := a.commitSessions(snap, sessions, "dispatch")
+						if commitErr != nil {
+							return commitErr
 						}
+						sessions = committed
 						a.emitSessionTransition("", session, "dispatch")
 						fmt.Fprintf(a.stdout, "repo: %s blocked issue #%d: %s\n", target.Repo, next.Number, summarizeText(session.LastError))
 						continue
@@ -2383,9 +2384,11 @@ func (a *App) ScanOnce(ctx context.Context) error {
 					carryBlockedCommentState(&session, previous)
 				}
 				sessions = upsertSession(sessions, session)
-				if err := a.state.SaveSessions(sessions); err != nil {
-					return err
+				committed, commitErr := a.commitSessions(snap, sessions, "dispatch")
+				if commitErr != nil {
+					return commitErr
 				}
+				sessions = committed
 				a.emitSessionTransition("", session, "dispatch")
 				a.syncSessionIssueLabelsBestEffort(ctx, &session, nil, nil, issueDetailsCache)
 				startedCount++
@@ -2872,45 +2875,87 @@ func (a *App) launchIssueSession(ctx context.Context, target state.WatchTarget, 
 			result = issuerunner.RunIssueSession(runCtx, a.env, a.state, a.issueTrackerForTarget(target), target, issue, session)
 		}
 
-		a.sessionMu.Lock()
-		defer a.sessionMu.Unlock()
-
-		sessions, err := a.state.LoadSessions()
-		if err != nil {
-			a.logger.Error("session result load failed", "repo", target.Repo, "issue", issue.Number, "err", err)
-			return
-		}
-		if existing, ok := findSession(sessions, target.Repo, issue.Number); ok {
-			if existing.StartedAt != "" && existing.StartedAt != result.StartedAt {
-				a.logger.Info("session result ignored for superseded run", "repo", target.Repo, "issue", issue.Number, "started_at", result.StartedAt, "latest_started_at", existing.StartedAt)
-				return
-			}
-			if existing.LastCleanupSource != "" {
-				a.logger.Info("session result ignored after cleanup", "repo", target.Repo, "issue", issue.Number, "source", existing.LastCleanupSource)
-				return
-			}
-		}
-		if previous, _ := findSession(sessions, target.Repo, issue.Number); shouldCommentStartupFailure(result) {
-			a.commentDispatchFailure(ctx, previous, &result, "issue_startup")
-		}
-		if previous, ok := findSession(sessions, target.Repo, issue.Number); ok {
-			a.emitSessionTransition(previous.Status, result, "issue_execution")
-		}
-		sessions = upsertSession(sessions, result)
-		if err := a.state.SaveSessions(sessions); err != nil {
-			a.logger.Error("session result save failed", "repo", target.Repo, "issue", issue.Number, "err", err)
-			return
-		}
-		a.syncSessionIssueLabelsBestEffort(ctx, &result, nil, nil, nil)
-		a.logger.Info("scan repo session finished", "repo", target.Repo, "issue", issue.Number, "status", result.Status)
-
-		// Run deterministic package hardening on the worktree after a
-		// successful session push, using the local diff rather than
-		// querying GitHub for all open PRs.
-		if result.Status == state.SessionStatusSuccess {
-			a.runPostPushPackageHardening(ctx, result)
-		}
+		a.recordIssueSessionResult(ctx, target, issue, result)
 	}()
+}
+
+// errSessionResultStale marks a session result that must not be written
+// because the stored session moved on (a newer run, or a cleanup).
+var errSessionResultStale = errors.New("session result stale")
+
+// sessionResultSupersedes reports whether result may replace existing, with
+// the reason it may not when it may not.
+func sessionResultSupersedes(existing state.Session, result state.Session) (string, bool) {
+	if existing.StartedAt != "" && existing.StartedAt != result.StartedAt {
+		return "superseded", false
+	}
+	if existing.LastCleanupSource != "" {
+		return "cleaned_up", false
+	}
+	return "", true
+}
+
+// recordIssueSessionResult persists the outcome of an issue session as soon
+// as it ends, in its own transaction, so it never waits on a scan that may be
+// in the middle of GitHub calls. The GitHub side effects run outside the
+// transaction; the write re-checks that nothing superseded the run meanwhile.
+func (a *App) recordIssueSessionResult(ctx context.Context, target state.WatchTarget, issue ghcli.Issue, result state.Session) {
+	previous, hadPrevious, err := a.state.GetSession(target.Repo, issue.Number)
+	if err != nil {
+		a.logger.Error("session result load failed", "repo", target.Repo, "issue", issue.Number, "err", err)
+		return
+	}
+	if hadPrevious {
+		if reason, ok := sessionResultSupersedes(previous, result); !ok {
+			a.logIgnoredSessionResult(reason, target.Repo, issue.Number, result, previous)
+			return
+		}
+	}
+	if shouldCommentStartupFailure(result) {
+		a.commentDispatchFailure(ctx, previous, &result, "issue_startup")
+	}
+	if hadPrevious {
+		a.emitSessionTransition(previous.Status, result, "issue_execution")
+	}
+	var latest state.Session
+	err = a.state.UpdateSession(target.Repo, issue.Number, func(existing *state.Session) error {
+		latest = *existing
+		if _, ok := sessionResultSupersedes(*existing, result); !ok {
+			return errSessionResultStale
+		}
+		*existing = result
+		return nil
+	})
+	switch {
+	case errors.Is(err, state.ErrSessionNotFound):
+		err = a.state.PutSession(result)
+	case errors.Is(err, errSessionResultStale):
+		reason, _ := sessionResultSupersedes(latest, result)
+		a.logIgnoredSessionResult(reason, target.Repo, issue.Number, result, latest)
+		return
+	}
+	if err != nil {
+		a.logger.Error("session result save failed", "repo", target.Repo, "issue", issue.Number, "err", err)
+		return
+	}
+	a.syncSessionIssueLabelsBestEffort(ctx, &result, nil, nil, nil)
+	a.logger.Info("scan repo session finished", "repo", target.Repo, "issue", issue.Number, "status", result.Status)
+
+	// Run deterministic package hardening on the worktree after a
+	// successful session push, using the local diff rather than
+	// querying GitHub for all open PRs.
+	if result.Status == state.SessionStatusSuccess {
+		a.runPostPushPackageHardening(ctx, result)
+	}
+}
+
+func (a *App) logIgnoredSessionResult(reason string, repo string, issue int, result state.Session, existing state.Session) {
+	switch reason {
+	case "superseded":
+		a.logger.Info("session result ignored for superseded run", "repo", repo, "issue", issue, "started_at", result.StartedAt, "latest_started_at", existing.StartedAt)
+	default:
+		a.logger.Info("session result ignored after cleanup", "repo", repo, "issue", issue, "source", existing.LastCleanupSource)
+	}
 }
 
 func (a *App) launchPullRequestMaintenance(ctx context.Context, session state.Session, seededIssueDetails scanIssueDetailsCacheEntry) {
@@ -2925,48 +2970,39 @@ func (a *App) launchPullRequestMaintenance(ctx context.Context, session state.Se
 		result := session
 		pr, issueDetails, _ := a.runPullRequestMaintenance(ctx, &result, issueCache)
 
-		a.sessionMu.Lock()
-		sessions, loadErr := a.state.LoadSessions()
-		if loadErr != nil {
-			a.sessionMu.Unlock()
-			a.logger.Error("pr maintenance result load failed", "repo", session.Repo, "issue", session.IssueNumber, "err", loadErr)
-			return
-		}
-
-		latest, ok := findSession(sessions, session.Repo, session.IssueNumber)
-		if !ok {
-			a.sessionMu.Unlock()
-			return
-		}
-		if !latest.PullRequestMaintenanceInFlight {
-			a.sessionMu.Unlock()
-			return
-		}
-		if latest.Status != state.SessionStatusSuccess || latest.CleanupCompletedAt != "" || latest.MonitoringStoppedAt != "" {
-			latest.PullRequestMaintenanceInFlight = false
-			latest.UpdatedAt = a.clock().Format(time.RFC3339)
-			sessions = upsertSession(sessions, latest)
-			if saveErr := a.state.SaveSessions(sessions); saveErr != nil {
-				a.sessionMu.Unlock()
-				a.logger.Error("pr maintenance result save failed", "repo", session.Repo, "issue", session.IssueNumber, "err", saveErr)
-				return
-			}
-			a.sessionMu.Unlock()
-			return
-		}
-
-		result.PullRequestMaintenanceInFlight = false
-		result.NextCommentPollAt = latest.NextCommentPollAt
 		cachedResult := []state.Session{result}
 		a.persistScanIssueDetailsCache(cachedResult, issueCache)
 		result = cachedResult[0]
-		sessions = upsertSession(sessions, result)
-		if saveErr := a.state.SaveSessions(sessions); saveErr != nil {
-			a.sessionMu.Unlock()
+
+		// One transaction decides whether the maintenance result still
+		// applies and writes it; nothing else waits on a scan in progress.
+		applied := false
+		errStale := errors.New("maintenance result stale")
+		saveErr := a.state.UpdateSession(session.Repo, session.IssueNumber, func(latest *state.Session) error {
+			if !latest.PullRequestMaintenanceInFlight {
+				return errStale
+			}
+			if latest.Status != state.SessionStatusSuccess || latest.CleanupCompletedAt != "" || latest.MonitoringStoppedAt != "" {
+				latest.PullRequestMaintenanceInFlight = false
+				latest.UpdatedAt = a.clock().Format(time.RFC3339)
+				return nil
+			}
+			result.PullRequestMaintenanceInFlight = false
+			result.NextCommentPollAt = latest.NextCommentPollAt
+			*latest = result
+			applied = true
+			return nil
+		})
+		if errors.Is(saveErr, errStale) || errors.Is(saveErr, state.ErrSessionNotFound) {
+			return
+		}
+		if saveErr != nil {
 			a.logger.Error("pr maintenance result save failed", "repo", session.Repo, "issue", session.IssueNumber, "err", saveErr)
 			return
 		}
-		a.sessionMu.Unlock()
+		if !applied {
+			return
+		}
 
 		if issueDetails == nil {
 			issueDetails = issueCache[sessionKey(result.Repo, result.IssueNumber)].details
@@ -3545,7 +3581,7 @@ func (a *App) handleFailingPullRequestChecks(ctx context.Context, session *state
 }
 
 func (a *App) listBlockedSessions() error {
-	sessions, err := a.state.LoadSessions()
+	sessions, err := a.state.ListSessions()
 	if err != nil {
 		return err
 	}
@@ -3578,7 +3614,7 @@ func (a *App) listBlockedSessions() error {
 }
 
 func (a *App) listRunningSessions() error {
-	sessions, err := a.state.LoadSessions()
+	sessions, err := a.state.ListSessions()
 	if err != nil {
 		return err
 	}
@@ -3950,7 +3986,7 @@ func (a *App) ResumeAllBlocked(ctx context.Context) error {
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
 	}
-	sessions, err := a.state.LoadSessions()
+	snap, sessions, err := a.state.LoadSessionSnapshot(false)
 	if err != nil {
 		return err
 	}
@@ -3964,7 +4000,7 @@ func (a *App) ResumeAllBlocked(ctx context.Context) error {
 		}
 		resumed++
 	}
-	if err := a.state.SaveSessions(sessions); err != nil {
+	if err := a.commitSessionsStrict(snap, sessions); err != nil {
 		return err
 	}
 	for _, session := range sessions {
@@ -3993,10 +4029,7 @@ func (a *App) CleanupSession(ctx context.Context, repo string, issue int, source
 		return err
 	}
 
-	a.sessionMu.Lock()
-	defer a.sessionMu.Unlock()
-
-	sessions, err := a.state.LoadSessions()
+	snap, sessions, err := a.state.LoadSessionSnapshot(false)
 	if err != nil {
 		return err
 	}
@@ -4028,7 +4061,7 @@ func (a *App) CleanupSession(ctx context.Context, repo string, issue int, source
 		}
 		return fmt.Errorf("running session not found for %s issue #%d", repo, issue)
 	}
-	if err := a.state.SaveSessions(sessions); err != nil {
+	if err := a.commitSessionsStrict(snap, sessions); err != nil {
 		return err
 	}
 	if cleanedSession != nil {
@@ -4116,7 +4149,7 @@ func (a *App) ResumeSession(ctx context.Context, repo string, issue int, source 
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
 	}
-	sessions, err := a.state.LoadSessions()
+	snap, sessions, err := a.state.LoadSessionSnapshot(false)
 	if err != nil {
 		return err
 	}
@@ -4143,7 +4176,7 @@ func (a *App) ResumeSession(ctx context.Context, repo string, issue int, source 
 		}
 		return fmt.Errorf("blocked session not found for %s issue #%d", repo, issue)
 	}
-	if err := a.state.SaveSessions(sessions); err != nil {
+	if err := a.commitSessionsStrict(snap, sessions); err != nil {
 		return err
 	}
 	for _, session := range sessions {
@@ -4161,9 +4194,6 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 		return err
 	}
 
-	a.sessionMu.Lock()
-	defer a.sessionMu.Unlock()
-
 	targets, err := a.state.LoadWatchTargets()
 	if err != nil {
 		return err
@@ -4179,7 +4209,7 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 	target.MaxParallel = configuredMaxParallel(target.MaxParallel)
 	target.Classification = repo.Classify(target.Path)
 
-	sessions, err := a.state.LoadSessions()
+	snap, sessions, err := a.state.LoadSessionSnapshot(false)
 	if err != nil {
 		return err
 	}
@@ -4270,7 +4300,7 @@ func (a *App) RedispatchSession(ctx context.Context, repoSlug string, issue int,
 		carryBlockedCommentState(&session, previous)
 	}
 	sessions = upsertSession(sessions, session)
-	if err := a.state.SaveSessions(sessions); err != nil {
+	if err := a.commitSessionsStrict(snap, sessions); err != nil {
 		return err
 	}
 	a.emitSessionTransition("", session, source)
@@ -4290,9 +4320,6 @@ func (a *App) RecreateSession(ctx context.Context, repoSlug string, issue int, s
 	if err := a.state.EnsureLayout(); err != nil {
 		return err
 	}
-
-	a.sessionMu.Lock()
-	defer a.sessionMu.Unlock()
 
 	targets, err := a.state.LoadWatchTargets()
 	if err != nil {
@@ -4344,7 +4371,7 @@ func (a *App) RecreateSession(ctx context.Context, repoSlug string, issue int, s
 	}
 
 	// Clean up the PR, remote branch, and local session artifacts.
-	sessions, err := a.state.LoadSessions()
+	snap, sessions, err := a.state.LoadSessionSnapshot(false)
 	if err != nil {
 		return err
 	}
@@ -4397,7 +4424,7 @@ func (a *App) RecreateSession(ctx context.Context, repoSlug string, issue int, s
 		break
 	}
 
-	if err := a.state.SaveSessions(sessions); err != nil {
+	if err := a.commitSessionsStrict(snap, sessions); err != nil {
 		return err
 	}
 
@@ -4437,10 +4464,7 @@ func (a *App) cleanupSessions(ctx context.Context, source string, successFormat 
 		return err
 	}
 
-	a.sessionMu.Lock()
-	defer a.sessionMu.Unlock()
-
-	sessions, err := a.state.LoadSessions()
+	snap, sessions, err := a.state.LoadSessionSnapshot(false)
 	if err != nil {
 		return err
 	}
@@ -4464,7 +4488,7 @@ func (a *App) cleanupSessions(ctx context.Context, source string, successFormat 
 		}
 		return errors.New("no running sessions found")
 	}
-	if err := a.state.SaveSessions(sessions); err != nil {
+	if err := a.commitSessionsStrict(snap, sessions); err != nil {
 		return err
 	}
 	for _, session := range sessions {
@@ -5628,7 +5652,7 @@ func clearBlockedState(session *state.Session, now time.Time, source string) {
 	session.LastDispatchFailureCommentedAt = ""
 }
 
-func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, target state.WatchTarget, sessions []state.Session, issueCache scanIssueDetailsCache) ([]state.Session, int, error) {
+func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, target state.WatchTarget, snap *state.SessionSnapshot, sessions []state.Session, issueCache scanIssueDetailsCache) ([]state.Session, int, error) {
 	started := 0
 	needsSave := false
 	for i := range sessions {
@@ -5731,9 +5755,11 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 		}
 
 		sessions = upsertSession(sessions, updated)
-		if err := a.state.SaveSessions(sessions); err != nil {
-			return sessions, started, err
+		committed, commitErr := a.commitSessions(snap, sessions, "iteration")
+		if commitErr != nil {
+			return sessions, started, commitErr
 		}
+		sessions = committed
 		needsSave = false
 		a.emitSessionTransition(previous.Status, updated, "iteration_dispatch")
 		a.syncSessionIssueLabelsBestEffort(ctx, &updated, nil, nil, issueCache)
@@ -5743,7 +5769,8 @@ func (a *App) processGitHubIterationRequestsForTarget(ctx context.Context, targe
 	if !needsSave {
 		return sessions, started, nil
 	}
-	return sessions, started, a.state.SaveSessions(sessions)
+	sessions, err := a.commitSessions(snap, sessions, "iteration")
+	return sessions, started, err
 }
 
 func sessionSupportsIteration(session state.Session) bool {
@@ -6876,6 +6903,7 @@ func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  vigilante list [--blocked | --running]")
 	fmt.Fprintln(w, "  vigilante status [--plain] [-w]")
 	fmt.Fprintln(w, "  vigilante logs [--access] [--repo <owner/name>] [--issue <n>]")
+	fmt.Fprintln(w, "  vigilante state export [--dir <path>]")
 	fmt.Fprintln(w, "  vigilante cleanup --repo <owner/name> [--issue <n>]")
 	fmt.Fprintln(w, "  vigilante cleanup --all")
 	fmt.Fprintln(w, "  vigilante redispatch --repo <owner/name> --issue <n>")
@@ -7114,6 +7142,42 @@ _vigilante() {
 
 _vigilante "$@"
 `
+}
+
+// commitSessions writes back the sessions a scan phase changed and logs any
+// session another writer changed in the meantime; those come back from the
+// store as the database has them so the scan continues from the truth.
+func (a *App) commitSessions(snap *state.SessionSnapshot, sessions []state.Session, phase string) ([]state.Session, error) {
+	if snap == nil {
+		// No baseline from the caller: compare against the database as it is
+		// now, so unchanged sessions are skipped and changed ones are written.
+		fresh, _, err := a.state.LoadSessionSnapshot(false)
+		if err != nil {
+			return sessions, err
+		}
+		snap = fresh
+	}
+	committed, conflicts, err := a.state.CommitSessions(snap, sessions)
+	if err != nil {
+		return sessions, err
+	}
+	for _, key := range conflicts {
+		a.logger.Info("session changed concurrently; local update skipped", "session", key, "phase", phase)
+	}
+	return committed, nil
+}
+
+// commitSessionsStrict is commitSessions for CLI commands, where a concurrent
+// change is an error the operator should see and retry rather than a log line.
+func (a *App) commitSessionsStrict(snap *state.SessionSnapshot, sessions []state.Session) error {
+	_, conflicts, err := a.state.CommitSessions(snap, sessions)
+	if err != nil {
+		return err
+	}
+	if len(conflicts) > 0 {
+		return fmt.Errorf("%w; re-run the command", &state.SessionConflictError{Keys: conflicts})
+	}
+	return nil
 }
 
 func upsertSession(sessions []state.Session, session state.Session) []state.Session {

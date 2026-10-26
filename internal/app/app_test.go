@@ -1176,7 +1176,7 @@ func TestProcessGitHubIterationRequestsForTargetRejectsNonAssignee(t *testing.T)
 		Path:   repoPath,
 		Repo:   "owner/repo",
 		Branch: "main",
-	}, sessions, nil)
+	}, nil, sessions, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1237,7 +1237,7 @@ func TestProcessGitHubIterationRequestsForTargetDoesNotReplayHistoricalRejectedI
 		Path:   repoPath,
 		Repo:   "owner/repo",
 		Branch: "main",
-	}, sessions, nil)
+	}, nil, sessions, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1252,7 +1252,7 @@ func TestProcessGitHubIterationRequestsForTargetDoesNotReplayHistoricalRejectedI
 		Path:   repoPath,
 		Repo:   "owner/repo",
 		Branch: "main",
-	}, updated, nil)
+	}, nil, updated, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1359,7 +1359,7 @@ func TestProcessGitHubIterationRequestsForTargetDispatchesAssigneeComment(t *tes
 		Path:   repoPath,
 		Repo:   "owner/repo",
 		Branch: "main",
-	}, sessions, nil)
+	}, nil, sessions, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1368,7 +1368,7 @@ func TestProcessGitHubIterationRequestsForTargetDispatchesAssigneeComment(t *tes
 	}
 	app.waitForSessions()
 
-	saved, err := app.state.LoadSessions()
+	saved, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1485,7 +1485,7 @@ func TestProcessGitHubIterationRequestsForTargetAcceptsNewCommentAfterStoredCurs
 		Path:   repoPath,
 		Repo:   "owner/repo",
 		Branch: "main",
-	}, sessions, nil)
+	}, nil, sessions, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1494,7 +1494,7 @@ func TestProcessGitHubIterationRequestsForTargetAcceptsNewCommentAfterStoredCurs
 	}
 	app.waitForSessions()
 
-	saved, err := app.state.LoadSessions()
+	saved, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1593,7 +1593,7 @@ func TestProcessGitHubIterationRequestsForTargetReusesExistingWorktree(t *testin
 		Path:   repoPath,
 		Repo:   "owner/repo",
 		Branch: "main",
-	}, sessions, nil)
+	}, nil, sessions, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1609,7 +1609,7 @@ func TestProcessGitHubIterationRequestsForTargetReusesExistingWorktree(t *testin
 
 	app.waitForSessions()
 
-	saved, err := app.state.LoadSessions()
+	saved, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2371,7 +2371,6 @@ func TestSetupCreatesStateLayoutAndInstallsBundledSkillsForAllProviders(t *testi
 
 	for _, path := range []string{
 		app.state.DatabasePath(),
-		filepath.Join(app.state.Root(), "sessions.json"),
 		filepath.Join(app.state.Root(), "logs"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementation, "SKILL.md"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementation, "agents", "openai.yaml"),
@@ -3044,7 +3043,7 @@ func TestListBlockedSessions(t *testing.T) {
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		Repo:                 "owner/repo",
 		IssueNumber:          44,
 		Status:               state.SessionStatusBlocked,
@@ -3089,7 +3088,7 @@ func TestListBlockedSessionsShowsProviderQuotaSummary(t *testing.T) {
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		Repo:         "owner/repo",
 		IssueNumber:  45,
 		Status:       state.SessionStatusBlocked,
@@ -3169,7 +3168,7 @@ func TestListRunningSessions(t *testing.T) {
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{
+	if err := app.state.ReplaceSessions([]state.Session{
 		{
 			Repo:         "owner/repo",
 			IssueNumber:  44,
@@ -3233,7 +3232,7 @@ func TestCleanupSessionByIssue(t *testing.T) {
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     repoPath,
 		Repo:         "owner/repo",
 		IssueNumber:  44,
@@ -3248,7 +3247,7 @@ func TestCleanupSessionByIssue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3282,7 +3281,7 @@ func TestCleanupSessionCommentsNoopForLocalCLIRequest(t *testing.T) {
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions(nil); err != nil {
+	if err := app.state.ReplaceSessions(nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3320,7 +3319,7 @@ func TestCleanupSessionIgnoresLocalCommentFailure(t *testing.T) {
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     repoPath,
 		Repo:         "owner/repo",
 		IssueNumber:  44,
@@ -3378,7 +3377,7 @@ func TestCleanupRepoRunningSessions(t *testing.T) {
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{
+	if err := app.state.ReplaceSessions([]state.Session{
 		{RepoPath: repoPath, Repo: "owner/repo", IssueNumber: 1, Status: state.SessionStatusRunning, Branch: "vigilante/issue-1", WorktreePath: worktreePath1},
 		{RepoPath: repoPath, Repo: "owner/repo", IssueNumber: 2, Status: state.SessionStatusRunning, Branch: "vigilante/issue-2", WorktreePath: worktreePath2},
 		{RepoPath: repoPath, Repo: "owner/other", IssueNumber: 3, Status: state.SessionStatusRunning, Branch: "vigilante/issue-3", WorktreePath: filepath.Join(repoPath, ".worktrees", "vigilante", "issue-3")},
@@ -3390,7 +3389,7 @@ func TestCleanupRepoRunningSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3435,7 +3434,7 @@ func TestCleanupAllRunningSessions(t *testing.T) {
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{
+	if err := app.state.ReplaceSessions([]state.Session{
 		{RepoPath: repoPath, Repo: "owner/repo", IssueNumber: 1, Status: state.SessionStatusRunning, Branch: "vigilante/issue-1", WorktreePath: worktreePath1},
 		{RepoPath: repoPath, Repo: "owner/other", IssueNumber: 2, Status: state.SessionStatusRunning, Branch: "vigilante/issue-2", WorktreePath: worktreePath2},
 	}); err != nil {
@@ -3446,7 +3445,7 @@ func TestCleanupAllRunningSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3502,7 +3501,7 @@ func TestRedispatchSessionRunningIssue(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     repoPath,
 		Repo:         "owner/repo",
 		Provider:     "codex",
@@ -3521,7 +3520,7 @@ func TestRedispatchSessionRunningIssue(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3577,7 +3576,7 @@ func TestRedispatchSessionCleansBlockedIssueBranchCandidates(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     repoPath,
 		Repo:         "owner/repo",
 		Provider:     "codex",
@@ -3596,7 +3595,7 @@ func TestRedispatchSessionCleansBlockedIssueBranchCandidates(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3651,7 +3650,7 @@ func TestRedispatchSessionFailsWhenCleanupFails(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "nicobistolfi", Provider: "codex"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     repoPath,
 		Repo:         "owner/repo",
 		IssueNumber:  44,
@@ -3743,7 +3742,7 @@ func TestScanOnceProcessesGitHubCommentResumeRequest(t *testing.T) {
 			if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
 				t.Fatal(err)
 			}
-			if err := app.state.SaveSessions([]state.Session{{
+			if err := app.state.ReplaceSessions([]state.Session{{
 				RepoPath:        repoPath,
 				Provider:        "codex",
 				Model:           model,
@@ -3771,7 +3770,7 @@ func TestScanOnceProcessesGitHubCommentResumeRequest(t *testing.T) {
 			}
 			app.waitForSessions()
 
-			sessions, err := app.state.LoadSessions()
+			sessions, err := app.state.ListSessions()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3821,7 +3820,7 @@ func TestResumeSessionCommentsSuccessForLocalCLIRequest(t *testing.T) {
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:        repoPath,
 		Repo:            "owner/repo",
 		IssueNumber:     1,
@@ -3877,7 +3876,7 @@ func TestResumeSessionPreservesCodexModelAfterRestart(t *testing.T) {
 			if err := app.state.EnsureLayout(); err != nil {
 				t.Fatal(err)
 			}
-			if err := app.state.SaveSessions([]state.Session{{
+			if err := app.state.ReplaceSessions([]state.Session{{
 				RepoPath:        repoPath,
 				Repo:            "owner/repo",
 				IssueNumber:     1,
@@ -3905,7 +3904,7 @@ func TestResumeSessionPreservesCodexModelAfterRestart(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			loaded, err := app.state.LoadSessions()
+			loaded, err := app.state.ListSessions()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -3936,7 +3935,7 @@ func TestResumeSessionCommentsNoopForLocalCLIRequest(t *testing.T) {
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions(nil); err != nil {
+	if err := app.state.ReplaceSessions(nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3989,7 +3988,7 @@ func TestResumeSessionCommentsFailureForLocalCLIRequest(t *testing.T) {
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{session}); err != nil {
+	if err := app.state.ReplaceSessions([]state.Session{session}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -4027,7 +4026,7 @@ func TestResumeSessionIgnoresLocalCommentFailure(t *testing.T) {
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:        repoPath,
 		Repo:            "owner/repo",
 		IssueNumber:     1,
@@ -4111,7 +4110,7 @@ func TestScanOnceLogsResumeCommentPollingSummaryInsteadOfRawCommand(t *testing.T
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:        repoPath,
 		Repo:            "owner/repo",
 		IssueNumber:     1,
@@ -4218,7 +4217,7 @@ func TestScanOncePostsDiagnosticCommentWhenGitHubCommentResumeFails(t *testing.T
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:        repoPath,
 		Repo:            "owner/repo",
 		IssueNumber:     1,
@@ -4243,7 +4242,7 @@ func TestScanOncePostsDiagnosticCommentWhenGitHubCommentResumeFails(t *testing.T
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4729,7 +4728,7 @@ func TestScanOnceProcessesGitHubCommentCleanupRequest(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     repoPath,
 		Repo:         "owner/repo",
 		IssueNumber:  1,
@@ -4744,7 +4743,7 @@ func TestScanOnceProcessesGitHubCommentCleanupRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4807,7 +4806,7 @@ func TestScanOnceLogsCleanupCommentPollingSummaryInsteadOfRawCommand(t *testing.
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     repoPath,
 		Repo:         "owner/repo",
 		IssueNumber:  1,
@@ -4871,7 +4870,7 @@ func TestScanOnceLogsCommentPollingFailuresWithPurpose(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:        repoPath,
 		Repo:            "owner/repo",
 		IssueNumber:     1,
@@ -4943,7 +4942,7 @@ func TestScanOnceReportsNoMatchingRunningSessionForGitHubCleanupRequest(t *testi
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     "/tmp/repo",
 		Repo:         "owner/repo",
 		IssueNumber:  1,
@@ -4958,7 +4957,7 @@ func TestScanOnceReportsNoMatchingRunningSessionForGitHubCleanupRequest(t *testi
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4995,7 +4994,7 @@ func TestScanOnceSkipsClosedSessionsForCleanupCommentPolling(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:           "/tmp/repo",
 		Repo:               "owner/repo",
 		IssueNumber:        1,
@@ -5011,7 +5010,7 @@ func TestScanOnceSkipsClosedSessionsForCleanupCommentPolling(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5422,7 +5421,7 @@ func TestScanOnceKeepsNonMaintenanceSessionBlockedAfterRepeatedInactivityTimeout
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     repoPath,
 		Repo:         "owner/repo",
 		IssueNumber:  1,
@@ -5450,7 +5449,7 @@ func TestScanOnceKeepsNonMaintenanceSessionBlockedAfterRepeatedInactivityTimeout
 		}
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5515,7 +5514,7 @@ func TestScanOnceStillCleansUpInactiveMaintenanceSession(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     repoPath,
 		Repo:         "owner/repo",
 		IssueNumber:  1,
@@ -5539,7 +5538,7 @@ func TestScanOnceStillCleansUpInactiveMaintenanceSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5615,7 +5614,7 @@ func TestScanOnceUsesOverriddenBlockedSessionInactivityTimeout(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     repoPath,
 		Repo:         "owner/repo",
 		IssueNumber:  1,
@@ -5635,7 +5634,7 @@ func TestScanOnceUsesOverriddenBlockedSessionInactivityTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5695,7 +5694,7 @@ func TestScanOnceLeavesBlockedSessionVisibleWhenInactivityCleanupFails(t *testin
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     repoPath,
 		Repo:         "owner/repo",
 		IssueNumber:  1,
@@ -5715,7 +5714,7 @@ func TestScanOnceLeavesBlockedSessionVisibleWhenInactivityCleanupFails(t *testin
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5800,7 +5799,7 @@ func TestScanOnceAutoRecoversStaleBlockedMaintenanceSession(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:          repoPath,
 		Repo:              "owner/repo",
 		IssueNumber:       1,
@@ -5828,7 +5827,7 @@ func TestScanOnceAutoRecoversStaleBlockedMaintenanceSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5898,7 +5897,7 @@ func TestScanOnceSelectsEligibleIssueAndPersistsSession(t *testing.T) {
 	if got := app.stdout.(*bytes.Buffer).String(); !strings.Contains(got, "repo: owner/repo started issue #1 in "+worktreePath) || !strings.Contains(got, "scanned 1 watch target(s), started 1 issue session(s)") {
 		t.Fatalf("unexpected output: %s", got)
 	}
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -5939,7 +5938,7 @@ func TestScanOncePausesWhenGitHubCoreRateLimitIsLowAndCommentsActiveIssues(t *te
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     "/tmp/repo",
 		Repo:         "owner/repo",
 		IssueNumber:  7,
@@ -5959,7 +5958,7 @@ func TestScanOncePausesWhenGitHubCoreRateLimitIsLowAndCommentsActiveIssues(t *te
 	if got := stdout.String(); !strings.Contains(got, "scan paused: GitHub REST core quota is below the low-quota threshold") {
 		t.Fatalf("unexpected stdout: %s", got)
 	}
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6002,7 +6001,7 @@ func TestScanOnceSuppressesDuplicateGitHubLowQuotaCommentsWithinSameResetWindow(
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:               "/tmp/repo",
 		Repo:                   "owner/repo",
 		IssueNumber:            7,
@@ -6144,7 +6143,7 @@ func TestScanOnceClearsExpiredSessionResumeAfterWhenQuotaRecovered(t *testing.T)
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     "/tmp/repo",
 		Repo:         "owner/repo",
 		IssueNumber:  7,
@@ -6162,7 +6161,7 @@ func TestScanOnceClearsExpiredSessionResumeAfterWhenQuotaRecovered(t *testing.T)
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6235,7 +6234,7 @@ func TestScanOnceReusesExistingRemoteIssueBranchAndPersistsDiffContext(t *testin
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6324,17 +6323,23 @@ func TestRerunIncompleteSessionsPostsResumedLaunchComment(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	app.sessionMu.Lock()
-	sessions, err := app.rerunIncompleteSessions(context.Background(), []state.Session{previous}, nil)
+	// Mirror the scan loop: read a snapshot, run the phase, commit through
+	// the snapshot. If the relaunched session finishes first its result wins
+	// the compare-and-swap and the phase's "running" copy is skipped.
+	if err := app.state.ReplaceSessions([]state.Session{previous}); err != nil {
+		t.Fatal(err)
+	}
+	snap, loaded, err := app.state.LoadSessionSnapshot(false)
 	if err != nil {
-		app.sessionMu.Unlock()
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions(sessions); err != nil {
-		app.sessionMu.Unlock()
+	sessions, err := app.rerunIncompleteSessions(context.Background(), loaded, nil)
+	if err != nil {
 		t.Fatal(err)
 	}
-	app.sessionMu.Unlock()
+	if _, err := app.commitSessions(snap, sessions, "test"); err != nil {
+		t.Fatal(err)
+	}
 	app.waitForSessions()
 
 	if sessions[0].ContinuationSource != "incomplete_rerun" {
@@ -6346,7 +6351,7 @@ func TestRerunIncompleteSessionsPostsResumedLaunchComment(t *testing.T) {
 	if posted != 1 {
 		t.Fatalf("expected exactly one resumed launch comment, got %d (counts: %#v)", posted, runner.counts)
 	}
-	stored, err := app.state.LoadSessions()
+	stored, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6486,7 +6491,7 @@ func TestScanOnceBlocksIssueWhenReusedRemoteBranchDiffAnalysisFails(t *testing.T
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6537,7 +6542,7 @@ func TestScanOnceUsesProviderLabelOverrideForSession(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6590,7 +6595,7 @@ func TestScanOnceCapturesCodexModel(t *testing.T) {
 			}
 			app.waitForSessions()
 
-			sessions, err := app.state.LoadSessions()
+			sessions, err := app.state.ListSessions()
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -6630,7 +6635,7 @@ func TestScanOncePrintsNoEligibleIssues(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main", Assignee: "me", Labels: []string{"to-do"}}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		Repo:            "owner/repo",
 		IssueNumber:     1,
 		Status:          state.SessionStatusRunning,
@@ -6719,7 +6724,7 @@ func TestScanOnceMaintainedIssueDoesNotConsumeOnlyDispatchSlot(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me", Labels: []string{"to-do"}, MaxParallel: 1}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     repoPath,
 		Repo:         "owner/repo",
 		IssueNumber:  1,
@@ -6741,7 +6746,7 @@ func TestScanOnceMaintainedIssueDoesNotConsumeOnlyDispatchSlot(t *testing.T) {
 		t.Fatalf("unexpected output: %s", got)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6809,7 +6814,7 @@ func TestScanOnceLongRunningPRMaintenanceDoesNotBlockFreshScans(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me", Labels: []string{"to-do"}, MaxParallel: 1}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     repoPath,
 		Repo:         "owner/repo",
 		IssueNumber:  1,
@@ -6844,7 +6849,7 @@ func TestScanOnceLongRunningPRMaintenanceDoesNotBlockFreshScans(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		sessions, err := app.state.LoadSessions()
+		sessions, err := app.state.ListSessions()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -6865,7 +6870,7 @@ func TestScanOnceLongRunningPRMaintenanceDoesNotBlockFreshScans(t *testing.T) {
 		t.Fatalf("expected watch target last_scan_at to advance during maintenance, got %#v", targets)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6882,7 +6887,7 @@ func TestScanOnceLongRunningPRMaintenanceDoesNotBlockFreshScans(t *testing.T) {
 	close(runner.release)
 	app.waitForSessions()
 
-	sessions, err = app.state.LoadSessions()
+	sessions, err = app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6933,7 +6938,7 @@ func TestScanOnceWithMaxParallelOnePreservesSerialBehavior(t *testing.T) {
 	if got := stdout.String(); !strings.Contains(got, "repo: owner/repo started issue #1 in "+worktreePath1) || strings.Contains(got, "issue #2") {
 		t.Fatalf("unexpected output: %s", got)
 	}
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -6992,7 +6997,7 @@ func TestScanOnceWithUnlimitedMaxParallelStartsAllEligibleIssues(t *testing.T) {
 	if !strings.Contains(got, "repo: owner/repo started issue #1 in "+worktreePath1) || !strings.Contains(got, "repo: owner/repo started issue #2 in "+worktreePath2) || !strings.Contains(got, "repo: owner/repo started issue #3 in "+worktreePath3) {
 		t.Fatalf("unexpected output: %s", got)
 	}
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7051,7 +7056,7 @@ func TestScanOnceStartsMultipleIssuesUpToConfiguredLimit(t *testing.T) {
 	if !strings.Contains(got, "repo: owner/repo started issue #1 in "+worktreePath1) || !strings.Contains(got, "repo: owner/repo started issue #2 in "+worktreePath2) || strings.Contains(got, "issue #3") {
 		t.Fatalf("unexpected output: %s", got)
 	}
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7094,7 +7099,7 @@ func TestScanOnceDoesNotExceedConfiguredLimit(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me", MaxParallel: 2}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:        repoPath,
 		Repo:            "owner/repo",
 		IssueNumber:     1,
@@ -7118,7 +7123,7 @@ func TestScanOnceDoesNotExceedConfiguredLimit(t *testing.T) {
 	if !strings.Contains(got, "repo: owner/repo started issue #2 in "+worktreePath2) || strings.Contains(got, "issue #3") {
 		t.Fatalf("unexpected output: %s", got)
 	}
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7190,7 +7195,7 @@ func TestScanOnceBlocksFailedIssueDispatchAndContinuesToNextIssue(t *testing.T) 
 		t.Fatalf("expected second issue to start, got: %s", got)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7246,7 +7251,7 @@ func TestScanOnceBlocksIssueWhenBaseRefreshFails(t *testing.T) {
 		t.Fatalf("expected blocked output, got: %s", got)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7311,7 +7316,7 @@ func TestScanOnceCommentsOnProviderStartupFailure(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7366,7 +7371,7 @@ func TestScanOnceSuppressesDuplicateDispatchFailureComment(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main", Assignee: "me"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{session}); err != nil {
+	if err := app.state.ReplaceSessions([]state.Session{session}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -7374,7 +7379,7 @@ func TestScanOnceSuppressesDuplicateDispatchFailureComment(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7441,7 +7446,7 @@ func TestScanOnceEnforcesLimitsIndependentlyAcrossRepositories(t *testing.T) {
 	if !strings.Contains(got, "repo: owner/repo-a started issue #1 in "+worktreeA1) || !strings.Contains(got, "repo: owner/repo-a started issue #2 in "+worktreeA2) || !strings.Contains(got, "repo: owner/repo-b started issue #10 in "+worktreeB10) || strings.Contains(got, "issue #11") {
 		t.Fatalf("unexpected output: %s", got)
 	}
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7502,7 +7507,7 @@ func TestScanOnceContinuesWhenOneRepositoryScanFails(t *testing.T) {
 		t.Fatalf("expected repo-b issue to start, got: %s", got)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7539,7 +7544,7 @@ func TestScanOnceCleansUpMergedIssueSession(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     "/tmp/repo",
 		Repo:         "owner/repo",
 		IssueNumber:  1,
@@ -7555,7 +7560,7 @@ func TestScanOnceCleansUpMergedIssueSession(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7627,7 +7632,7 @@ func TestScanOnceMaintainsOpenPullRequest(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     "/tmp/repo",
 		Repo:         "owner/repo",
 		IssueNumber:  1,
@@ -7645,7 +7650,7 @@ func TestScanOnceMaintainsOpenPullRequest(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7703,7 +7708,7 @@ func TestScanOnceCleansUpClosedPullRequestSession(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     "/tmp/repo",
 		Repo:         "owner/repo",
 		IssueNumber:  1,
@@ -7719,7 +7724,7 @@ func TestScanOnceCleansUpClosedPullRequestSession(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7767,7 +7772,7 @@ func TestScanOnceCleansUpClosedIssueSession(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     "/tmp/repo",
 		Repo:         "owner/repo",
 		IssueNumber:  1,
@@ -7783,7 +7788,7 @@ func TestScanOnceCleansUpClosedIssueSession(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7924,13 +7929,13 @@ func TestCleanupSessionRetriesCappedAutomaticCleanup(t *testing.T) {
 	if err := app.state.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{RepoPath: repoPath, Repo: "owner/repo", IssueNumber: 44, Branch: "vigilante/issue-44", WorktreePath: worktreePath, Status: state.SessionStatusClosed, BlockedStage: "automatic_worktree_cleanup", BlockedReason: state.BlockedReason{Kind: "dirty_worktree"}, CleanupAttempts: maxAutomaticCleanupAttempts, CleanupError: "corrupt worktree gitdir"}}); err != nil {
+	if err := app.state.ReplaceSessions([]state.Session{{RepoPath: repoPath, Repo: "owner/repo", IssueNumber: 44, Branch: "vigilante/issue-44", WorktreePath: worktreePath, Status: state.SessionStatusClosed, BlockedStage: "automatic_worktree_cleanup", BlockedReason: state.BlockedReason{Kind: "dirty_worktree"}, CleanupAttempts: maxAutomaticCleanupAttempts, CleanupError: "corrupt worktree gitdir"}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := app.CleanupSession(context.Background(), "owner/repo", 44, "cli"); err != nil {
 		t.Fatal(err)
 	}
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -7963,7 +7968,7 @@ func TestScanOnceKeepsSuccessStatusForOpenIssue(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     "/tmp/repo",
 		Repo:         "owner/repo",
 		IssueNumber:  1,
@@ -7979,7 +7984,7 @@ func TestScanOnceKeepsSuccessStatusForOpenIssue(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8017,7 +8022,7 @@ func TestScanOnceDoesNotMarkClosedOnCleanupFailure(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     "/tmp/repo",
 		Repo:         "owner/repo",
 		IssueNumber:  1,
@@ -8033,7 +8038,7 @@ func TestScanOnceDoesNotMarkClosedOnCleanupFailure(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8072,7 +8077,7 @@ func TestScanOncePRMergeAloneDoesNotTransitionToClosed(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:            "/tmp/repo",
 		Repo:                "owner/repo",
 		IssueNumber:         1,
@@ -8090,7 +8095,7 @@ func TestScanOncePRMergeAloneDoesNotTransitionToClosed(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8126,7 +8131,7 @@ func TestScanOnceDoesNotCleanUpOpenIssueSessionWithoutPullRequest(t *testing.T) 
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     "/tmp/repo",
 		Repo:         "owner/repo",
 		IssueNumber:  1,
@@ -8142,7 +8147,7 @@ func TestScanOnceDoesNotCleanUpOpenIssueSessionWithoutPullRequest(t *testing.T) 
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8194,7 +8199,7 @@ func TestScanOnceStopsMonitoringDeletedBlockedIssue(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     "/tmp/repo",
 		Repo:         "owner/repo",
 		IssueNumber:  1,
@@ -8223,7 +8228,7 @@ func TestScanOnceStopsMonitoringDeletedBlockedIssue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8265,7 +8270,7 @@ func TestScanOnceReusesCachedIssueDetailsAcrossRestart(t *testing.T) {
 	if err := app1.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app1.state.SaveSessions([]state.Session{{
+	if err := app1.state.ReplaceSessions([]state.Session{{
 		RepoPath:     "/tmp/repo",
 		Repo:         "owner/repo",
 		IssueNumber:  1,
@@ -8294,7 +8299,7 @@ func TestScanOnceReusesCachedIssueDetailsAcrossRestart(t *testing.T) {
 		t.Fatalf("expected initial issue-details fetch, got %d", got)
 	}
 
-	saved, err := app1.state.LoadSessions()
+	saved, err := app1.state.ListSessionsWithIssueCache()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8350,7 +8355,7 @@ func TestScanOnceDelaysRecentSuccessfulPullRequestPolling(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:             "/tmp/repo",
 		Repo:                 "owner/repo",
 		IssueNumber:          1,
@@ -8371,7 +8376,7 @@ func TestScanOnceDelaysRecentSuccessfulPullRequestPolling(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8400,7 +8405,7 @@ func TestScanOnceAutoSquashMergesLabeledPullRequestAfterChecksPass(t *testing.T)
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8429,7 +8434,7 @@ func TestScanOnceAutoSquashMergesPullRequestWithVigilanteAutomergeLabel(t *testi
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8456,7 +8461,7 @@ func TestScanOnceAutoSquashMergesWhenIssueHasVigilanteAutomergeLabel(t *testing.
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8500,7 +8505,7 @@ func TestScanOnceReusesIssueDetailsAcrossMaintenanceAndLabelSync(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     "/tmp/repo",
 		Repo:         "owner/repo",
 		IssueNumber:  1,
@@ -8552,7 +8557,7 @@ func TestScanOnceRefreshesCachedIssueDetailsAfterTTLForClosedIssueCleanup(t *tes
 	if err := app1.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app1.state.SaveSessions([]state.Session{{
+	if err := app1.state.ReplaceSessions([]state.Session{{
 		RepoPath:     "/tmp/repo",
 		Repo:         "owner/repo",
 		IssueNumber:  1,
@@ -8602,7 +8607,7 @@ func TestScanOnceRefreshesCachedIssueDetailsAfterTTLForClosedIssueCleanup(t *tes
 		t.Fatalf("expected a refreshed issue-details fetch after TTL expiry, got %d", got)
 	}
 
-	sessions, err := app2.state.LoadSessions()
+	sessions, err := app2.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8627,7 +8632,7 @@ func TestScanOnceAutomergeWaitsForPendingChecks(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8652,7 +8657,7 @@ func TestScanOnceWaitsWhenReplacementCheckRunIsStillInProgress(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8704,7 +8709,7 @@ func TestScanOnceFailingChecksTriggerCIRemediation(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8742,13 +8747,13 @@ func TestScanOnceRepeatedIdenticalFailingChecksAreDeduplicated(t *testing.T) {
 		"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
 	})
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
 	sessions[0].LastCIRemediationFingerprint = ciFailureFingerprint(31, "", []ghcli.StatusCheckRoll{{Context: "test", State: "COMPLETED", Conclusion: "FAILURE"}})
 	sessions[0].LastCIRemediationAttemptedAt = app.clock().Format(time.RFC3339)
-	if err := app.state.SaveSessions(sessions); err != nil {
+	if err := app.state.ReplaceSessions(sessions); err != nil {
 		t.Fatal(err)
 	}
 
@@ -8757,7 +8762,7 @@ func TestScanOnceRepeatedIdenticalFailingChecksAreDeduplicated(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err = app.state.LoadSessions()
+	sessions, err = app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8846,7 +8851,7 @@ func TestScanOnceAutomergeWaitsForMergeabilityConstraints(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8871,7 +8876,7 @@ func TestScanOnceDoesNotAutomergeUnlabeledPullRequest(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8897,7 +8902,7 @@ func TestScanOnceAutomergeBlockedByPendingIterationComment(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8935,7 +8940,7 @@ func TestScanOnceAutomergeBlockedByIterationInProgress(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:            "/tmp/repo",
 		Repo:                "owner/repo",
 		IssueNumber:         1,
@@ -8954,7 +8959,7 @@ func TestScanOnceAutomergeBlockedByIterationInProgress(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -8980,7 +8985,7 @@ func TestScanOnceAutomergeProceedsWithNoIterationComments(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -9019,7 +9024,7 @@ func TestScanOnceAutomergeProceedsWhenIterationAlreadyClaimed(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:               "/tmp/repo",
 		Repo:                   "owner/repo",
 		IssueNumber:            1,
@@ -9039,7 +9044,7 @@ func TestScanOnceAutomergeProceedsWhenIterationAlreadyClaimed(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -9073,7 +9078,7 @@ func newPullRequestMaintenanceTestApp(t *testing.T, outputs map[string]string) (
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     "/tmp/repo",
 		Repo:         "owner/repo",
 		IssueNumber:  1,
@@ -9398,7 +9403,7 @@ func TestScanOnceMarksStaleSessionPendingAutoRestart(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: filepath.Join(home, "repo"), Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:        filepath.Join(home, "repo"),
 		Repo:            "owner/repo",
 		IssueNumber:     1,
@@ -9419,7 +9424,7 @@ func TestScanOnceMarksStaleSessionPendingAutoRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -9509,7 +9514,7 @@ func TestScanOnceAutoRestartsStaleSessionAfterDelay(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: filepath.Join(home, "repo"), Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:                     filepath.Join(home, "repo"),
 		Repo:                         "owner/repo",
 		IssueNumber:                  1,
@@ -9532,7 +9537,7 @@ func TestScanOnceAutoRestartsStaleSessionAfterDelay(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -9593,7 +9598,7 @@ func TestScanOnceStopsAutoRestartAfterAttemptLimit(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: filepath.Join(home, "repo"), Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:                     filepath.Join(home, "repo"),
 		Repo:                         "owner/repo",
 		IssueNumber:                  1,
@@ -9616,7 +9621,7 @@ func TestScanOnceStopsAutoRestartAfterAttemptLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -9684,7 +9689,7 @@ func TestScanOnceRecoversStalledSessionIntoPRMaintenance(t *testing.T) {
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: filepath.Join(home, "repo"), Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:        filepath.Join(home, "repo"),
 		Repo:            "owner/repo",
 		IssueNumber:     1,
@@ -9705,7 +9710,7 @@ func TestScanOnceRecoversStalledSessionIntoPRMaintenance(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -9756,7 +9761,7 @@ func TestScanOnceRecoversIncompleteSessionIntoPRMaintenanceWhenBranchPRExists(t 
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: repoPath, Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:          repoPath,
 		Repo:              "owner/repo",
 		IssueNumber:       1,
@@ -9776,7 +9781,7 @@ func TestScanOnceRecoversIncompleteSessionIntoPRMaintenanceWhenBranchPRExists(t 
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -9828,7 +9833,7 @@ func TestScanOnceReconcilesStaleRunningSessionAgainstClosedIssueAndMergedPullReq
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:        "/tmp/repo",
 		Repo:            "owner/repo",
 		IssueNumber:     1,
@@ -9849,7 +9854,7 @@ func TestScanOnceReconcilesStaleRunningSessionAgainstClosedIssueAndMergedPullReq
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -9897,7 +9902,7 @@ func TestScanOnceStopsMonitoringStaleRunningSessionWhenIssueIsUnavailable(t *tes
 	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:        "/tmp/repo",
 		Repo:            "owner/repo",
 		IssueNumber:     1,
@@ -9916,7 +9921,7 @@ func TestScanOnceStopsMonitoringStaleRunningSessionWhenIssueIsUnavailable(t *tes
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -9970,7 +9975,7 @@ func TestScanOnceRoutesDirtyPullRequestToConflictResolution(t *testing.T) {
 	}
 	app.waitForSessions()
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -9995,7 +10000,7 @@ func TestScanOnceSkipsDuplicateConflictResolutionDispatchWhenPRFingerprintIsUnch
 		"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
 	})
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -10012,7 +10017,7 @@ func TestScanOnceSkipsDuplicateConflictResolutionDispatchWhenPRFingerprintIsUnch
 		StatusCheckRollup: []ghcli.StatusCheckRoll{{Context: "test", State: "COMPLETED", Conclusion: "SUCCESS"}},
 	})
 	sessions[0].LastMaintenanceError = "conflict resolution dispatched for PR #31; waiting for updated branch state"
-	if err := app.state.SaveSessions(sessions); err != nil {
+	if err := app.state.ReplaceSessions(sessions); err != nil {
 		t.Fatal(err)
 	}
 
@@ -10021,7 +10026,7 @@ func TestScanOnceSkipsDuplicateConflictResolutionDispatchWhenPRFingerprintIsUnch
 	}
 	app.waitForSessions()
 
-	sessions, err = app.state.LoadSessions()
+	sessions, err = app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -10141,7 +10146,7 @@ func TestRecreateSessionSuccess(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:          repoPath,
 		Repo:              "owner/repo",
 		IssueNumber:       50,
@@ -10158,7 +10163,7 @@ func TestRecreateSessionSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -10463,7 +10468,7 @@ func TestRecreateSessionPartialCleanupErrors(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{{
+	if err := app.state.ReplaceSessions([]state.Session{{
 		RepoPath:     repoPath,
 		Repo:         "owner/repo",
 		IssueNumber:  60,
@@ -10482,7 +10487,7 @@ func TestRecreateSessionPartialCleanupErrors(t *testing.T) {
 	if !strings.Contains(stdout.String(), "partial cleanup errors") {
 		t.Fatalf("expected partial cleanup errors in output, got: %s", stdout.String())
 	}
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -10518,7 +10523,7 @@ func TestRecreateSessionNoExistingSession(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions([]state.Session{}); err != nil {
+	if err := app.state.ReplaceSessions([]state.Session{}); err != nil {
 		t.Fatal(err)
 	}
 

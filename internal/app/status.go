@@ -361,7 +361,7 @@ func (a *App) statusExpanded(ctx context.Context) error {
 	if err != nil {
 		targets = nil
 	}
-	sessions, err := a.state.LoadSessions()
+	snap, sessions, err := a.state.LoadSessionSnapshot(false)
 	if err != nil {
 		sessions = nil
 	}
@@ -388,7 +388,7 @@ func (a *App) statusExpanded(ctx context.Context) error {
 		}
 	}
 	if sessionsChanged {
-		if err := a.state.SaveSessions(sessions); err != nil {
+		if _, err := a.commitSessions(snap, sessions, "status"); err != nil {
 			a.logger.Error("status session save failed after stale-session reconciliation", "err", err)
 		}
 	}

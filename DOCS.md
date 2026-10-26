@@ -164,13 +164,13 @@ sessions every minute. A session with new comments from the sweep is processed
 in the same scan regardless of its timer. Failed sessions retire from background
 polling after `github_failed_session_poll_retention` (default **14 days**,
 measured from when the session ended) or as soon as their pull request is closed
-or merged; they stay in `sessions.json` and in `vigilante list`, and can still be
+or merged; they stay in the `sessions` table of `vigilante.db` and in `vigilante list`, and can still be
 recreated from the CLI. Retained failed sessions refresh pull request state once
 per retention window. Issue-detail lookups that fail repeatedly without an HTTP
 status (network errors, `gh` exiting without a response) back off exponentially
 after five consecutive failures instead of retrying every scan.
 
-Optional `config.json` settings (restart the daemon after changing them):
+Optional service settings. Write them to `~/.vigilante/config.json` and restart the daemon: the file is applied to the state database on the next start and renamed to `config.json.migrated`, and `vigilante state export` shows the values in effect.
 
 ```json
 {
@@ -745,12 +745,12 @@ You can also confirm the Homebrew cask will target the published release archive
 
 Initial files:
 
-- `config.json`: service-level daemon configuration
-- `vigilante.db`: SQLite database holding the configured repositories being monitored (`watch_targets` table). Read-only inspection with `sqlite3 ~/.vigilante/vigilante.db` is supported; each row's `body` column is the JSON record shown below
-- `sessions.json`: active or recent issue execution sessions
+- `vigilante.db`: SQLite database holding the watched repositories (`watch_targets`), active and past issue sessions (`sessions`, with the cached issue details split into `session_issue_cache`), the service configuration (`service_config`), and package-hardening bookkeeping (`hardening_pr_state`). Read-only inspection with `sqlite3 ~/.vigilante/vigilante.db` is supported; each row's `body` column is the JSON record. `vigilante state export [--dir <path>]` writes the same data back out as the legacy `watchlist.json`, `sessions.json`, `config.json`, and `hardening_state.json` files
+- `config.json`: optional operator input for service settings; it is imported and renamed to `config.json.migrated` on the next daemon start (the available settings are the `config.json` keys documented throughout this file)
+- `*.json.migrated`: the pre-SQLite files after their one-time import; safe to delete once you are satisfied with the upgrade
 - `logs/`: daemon and run logs, plus their rotated backups, size-capped at `log_max_total_size` (default 500MB) in total
 
-Suggested `config.json` shape:
+Suggested `config.json` shape (the same shape `vigilante state export` emits for `config`):
 
 ```json
 {
@@ -769,7 +769,7 @@ Notes:
 - A blocked session is eligible for automatic local cleanup only after there have been no qualifying user comments on the issue, no session updates, and no worktree updates for longer than the configured timeout.
 - This inactivity cleanup is conservative: it clears local blocked-session artifacts so the issue can be redispatched later, but it does not delete remote pull requests or remote branches automatically.
 - Stale running implementation sessions use a separate recovery path: after Vigilante first confirms the run is stale, it waits 20 minutes before attempting an automatic fresh restart, persists the restart attempt count in session state, and stops after 3 automatic restarts until a human intervenes.
-- When an issue looks blocked or the daemon appears unhealthy, inspect `vigilante logs` alongside `sessions.json`, `vigilante list`, `vigilante status`, and GitHub issue comments so recovery decisions use both local state and remote context.
+- When an issue looks blocked or the daemon appears unhealthy, inspect `vigilante logs` alongside `vigilante state export`, `vigilante list`, `vigilante status`, and GitHub issue comments so recovery decisions use both local state and remote context.
 - Local log evidence is size-bounded, so it does not persist indefinitely. When investigating an older failure, collect the relevant logs before continued daemon activity pushes the directory over budget and evicts them.
 
 ### Log Rotation and Disk Budget
@@ -799,7 +799,7 @@ bytes, so a missing log can be distinguished from a rotated one.
 
 Notes:
 
-- All three settings live in `~/.vigilante/config.json` and are optional.
+- All three settings are set through `~/.vigilante/config.json` (applied and consumed on the next daemon start) and are optional.
   Existing config files without them keep working and are not rewritten.
 - Sizes accept human-readable values (`"500MB"`, `"1GB"`, `"512KB"`) or a plain
   byte count. Suffixes are powers of 1024.
@@ -933,7 +933,7 @@ Vigilante monitors checkbox state only for PRs that already have a recorded hard
 
 ### Configuration
 
-The feature is controlled by the `package_hardening_enabled` field in `~/.vigilante/config.json`:
+The feature is controlled by the `package_hardening_enabled` field of the service configuration, set through `~/.vigilante/config.json`:
 
 ```json
 {
