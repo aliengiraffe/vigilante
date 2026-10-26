@@ -146,7 +146,7 @@ func TestMigrationHelpersFailOnClosedDatabase(t *testing.T) {
 	if err := applyMigration(context.Background(), conn, migrations[0]); err == nil {
 		t.Fatal("applyMigration must fail on a closed database")
 	}
-	if err := replaceWatchTargets(conn, []WatchTarget{{Path: "/repos/a", Repo: "owner/a"}}); err == nil {
+	if err := replaceWatchTargetRows(context.Background(), conn, []WatchTarget{{Path: "/repos/a", Repo: "owner/a"}}); err == nil {
 		t.Fatal("replaceWatchTargets must fail on a closed database")
 	}
 }
@@ -160,7 +160,7 @@ func TestImportLegacyWatchlistFailsWhenCountFails(t *testing.T) {
 	if err := os.WriteFile(store.legacyWatchlistPath(), []byte(`[]`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.importLegacyWatchlist(closedDatabase(t)); err == nil {
+	if err := store.importLegacyFiles(closedDatabase(t)); err == nil {
 		t.Fatal("import must fail when the target count cannot be read")
 	}
 	if _, err := os.Stat(store.legacyWatchlistPath()); err != nil {
@@ -192,7 +192,7 @@ func TestImportLegacyWatchlistFailsWhenInsertFails(t *testing.T) {
 	}
 
 	_, err := NewStore().LoadWatchTargets()
-	if err == nil || !strings.Contains(err.Error(), "import legacy watchlist") {
+	if err == nil || !strings.Contains(err.Error(), "import legacy ") {
 		t.Fatalf("expected an import failure, got %v", err)
 	}
 	if _, err := os.Stat(store.legacyWatchlistPath()); err != nil {

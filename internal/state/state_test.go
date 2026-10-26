@@ -139,11 +139,11 @@ func TestSessionStatusClosedRoundTrips(t *testing.T) {
 		{Repo: "owner/repo", Provider: "claude", Model: "opus", IssueNumber: 1, Branch: "vigilante/issue-1", Status: SessionStatusClosed},
 		{Repo: "owner/repo", IssueNumber: 2, Branch: "vigilante/issue-2", Status: SessionStatusSuccess},
 	}
-	if err := store.SaveSessions(sessions); err != nil {
+	if err := store.ReplaceSessions(sessions); err != nil {
 		t.Fatal(err)
 	}
 
-	loaded, err := store.LoadSessions()
+	loaded, err := store.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -383,20 +383,24 @@ func TestLoadWatchTargetsPreservesExplicitProvider(t *testing.T) {
 }
 
 // TestLoadSessionsBackfillsLegacyProviderAsCodex keeps in-flight sessions on
-// the agent that started them. See the LoadWatchTargets counterpart.
+// the agent that started them, on the sessions.json import path. See the
+// LoadWatchTargets counterpart.
 func TestLoadSessionsBackfillsLegacyProviderAsCodex(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 
 	store := NewStore()
+	if err := os.MkdirAll(store.Root(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.legacySessionsPath(), []byte(`[{"repo":"owner/repo","issue_number":7}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(store.sessionsPath(), []byte(`[{"repo":"owner/repo","issue_number":7}]`), 0o600); err != nil {
-		t.Fatal(err)
-	}
 
-	sessions, err := store.LoadSessions()
+	sessions, err := store.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -415,10 +419,10 @@ func TestCodexSessionModelsSurviveRestart(t *testing.T) {
 	if err := store.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SaveSessions(sessions); err != nil {
+	if err := store.ReplaceSessions(sessions); err != nil {
 		t.Fatal(err)
 	}
-	loaded, err := NewStore().LoadSessions()
+	loaded, err := NewStore().ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,8 +466,10 @@ func TestEnsureLayoutCreatesDatabaseInsteadOfWatchlistJSON(t *testing.T) {
 	if _, err := os.Stat(store.DatabasePath()); err != nil {
 		t.Fatalf("database not created: %v", err)
 	}
-	if _, err := os.Stat(store.legacyWatchlistPath()); !os.IsNotExist(err) {
-		t.Fatalf("fresh layout must not create watchlist.json, stat err=%v", err)
+	for _, legacy := range []string{store.legacyWatchlistPath(), store.legacySessionsPath(), store.legacyConfigPath(), store.legacyHardeningPath()} {
+		if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+			t.Fatalf("fresh layout must not create %s, stat err=%v", filepath.Base(legacy), err)
+		}
 	}
 	targets, err := store.LoadWatchTargets()
 	if err != nil {

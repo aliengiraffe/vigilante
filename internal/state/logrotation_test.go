@@ -106,8 +106,9 @@ func TestServiceConfigLogFieldsRoundTrip(t *testing.T) {
 	}
 }
 
-// A config file that predates this feature must keep working untouched and must
-// not have the new keys written into it just because defaults were applied.
+// A config file that predates this feature must import with defaults applied
+// in memory only, and must not have the new keys written into the migrated
+// copy just because defaults were applied.
 func TestServiceConfigWithoutLogFieldsUsesDefaults(t *testing.T) {
 	home := t.TempDir()
 	root := filepath.Join(home, ".vigilante")
@@ -133,12 +134,14 @@ func TestServiceConfigWithoutLogFieldsUsesDefaults(t *testing.T) {
 		t.Fatalf("MaxTotalSize = %d, want 500MB default", got)
 	}
 
-	raw, err := os.ReadFile(filepath.Join(root, "config.json"))
+	// The import renames the file; the migrated copy must keep the original
+	// bytes rather than gaining keys that were only defaults.
+	raw, err := os.ReadFile(filepath.Join(root, "config.json"+migratedFileSuffix))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), "log_max_total_size") {
-		t.Fatalf("loading config rewrote the file: %s", raw)
+	if string(raw) != legacy {
+		t.Fatalf("import rewrote the legacy config: %s", raw)
 	}
 }
 
@@ -246,7 +249,7 @@ func TestLiveLogPathsProtectsActiveSessionsOnly(t *testing.T) {
 	if err := store.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SaveSessions([]Session{
+	if err := store.ReplaceSessions([]Session{
 		{Repo: "owner/live", IssueNumber: 1, Status: SessionStatusRunning},
 		{Repo: "owner/blocked", IssueNumber: 2, Status: SessionStatusBlocked},
 		{Repo: "owner/done", IssueNumber: 3, Status: SessionStatusSuccess},
@@ -284,7 +287,7 @@ func TestSweepLogsKeepsRunningSessionLog(t *testing.T) {
 	if err := store.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SaveSessions([]Session{
+	if err := store.ReplaceSessions([]Session{
 		{Repo: "owner/live", IssueNumber: 1, Status: SessionStatusRunning},
 		{Repo: "owner/done", IssueNumber: 2, Status: SessionStatusSuccess},
 	}); err != nil {

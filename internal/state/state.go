@@ -369,9 +369,8 @@ type CIAttempt struct {
 	AttemptedAt string `json:"attempted_at"`
 }
 
-// Store is the handle to Vigilante's durable state under the state root.
-// Watch targets live in the SQLite database (see DatabaseFileName); the other
-// records are still JSON files alongside it.
+// Store is the handle to Vigilante's durable state under the state root: the
+// SQLite database (see DatabaseFileName) plus the logs directory.
 type Store struct {
 	root string
 	db   dbHandle
@@ -432,20 +431,15 @@ func (s *Store) OpenCodeHome() string {
 	return filepath.Join(home, ".config", "opencode")
 }
 
+// EnsureLayout creates the state root and logs directory and opens the
+// database, which applies migrations and imports any legacy JSON files, so a
+// fresh root is fully laid out on return.
 func (s *Store) EnsureLayout() error {
 	for _, dir := range []string{s.root, s.LogsDir()} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
 	}
-	if err := ensureJSONArrayFile(s.sessionsPath()); err != nil {
-		return err
-	}
-	if err := ensureJSONFile(s.serviceConfigPath(), defaultServiceConfig()); err != nil {
-		return err
-	}
-	// Opening the database creates it, applies migrations, and imports a
-	// legacy watchlist.json, so a fresh root is fully laid out on return.
 	_, err := s.database()
 	return err
 }
@@ -485,20 +479,8 @@ func sanitizeSessionLogRepoSlug(repoSlug string) string {
 	return strings.Join(sanitized, "-")
 }
 
-func (s *Store) sessionsPath() string {
-	return filepath.Join(s.root, "sessions.json")
-}
-
-func (s *Store) serviceConfigPath() string {
-	return filepath.Join(s.root, "config.json")
-}
-
 func (s *Store) scanLockPath() string {
 	return filepath.Join(s.root, "scan.lock")
-}
-
-func (s *Store) hardeningStatePath() string {
-	return filepath.Join(s.root, "hardening_state.json")
 }
 
 // HardeningPRState tracks the package hardening state for a single PR.
@@ -518,60 +500,6 @@ type HardeningState map[string]HardeningPRState
 // HardeningPRKey builds a state map key from a repo and PR number.
 func HardeningPRKey(repo string, prNumber int) string {
 	return fmt.Sprintf("%s#%d", repo, prNumber)
-}
-
-// LoadHardeningState loads the package hardening state from disk.
-// Returns an empty map if the file does not exist.
-func (s *Store) LoadHardeningState() (HardeningState, error) {
-	state := make(HardeningState)
-	path := s.hardeningStatePath()
-	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		return state, nil
-	}
-	if err := readJSONFile(path, &state); err != nil {
-		return nil, err
-	}
-	return state, nil
-}
-
-// SaveHardeningState persists the package hardening state to disk.
-func (s *Store) SaveHardeningState(hs HardeningState) error {
-	return writeJSONFile(s.hardeningStatePath(), hs)
-}
-
-func (s *Store) LoadSessions() ([]Session, error) {
-	var sessions []Session
-	if err := readJSONFile(s.sessionsPath(), &sessions); err != nil {
-		return nil, err
-	}
-	for i := range sessions {
-		// Legacy migration shim, deliberately pinned to Codex; see the matching
-		// note in LoadWatchTargets. In-flight sessions recorded before the
-		// provider field existed must keep running on the agent that started
-		// them, so this must not become provider.DefaultID.
-		if strings.TrimSpace(sessions[i].Provider) == "" {
-			sessions[i].Provider = "codex"
-		}
-	}
-	return sessions, nil
-}
-
-func (s *Store) SaveSessions(sessions []Session) error {
-	return writeJSONFile(s.sessionsPath(), sessions)
-}
-
-func (s *Store) LoadServiceConfig() (ServiceConfig, error) {
-	config := defaultServiceConfig()
-	if err := readJSONFile(s.serviceConfigPath(), &config); err != nil {
-		return ServiceConfig{}, err
-	}
-	config.BlockedSessionInactivityTimeout = normalizeBlockedSessionInactivityTimeout(config.BlockedSessionInactivityTimeout)
-	return config, nil
-}
-
-func (s *Store) SaveServiceConfig(config ServiceConfig) error {
-	config.BlockedSessionInactivityTimeout = normalizeBlockedSessionInactivityTimeout(config.BlockedSessionInactivityTimeout)
-	return writeJSONFile(s.serviceConfigPath(), config)
 }
 
 func normalizeMaxParallelSessions(value int) int {
@@ -611,32 +539,6 @@ func discoverStateRoot() string {
 		return ".vigilante"
 	}
 	return filepath.Join(home, ".vigilante")
-}
-
-func ensureJSONArrayFile(path string) error {
-	if _, err := os.Stat(path); err == nil {
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return os.WriteFile(path, []byte("[]\n"), 0o644)
-}
-
-func ensureJSONFile(path string, value any) error {
-	if _, err := os.Stat(path); err == nil {
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return writeJSONFile(path, value)
-}
-
-func readJSONFile(path string, dst any) error {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, dst)
 }
 
 func writeJSONFile(path string, value any) error {
@@ -699,7 +601,7 @@ func appendJSONLine(path string, value any) {
 // is not finished yet.
 func (s *Store) LiveLogPaths() []string {
 	paths := []string{s.DaemonLogPath(), s.AccessLogPath()}
-	sessions, err := s.LoadSessions()
+	sessions, err := s.ListSessions()
 	if err != nil {
 		return paths
 	}

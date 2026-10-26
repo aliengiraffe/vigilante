@@ -497,7 +497,7 @@ func (a *App) loadStatusSessions(_ context.Context) statusSessionsSnapshot {
 	if err != nil {
 		targets = nil
 	}
-	sessions, err := a.state.LoadSessions()
+	sessions, err := a.state.ListSessions()
 	if err != nil {
 		sessions = nil
 	}
