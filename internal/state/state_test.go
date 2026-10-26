@@ -2,9 +2,13 @@ package state
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -321,18 +325,22 @@ func TestServiceConfigPackageHardeningPersistence(t *testing.T) {
 }
 
 // TestLoadWatchTargetsBackfillsLegacyProviderAsCodex pins the legacy migration
-// shim. Watch targets written before Vigilante persisted a provider were all
-// running on Codex, so they must keep loading as Codex even though the default
-// provider for new targets is now Claude.
+// shim on the watchlist.json import path and on reads. Watch targets written before
+// Vigilante persisted a provider were all running on Codex, so they must keep
+// loading as Codex even though the default provider for new targets is now
+// Claude.
 func TestLoadWatchTargetsBackfillsLegacyProviderAsCodex(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 
 	store := NewStore()
-	if err := store.EnsureLayout(); err != nil {
+	if err := os.MkdirAll(store.Root(), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(store.watchlistPath(), []byte(`[{"path":"/tmp/repo","repo":"owner/repo"}]`), 0o600); err != nil {
+	if err := os.WriteFile(store.legacyWatchlistPath(), []byte(`[{"path":"/tmp/repo","repo":"owner/repo"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -355,10 +363,13 @@ func TestLoadWatchTargetsPreservesExplicitProvider(t *testing.T) {
 	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 
 	store := NewStore()
-	if err := store.EnsureLayout(); err != nil {
+	if err := os.MkdirAll(store.Root(), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(store.watchlistPath(), []byte(`[{"path":"/tmp/repo","repo":"owner/repo","provider":"claude"}]`), 0o600); err != nil {
+	if err := os.WriteFile(store.legacyWatchlistPath(), []byte(`[{"path":"/tmp/repo","repo":"owner/repo","provider":"claude"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureLayout(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -438,5 +449,232 @@ func TestParseRetentionSupportsDaysAndFallsBack(t *testing.T) {
 		if got := ParseRetention(raw, fallback); got != want {
 			t.Fatalf("ParseRetention(%q) = %v, want %v", raw, got, want)
 		}
+	}
+}
+
+func TestEnsureLayoutCreatesDatabaseInsteadOfWatchlistJSON(t *testing.T) {
+	t.Setenv("VIGILANTE_HOME", filepath.Join(t.TempDir(), ".vigilante"))
+
+	store := NewStore()
+	if err := store.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(store.DatabasePath()); err != nil {
+		t.Fatalf("database not created: %v", err)
+	}
+	if _, err := os.Stat(store.legacyWatchlistPath()); !os.IsNotExist(err) {
+		t.Fatalf("fresh layout must not create watchlist.json, stat err=%v", err)
+	}
+	targets, err := store.LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 0 {
+		t.Fatalf("fresh database must have no targets, got %#v", targets)
+	}
+}
+
+func TestWatchTargetsRoundTripPreservesOrderAndFields(t *testing.T) {
+	t.Setenv("VIGILANTE_HOME", filepath.Join(t.TempDir(), ".vigilante"))
+
+	want := []WatchTarget{
+		{Path: "/repos/beta", Repo: "owner/beta", Branch: "develop", Provider: "claude", Labels: []string{"to-do", "bug"}, MaxParallel: 2, CommentSweep: &CommentSweepCursor{Since: "2026-03-19T11:40:00Z", IssueCommentsETag: `W/"abc"`}},
+		{Path: "/repos/alpha", Repo: "owner/alpha", Branch: "main", Provider: "codex", ForkMode: true, ForkOwner: "bot", Assignee: "nico", SandboxMode: true},
+	}
+	store := NewStore()
+	if err := store.SaveWatchTargets(want); err != nil {
+		t.Fatal(err)
+	}
+	got, err := NewStore().LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("round trip changed targets:\n got %#v\nwant %#v", got, want)
+	}
+
+	// Saving again replaces the whole set rather than appending.
+	if err := store.SaveWatchTargets(want[1:]); err != nil {
+		t.Fatal(err)
+	}
+	got, err = store.LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Repo != "owner/alpha" {
+		t.Fatalf("save must replace targets, got %#v", got)
+	}
+}
+
+func TestImportLegacyWatchlistRenamesFileAndKeepsOrder(t *testing.T) {
+	t.Setenv("VIGILANTE_HOME", filepath.Join(t.TempDir(), ".vigilante"))
+
+	store := NewStore()
+	if err := os.MkdirAll(store.Root(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `[{"path":"/repos/b","repo":"owner/b","provider":"claude","max_parallel_sessions":-3},{"path":"/repos/a","repo":"owner/a","provider":"codex"}]`
+	if err := os.WriteFile(store.legacyWatchlistPath(), []byte(legacy), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	targets, err := store.LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 2 || targets[0].Repo != "owner/b" || targets[1].Repo != "owner/a" {
+		t.Fatalf("import changed order or count: %#v", targets)
+	}
+	if targets[0].MaxParallel != 1 {
+		t.Fatalf("import must normalize max parallel sessions, got %d", targets[0].MaxParallel)
+	}
+	if _, err := os.Stat(store.legacyWatchlistPath()); !os.IsNotExist(err) {
+		t.Fatalf("legacy file must be renamed after import, stat err=%v", err)
+	}
+	migrated, err := os.ReadFile(store.legacyWatchlistPath() + migratedFileSuffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(migrated) != legacy {
+		t.Fatalf("migrated copy must keep the original bytes, got %s", migrated)
+	}
+
+	// A second store on the same root reads the database, not the file.
+	again, err := NewStore().LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(again, targets) {
+		t.Fatalf("second open diverged: %#v vs %#v", again, targets)
+	}
+}
+
+func TestImportLegacyWatchlistAcceptsEmptyFile(t *testing.T) {
+	for _, content := range []string{"", "[]\n"} {
+		t.Setenv("VIGILANTE_HOME", filepath.Join(t.TempDir(), ".vigilante"))
+		store := NewStore()
+		if err := os.MkdirAll(store.Root(), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(store.legacyWatchlistPath(), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		targets, err := store.LoadWatchTargets()
+		if err != nil {
+			t.Fatalf("content %q: %v", content, err)
+		}
+		if len(targets) != 0 {
+			t.Fatalf("content %q: unexpected targets %#v", content, targets)
+		}
+		if _, err := os.Stat(store.legacyWatchlistPath() + migratedFileSuffix); err != nil {
+			t.Fatalf("content %q: legacy file not renamed: %v", content, err)
+		}
+	}
+}
+
+func TestImportLegacyWatchlistRejectsMalformedFile(t *testing.T) {
+	t.Setenv("VIGILANTE_HOME", filepath.Join(t.TempDir(), ".vigilante"))
+	store := NewStore()
+	if err := os.MkdirAll(store.Root(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.legacyWatchlistPath(), []byte(`{not json`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadWatchTargets(); err == nil {
+		t.Fatal("malformed legacy watchlist must fail the open instead of being dropped")
+	}
+	if _, err := os.Stat(store.legacyWatchlistPath()); err != nil {
+		t.Fatalf("malformed legacy file must be left in place: %v", err)
+	}
+}
+
+func TestImportLegacyWatchlistSkipsPopulatedDatabase(t *testing.T) {
+	t.Setenv("VIGILANTE_HOME", filepath.Join(t.TempDir(), ".vigilante"))
+
+	store := NewStore()
+	if err := store.SaveWatchTargets([]WatchTarget{{Path: "/repos/db", Repo: "owner/db", Provider: "claude"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.legacyWatchlistPath(), []byte(`[{"path":"/repos/stale","repo":"owner/stale"}]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	targets, err := NewStore().LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].Repo != "owner/db" {
+		t.Fatalf("populated database must win over a stale legacy file, got %#v", targets)
+	}
+	if _, err := os.Stat(store.legacyWatchlistPath()); err != nil {
+		t.Fatalf("ignored legacy file must be left in place: %v", err)
+	}
+}
+
+func TestOpenRejectsNewerSchema(t *testing.T) {
+	t.Setenv("VIGILANTE_HOME", filepath.Join(t.TempDir(), ".vigilante"))
+
+	store := NewStore()
+	conn, err := store.database()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`, migrations[len(migrations)-1].version+1, "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = NewStore().LoadWatchTargets()
+	if !errors.Is(err, ErrSchemaTooNew) {
+		t.Fatalf("expected ErrSchemaTooNew, got %v", err)
+	}
+}
+
+func TestWatchTargetsSurviveConcurrentStores(t *testing.T) {
+	t.Setenv("VIGILANTE_HOME", filepath.Join(t.TempDir(), ".vigilante"))
+
+	// Two stores stand in for the daemon and a CLI command sharing one root.
+	stores := []*Store{NewStore(), NewStore()}
+	for _, store := range stores {
+		if err := store.EnsureLayout(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 200)
+	for i, store := range stores {
+		wg.Add(1)
+		go func(i int, store *Store) {
+			defer wg.Done()
+			for n := 0; n < 50; n++ {
+				targets := []WatchTarget{{Path: fmt.Sprintf("/repos/%d", i), Repo: fmt.Sprintf("owner/%d-%d", i, n), Provider: "claude"}}
+				if err := store.SaveWatchTargets(targets); err != nil {
+					errs <- err
+					return
+				}
+				if _, err := store.LoadWatchTargets(); err != nil {
+					errs <- err
+					return
+				}
+			}
+		}(i, store)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent store access failed: %v", err)
+	}
+	targets, err := NewStore().LoadWatchTargets()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("last writer must leave exactly one target, got %#v", targets)
 	}
 }

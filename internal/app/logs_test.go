@@ -208,6 +208,7 @@ func TestLogsWatchFlagRequiresAccess(t *testing.T) {
 func TestLogsAccessWatchFlag(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 	logsDir := filepath.Join(home, ".vigilante", "logs")
 	if err := os.MkdirAll(logsDir, 0o755); err != nil {
 		t.Fatal(err)

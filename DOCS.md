@@ -152,7 +152,7 @@ comments) and one to `repos/{repo}/pulls/comments?since=…` (review comments),
 each paged only while a page is full. Comments are routed to tracked sessions by
 issue or pull request number; comments on untracked issues are ignored. The
 `since` cursor and the ETags of both surfaces are persisted on the watch target
-(`comment_sweep` in `watchlist.json`). `since` advances only when comments
+(`comment_sweep` on the watch target in `vigilante.db`). `since` advances only when comments
 arrive, so the request URL stays stable and unchanged repositories answer `304`.
 Steady-state cost is therefore two unmetered requests per repository per scan.
 When a sweep fails, that repository's due sessions fall back to the scheduled,
@@ -318,7 +318,7 @@ Expected behavior:
 
 - forwards clone flags and arguments through to `git clone`
 - supports both explicit destination paths and git-derived default destination names
-- adds the cloned repository to `~/.vigilante/watchlist.json` only after clone success
+- adds the cloned repository to the watch targets in `~/.vigilante/vigilante.db` only after clone success
 - reuses existing watch-target deduplication when the cloned repository is already watched
 - returns a non-zero exit code if clone fails
 - returns a non-zero exit code if clone succeeds but automatic watch-target registration fails
@@ -380,13 +380,13 @@ Expected behavior:
 - switches an existing target back to default-branch tracking when `--track-default-branch` is supplied
 - defaults the assignee filter to `me` unless overridden
 - defaults `--max-parallel` to `0` when not configured, where `0` means unlimited
-- defaults `--provider` to `claude` unless overridden; already-watched repositories keep the provider already recorded in `watchlist.json`
+- defaults `--provider` to `claude` unless overridden; already-watched repositories keep the provider already recorded in `vigilante.db`
 - defaults `--issue-tracker` to `github` unless overridden
 - when `--issue-tracker linear` is selected, verifies the local `linear` CLI is installed and authenticated before saving the watch target
 - accepts an optional `--issue-tracker-stage` filter; Linear defaults to `Todo` when the flag is omitted
 - resolves `me` to the authenticated GitHub login at runtime before issue queries
 - preserves an existing target's branch mode unless one of the branch flags is supplied
-- stores the target in `~/.vigilante/watchlist.json`
+- stores the target in the `watch_targets` table of `~/.vigilante/vigilante.db`
 
 Example:
 
@@ -563,7 +563,7 @@ Expected behavior:
 
 - defaults `--provider` to `claude` unless overridden
 - creates `~/.vigilante/`
-- initializes `watchlist.json`
+- initializes `vigilante.db` (importing a pre-existing `watchlist.json`, which is then renamed to `watchlist.json.migrated`)
 - verifies `git`, `gh`, and the selected coding-agent provider CLI
 - verifies the selected provider CLI reports a compatible build-supported version range, currently `>=0.114.0, <2.0.0` for `codex`, `>=2.0.0, <3.0.0` for `claude`, `>=0.34.0, <1.0.0` for `gemini`, and `>=1.0.0, <2.0.0` for `opencode`
 - installs the bundled coding-agent skills for regular runtime use, including any companion files under each skill directory
@@ -746,7 +746,7 @@ You can also confirm the Homebrew cask will target the published release archive
 Initial files:
 
 - `config.json`: service-level daemon configuration
-- `watchlist.json`: configured repositories being monitored
+- `vigilante.db`: SQLite database holding the configured repositories being monitored (`watch_targets` table). Read-only inspection with `sqlite3 ~/.vigilante/vigilante.db` is supported; each row's `body` column is the JSON record shown below
 - `sessions.json`: active or recent issue execution sessions
 - `logs/`: daemon and run logs, plus their rotated backups, size-capped at `log_max_total_size` (default 500MB) in total
 
@@ -825,7 +825,7 @@ Use logs to decide which recovery command fits the evidence already recorded loc
 6. If the log shows the local session artifacts are stale and should be removed without starting new work immediately, use `vigilante cleanup --repo <owner/name> --issue <n>` or repo-wide cleanup as appropriate.
 7. If the daemon log points to service-manager failures, scan-loop problems, or machine-level issues, troubleshoot the daemon with `vigilante service restart`, `vigilante setup`, or a foreground `vigilante daemon run --once` check before touching issue sessions.
 
-Suggested `watchlist.json` shape:
+Each watch target is stored as one JSON record in the `body` column of `watch_targets`. Suggested shape:
 
 ```json
 [
