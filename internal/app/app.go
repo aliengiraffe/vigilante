@@ -3381,7 +3381,9 @@ func (a *App) iterationBlocksAutomerge(ctx context.Context, session *state.Sessi
 	if session.IterationInProgress {
 		return fmt.Sprintf("automerge blocked: iteration is in progress for issue #%d", session.IssueNumber)
 	}
-	if session.IssueNumber <= 0 || strings.TrimSpace(session.Repo) == "" {
+	// With comment commands disabled no iteration comment is ever claimed, so
+	// checking for one would only block automerge on a stale request.
+	if !commentCommandsEnabled || session.IssueNumber <= 0 || strings.TrimSpace(session.Repo) == "" {
 		return ""
 	}
 	comments, err := a.issueTrackerForSession(*session).ListWorkItemCommentsForPolling(ctx, a.issueProjectForSession(*session), session.IssueNumber, "automerge_iteration_check", a.logger)
@@ -3606,6 +3608,9 @@ func (a *App) listRunningSessions() error {
 // All surfaces are merged and deduplicated by comment ID so that the same
 // command is never processed twice regardless of where it was posted.
 func (a *App) collectSessionComments(ctx context.Context, session state.Session, purpose string) (result []ghcli.IssueComment, pollErr error) {
+	if !commentCommandsEnabled {
+		return nil, nil
+	}
 	ctx = withSessionAccessLogContext(ctx, "", session)
 	if !commentPollDue(ctx, session) {
 		return nil, nil

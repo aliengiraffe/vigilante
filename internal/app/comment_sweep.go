@@ -32,6 +32,9 @@ const commentSweepOverlap = time.Minute
 // command handlers run for them this scan. Cursors are updated on targets and
 // persisted when the scan saves the watch list.
 func (a *App) runCommentSweeps(ctx context.Context, targets []state.WatchTarget, sessions []state.Session) {
+	if !commentCommandsEnabled {
+		return
+	}
 	schedule, _ := ctx.Value(pollingContextKey{}).(*pollingSchedule)
 	if schedule == nil {
 		return

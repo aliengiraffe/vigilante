@@ -11,6 +11,13 @@ import (
 	"github.com/nicobistolfi/vigilante/internal/state"
 )
 
+// commentCommandsEnabled controls whether the daemon reads issue and pull
+// request comments to detect `@vigilanteai cleanup|recreate|resume|iterate`
+// commands. It is off for now: no repository sweep or per-issue comment poll
+// runs, so command detection costs no GitHub requests. Flip it back to true to
+// restore comment-driven commands.
+var commentCommandsEnabled = false
+
 type pollingContextKey struct{}
 type pollingSchedule struct {
 	mu        sync.Mutex
