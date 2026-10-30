@@ -103,15 +103,12 @@ homebrew_casks:
     # running until someone notices. On a machine that never ran
     # `vigilante setup -d` there is no service to restart, so the command
     # exits nonzero and `must_succeed: false` keeps the cask operation green.
+    # install_steps renders Homebrew's declarative postflight_steps, which
+    # replaced the deprecated Ruby `install` hook in GoReleaser v2.19.
     hooks:
       post:
-        install: |
-          vigilante_binary = "#{staged_path}/vigilante"
-          if File.executable?(vigilante_binary)
-            system_command vigilante_binary,
-                           args:         ["service", "restart"],
-                           must_succeed: false
-          end
+        install_steps: |
+          run "{{ .StagedPath }}/vigilante", args: ["service", "restart"], must_succeed: false
 
 changelog:
   use: github-native
