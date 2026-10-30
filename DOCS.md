@@ -144,6 +144,12 @@ work. The live reserve still applies to intake.
 
 ### Repository comment sweep
 
+> **Currently disabled.** Vigilante does not read issue or pull request
+> comments to detect `@vigilanteai cleanup|recreate|resume|iterate` commands:
+> no repository sweep or per-issue comment poll runs, and automerge no longer
+> waits on unclaimed iteration comments. The behavior below applies once
+> `commentCommandsEnabled` in `internal/app/comment_polling.go` is turned back on.
+
 Command detection (`@vigilanteai cleanup|recreate|resume|iterate`) no longer
 polls each tracked issue. Every scan performs one repository-wide sweep per
 watched GitHub repository that has sessions eligible for polling: one request to
