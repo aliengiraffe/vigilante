@@ -3,20 +3,11 @@ package app
 import (
 	"context"
 	"fmt"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/nicobistolfi/vigilante/internal/state"
 )
-
-// TestMain runs the package with comment commands enabled so the existing
-// command-handling tests keep exercising that path while it is switched off in
-// production. Tests for the disabled behavior use disableCommentCommands.
-func TestMain(m *testing.M) {
-	commentCommandsEnabled = true
-	os.Exit(m.Run())
-}
 
 func disableCommentCommands(t *testing.T) {
 	t.Helper()

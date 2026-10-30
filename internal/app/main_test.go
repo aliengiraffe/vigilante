@@ -12,7 +12,12 @@ import (
 // so a test that falls through to the developer's real ~/.vigilante is
 // destructive rather than merely noisy. Tests that set VIGILANTE_HOME
 // themselves still override this per test.
+//
+// It also enables comment commands so the existing command-handling tests keep
+// exercising that path while it is switched off in production. Tests for the
+// disabled behavior use disableCommentCommands.
 func TestMain(m *testing.M) {
+	commentCommandsEnabled = true
 	root, err := os.MkdirTemp("", "vigilante-app-test-")
 	if err != nil {
 		panic(err)
