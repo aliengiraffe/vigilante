@@ -2370,7 +2370,7 @@ func TestSetupCreatesStateLayoutAndInstallsBundledSkillsForAllProviders(t *testi
 	}
 
 	for _, path := range []string{
-		filepath.Join(app.state.Root(), "watchlist.json"),
+		app.state.DatabasePath(),
 		filepath.Join(app.state.Root(), "sessions.json"),
 		filepath.Join(app.state.Root(), "logs"),
 		filepath.Join(app.state.CodexHome(), "skills", skill.VigilanteIssueImplementation, "SKILL.md"),
@@ -10619,6 +10619,7 @@ func conflictResolutionPromptCommand(worktreePath string, repo string, repoPath 
 func TestLogsCommandListsFiles(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 	logsDir := filepath.Join(home, ".vigilante", "logs")
 	if err := os.MkdirAll(logsDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -10657,6 +10658,7 @@ func TestLogsCommandListsFiles(t *testing.T) {
 func TestLogsCommandShowsAccessLog(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 	logsDir := filepath.Join(home, ".vigilante", "logs")
 	if err := os.MkdirAll(logsDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -10687,6 +10689,7 @@ func TestLogsCommandShowsAccessLog(t *testing.T) {
 func TestLogsCommandShowsSessionLog(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
 	logsDir := filepath.Join(home, ".vigilante", "logs")
 	if err := os.MkdirAll(logsDir, 0o755); err != nil {
 		t.Fatal(err)
