@@ -2160,7 +2160,6 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			scanErr = errors.Join(scanErr, a.state.SaveSessions(sessions))
 		}()
 		a.runCommentSweeps(ctx, targets, sessions)
-		a.reconcileFailedPolling(ctx, sessions, issueDetailsCache)
 		sessions, err = a.processGitHubCleanupRequests(ctx, sessions)
 		if err != nil {
 			return err
@@ -2173,6 +2172,11 @@ func (a *App) ScanOnce(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		sessions, err = a.cleanupClosedIssueSessions(ctx, sessions, issueDetailsCache)
+		if err != nil {
+			return err
+		}
+		a.reconcileFailedPolling(ctx, sessions, issueDetailsCache)
 		sessions, err = a.rerunIncompleteSessions(ctx, sessions, issueDetailsCache)
 		if err != nil {
 			return err
@@ -2182,10 +2186,6 @@ func (a *App) ScanOnce(ctx context.Context) error {
 			return err
 		}
 		sessions, err = a.cleanupInactiveBlockedSessions(ctx, sessions)
-		if err != nil {
-			return err
-		}
-		sessions, err = a.cleanupClosedIssueSessions(ctx, sessions, issueDetailsCache)
 		if err != nil {
 			return err
 		}
@@ -2735,59 +2735,69 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 func (a *App) cleanupClosedIssueSessions(ctx context.Context, sessions []state.Session, issueCache scanIssueDetailsCache) ([]state.Session, error) {
 	for i := range sessions {
 		session := &sessions[i]
-		sessionCtx := withSessionAccessLogContext(ctx, "maintenance", *session)
-		if (session.Status != state.SessionStatusSuccess && session.Status != state.SessionStatusIncomplete) || session.CleanupCompletedAt != "" || session.MonitoringStoppedAt != "" {
+		if session.Status == state.SessionStatusRunning || session.Status == state.SessionStatusResuming || session.PullRequestMaintenanceInFlight {
 			continue
 		}
-		if session.PullRequestMaintenanceInFlight {
+		if session.Status == state.SessionStatusClosed {
+			a.closeIssueSession(ctx, session, nil, issueCache)
+			continue
+		}
+		if session.MonitoringStoppedAt != "" || !commentPollDue(ctx, *session) {
 			continue
 		}
 		if session.Status == state.SessionStatusSuccess && shouldDelaySuccessfulSessionPoll(*session, a.clock()) {
 			continue
 		}
-
-		issue, err := a.loadSessionIssueDetails(sessionCtx, issueCache, session)
+		issue, err := a.loadSessionIssueDetails(ctx, issueCache, session)
 		if err != nil {
-			if errors.Is(err, errIssueLookupBackoff) {
-				continue
-			}
 			if ghcli.IsIssueUnavailableError(err) {
-				a.stopMonitoringUnavailableIssueSession(sessionCtx, session, "issue_deleted", err)
-				continue
-			}
-			session.LastMaintenanceError = err.Error()
-			session.UpdatedAt = a.clock().Format(time.RFC3339)
-			a.logger.Error("issue lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "err", err)
-			continue
-		}
-		if !strings.EqualFold(strings.TrimSpace(issue.State), "closed") {
-			continue
-		}
-		if session.CleanupAttempts >= maxAutomaticCleanupAttempts {
-			if err := a.stopAutomaticCleanupAfterLimit(sessionCtx, session); err != nil {
-				a.logger.Error("cleanup retry limit notification failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "worktree", session.WorktreePath, "err", err)
+				a.closeIssueSession(ctx, session, nil, issueCache)
+			} else if !errors.Is(err, errIssueLookupBackoff) {
+				session.LastMaintenanceError = err.Error()
+				a.logger.Error("issue lookup failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
 			}
 			continue
 		}
-
-		if err := a.cleanupSessionArtifacts(sessionCtx, session, "issue_closed"); err != nil {
-			session.CleanupAttempts++
-			a.logger.Error("cleanup failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "worktree", session.WorktreePath, "err", err)
-			if session.CleanupAttempts >= maxAutomaticCleanupAttempts {
-				if notifyErr := a.stopAutomaticCleanupAfterLimit(sessionCtx, session); notifyErr != nil {
-					a.logger.Error("cleanup retry limit notification failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "worktree", session.WorktreePath, "err", notifyErr)
-				}
-			}
-			continue
+		if strings.EqualFold(strings.TrimSpace(issue.State), "closed") {
+			a.closeIssueSession(ctx, session, issue, issueCache)
 		}
-
-		session.Status = state.SessionStatusClosed
-		session.UpdatedAt = a.clock().Format(time.RFC3339)
-		a.logger.Info("cleanup complete", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "worktree", session.WorktreePath)
-		a.syncSessionIssueLabelsBestEffort(ctx, session, nil, issue, issueCache)
 	}
-
 	return sessions, nil
+}
+
+// closeIssueSession retires polling before attempting cleanup. Later scans retry
+// only local cleanup, including closed sessions saved by older versions.
+func (a *App) closeIssueSession(ctx context.Context, session *state.Session, issue *ghcli.IssueDetails, cache scanIssueDetailsCache) {
+	if session.Status == state.SessionStatusRunning || session.Status == state.SessionStatusResuming || session.PullRequestMaintenanceInFlight {
+		return
+	}
+	ctx = withSessionAccessLogContext(ctx, "maintenance", *session)
+	newlyClosed := session.Status != state.SessionStatusClosed
+	session.Status = state.SessionStatusClosed
+	if newlyClosed {
+		session.MonitoringStoppedAt = a.clock().Format(time.RFC3339)
+		session.UpdatedAt = a.clock().Format(time.RFC3339)
+		if issue != nil {
+			a.syncSessionIssueLabelsBestEffort(ctx, session, nil, issue, cache)
+		}
+	}
+	if session.CleanupCompletedAt != "" || (session.CleanupAttempts >= maxAutomaticCleanupAttempts && session.BlockedStage == "automatic_worktree_cleanup" && session.MonitoringStoppedAt != "") {
+		return
+	}
+	if session.CleanupAttempts < maxAutomaticCleanupAttempts {
+		if err := a.cleanupSessionArtifacts(ctx, session, "issue_closed"); err == nil {
+			a.logger.Info("cleanup complete", "repo", session.Repo, "issue", session.IssueNumber, "source", "issue_closed")
+			return
+		} else {
+			session.CleanupAttempts++
+			a.logger.Error("cleanup failed", "repo", session.Repo, "issue", session.IssueNumber, "source", "issue_closed", "err", err)
+		}
+	}
+	if session.CleanupAttempts >= maxAutomaticCleanupAttempts {
+		if err := a.stopAutomaticCleanupAfterLimit(ctx, session); err != nil {
+			a.logger.Error("cleanup retry limit notification failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
+		}
+	}
 }
 
 func (a *App) cleanupSessionArtifacts(ctx context.Context, session *state.Session, source string) error {
@@ -2849,7 +2859,7 @@ func (a *App) stopAutomaticCleanupAfterLimit(ctx context.Context, session *state
 	session.LastError = session.BlockedReason.Summary
 	a.emitSessionTransition(previousStatus, *session, "automatic_cleanup_limit")
 	a.logger.Error("automatic cleanup retry limit reached", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "worktree", session.WorktreePath, "attempts", session.CleanupAttempts, "err", cleanupErr)
-	a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil, nil)
+	a.syncSessionIssueLabelsBestEffort(ctx, session, nil, &ghcli.IssueDetails{}, nil)
 	return nil
 }
 
@@ -3419,7 +3429,11 @@ func shouldDelaySuccessfulSessionPoll(session state.Session, now time.Time) bool
 func (a *App) stopMonitoringUnavailableIssueSession(ctx context.Context, session *state.Session, source string, issueErr error) {
 	now := a.clock().Format(time.RFC3339)
 	previousStatus := session.Status
-	if err := worktree.CleanupIssueArtifacts(ctx, a.env.Runner, session.RepoPath, session.WorktreePath, session.Branch); err != nil {
+	if session.Status != state.SessionStatusRunning && session.Status != state.SessionStatusResuming {
+		if session.Status != state.SessionStatusClosed {
+			a.closeIssueSession(ctx, session, nil, nil)
+		}
+	} else if err := worktree.CleanupIssueArtifacts(ctx, a.env.Runner, session.RepoPath, session.WorktreePath, session.Branch); err != nil {
 		session.CleanupError = err.Error()
 		a.logger.Error("issue unavailable cleanup failed", "repo", session.Repo, "issue", session.IssueNumber, "branch", session.Branch, "source", source, "err", err)
 	} else {
@@ -3898,6 +3912,10 @@ func (a *App) processGitHubResumeRequests(ctx context.Context, sessions []state.
 			}
 			a.recordSessionFailure(session, fallbackText(session.BlockedStage, "issue_execution"), "gh issue view", err)
 			a.logger.Error("resume issue details failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(details.State), "closed") {
+			a.closeIssueSession(ctx, session, details, issueCache)
 			continue
 		}
 		if ghcli.HasAnyLabel(details.Labels, "resume", "vigilante:resume") {
@@ -6005,7 +6023,7 @@ func (a *App) syncSessionIssueLabels(ctx context.Context, session *state.Session
 	if session == nil || strings.TrimSpace(session.Repo) == "" || session.IssueNumber <= 0 {
 		return nil
 	}
-	if pr == nil && session.PullRequestNumber > 0 && strings.TrimSpace(session.PullRequestMergedAt) == "" {
+	if session.Status != state.SessionStatusClosed && pr == nil && session.PullRequestNumber > 0 && strings.TrimSpace(session.PullRequestMergedAt) == "" {
 		details, err := a.prManager.GetPullRequestDetails(ctx, session.Repo, session.PullRequestNumber)
 		if err == nil {
 			pr = details
