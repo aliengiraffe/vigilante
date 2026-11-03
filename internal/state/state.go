@@ -369,8 +369,12 @@ type CIAttempt struct {
 	AttemptedAt string `json:"attempted_at"`
 }
 
+// Store is the handle to Vigilante's durable state under the state root.
+// Watch targets live in the SQLite database (see DatabaseFileName); the other
+// records are still JSON files alongside it.
 type Store struct {
 	root string
+	db   dbHandle
 }
 
 func NewStore() *Store {
@@ -434,15 +438,16 @@ func (s *Store) EnsureLayout() error {
 			return err
 		}
 	}
-	for _, path := range []string{s.watchlistPath(), s.sessionsPath()} {
-		if err := ensureJSONArrayFile(path); err != nil {
-			return err
-		}
+	if err := ensureJSONArrayFile(s.sessionsPath()); err != nil {
+		return err
 	}
 	if err := ensureJSONFile(s.serviceConfigPath(), defaultServiceConfig()); err != nil {
 		return err
 	}
-	return nil
+	// Opening the database creates it, applies migrations, and imports a
+	// legacy watchlist.json, so a fresh root is fully laid out on return.
+	_, err := s.database()
+	return err
 }
 
 func (s *Store) LogsDir() string {
@@ -478,10 +483,6 @@ func sanitizeSessionLogRepoSlug(repoSlug string) string {
 		return "unknown-repo"
 	}
 	return strings.Join(sanitized, "-")
-}
-
-func (s *Store) watchlistPath() string {
-	return filepath.Join(s.root, "watchlist.json")
 }
 
 func (s *Store) sessionsPath() string {
@@ -536,32 +537,6 @@ func (s *Store) LoadHardeningState() (HardeningState, error) {
 // SaveHardeningState persists the package hardening state to disk.
 func (s *Store) SaveHardeningState(hs HardeningState) error {
 	return writeJSONFile(s.hardeningStatePath(), hs)
-}
-
-func (s *Store) LoadWatchTargets() ([]WatchTarget, error) {
-	var targets []WatchTarget
-	if err := readJSONFile(s.watchlistPath(), &targets); err != nil {
-		return nil, err
-	}
-	for i := range targets {
-		// Legacy migration shim, deliberately pinned to Codex: watch targets
-		// written before Vigilante persisted a provider were all running on
-		// Codex. Do not replace this with provider.DefaultID — that would
-		// silently migrate every pre-existing repository onto the current
-		// default provider on upgrade.
-		if strings.TrimSpace(targets[i].Provider) == "" {
-			targets[i].Provider = "codex"
-		}
-		targets[i].MaxParallel = normalizeMaxParallelSessions(targets[i].MaxParallel)
-	}
-	return targets, nil
-}
-
-func (s *Store) SaveWatchTargets(targets []WatchTarget) error {
-	for i := range targets {
-		targets[i].MaxParallel = normalizeMaxParallelSessions(targets[i].MaxParallel)
-	}
-	return writeJSONFile(s.watchlistPath(), targets)
 }
 
 func (s *Store) LoadSessions() ([]Session, error) {

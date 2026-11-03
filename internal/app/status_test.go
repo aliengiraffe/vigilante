@@ -533,8 +533,7 @@ func TestStatusCommandShowsWatchedRepositories(t *testing.T) {
 			LastScanAt: "2026-03-19T11:40:00Z",
 		},
 	}
-	targetData, _ := json.Marshal(targets)
-	if err := os.WriteFile(filepath.Join(vigilanteHome, "watchlist.json"), targetData, 0o644); err != nil {
+	if err := state.NewStore().SaveWatchTargets(targets); err != nil {
 		t.Fatal(err)
 	}
 
@@ -616,9 +615,6 @@ func TestStatusCommandShowsNoWatchedRepositories(t *testing.T) {
 
 	vigilanteHome := filepath.Join(home, ".vigilante")
 	if err := os.MkdirAll(vigilanteHome, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(vigilanteHome, "watchlist.json"), []byte("[]"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(vigilanteHome, "sessions.json"), []byte("[]"), 0o644); err != nil {
