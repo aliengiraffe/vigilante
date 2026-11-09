@@ -548,6 +548,39 @@ func FindRecreateComment(comments []IssueComment, claimedCommentID int64) *Issue
 	return findCommandComment(comments, "@vigilanteai recreate", claimedCommentID)
 }
 
+const reviewCommandPrefix = "@vigilanteai review"
+
+// FindReviewComment returns the newest unclaimed `@vigilanteai review ...`
+// comment along with its raw selector argument. The selector is returned
+// unvalidated (it may be empty or malformed) so the caller can reply with a
+// usage error while still claiming the comment.
+func FindReviewComment(comments []IssueComment, claimedCommentID int64) (*IssueComment, string) {
+	for i := len(comments) - 1; i >= 0; i-- {
+		selector, ok := parseReviewCommandBody(comments[i].Body)
+		if !ok {
+			continue
+		}
+		if claimedCommentID != 0 && comments[i].ID == claimedCommentID {
+			return nil, ""
+		}
+		return &comments[i], selector
+	}
+	return nil, ""
+}
+
+// parseReviewCommandBody reports whether body is a review directive and, if
+// so, returns the argument text that follows the command word.
+func parseReviewCommandBody(body string) (string, bool) {
+	normalized := normalizeVigilanteComment(body)
+	if normalized == reviewCommandPrefix {
+		return "", true
+	}
+	if strings.HasPrefix(normalized, reviewCommandPrefix+" ") {
+		return strings.TrimSpace(strings.TrimPrefix(normalized, reviewCommandPrefix)), true
+	}
+	return "", false
+}
+
 func FindIterationComment(comments []IssueComment, claimedCommentID int64, claimedCommentAt string) *IssueComment {
 	claimedAt := parseClaimedCommentTime(claimedCommentAt)
 	for i := len(comments) - 1; i >= 0; i-- {
@@ -574,6 +607,9 @@ func IsIterationComment(comment IssueComment) bool {
 }
 
 func IsKnownVigilanteCommandComment(body string) bool {
+	if _, ok := parseReviewCommandBody(body); ok {
+		return true
+	}
 	switch normalizeVigilanteComment(body) {
 	case "@vigilanteai resume", "@vigilanteai cleanup", "@vigilanteai recreate":
 		return true

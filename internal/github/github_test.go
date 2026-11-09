@@ -644,6 +644,83 @@ func TestIsKnownVigilanteCommandCommentIncludesRecreate(t *testing.T) {
 	}
 }
 
+func TestFindReviewComment(t *testing.T) {
+	now := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
+	comments := []IssueComment{
+		{ID: 10, Body: "hello", CreatedAt: now.Add(-3 * time.Minute)},
+		{ID: 11, Body: "@vigilanteai review codex:gpt-5", CreatedAt: now.Add(-2 * time.Minute)},
+		{ID: 12, Body: "@vigilanteai review claude:fable", CreatedAt: now.Add(-1 * time.Minute)},
+	}
+
+	comment, selector := FindReviewComment(comments, 0)
+	if comment == nil || comment.ID != 12 {
+		t.Fatalf("expected newest review comment to be found, got: %#v", comment)
+	}
+	if selector != "claude:fable" {
+		t.Fatalf("expected selector claude:fable, got: %q", selector)
+	}
+	if comment, _ := FindReviewComment(comments, 12); comment != nil {
+		t.Fatalf("expected claimed review comment to be ignored, got: %#v", comment)
+	}
+}
+
+func TestFindReviewCommentNormalizesCaseAndWhitespace(t *testing.T) {
+	comments := []IssueComment{
+		{ID: 21, Body: "  @VigilanteAI   REVIEW   Claude:Claude-Fable-5  "},
+	}
+
+	comment, selector := FindReviewComment(comments, 0)
+	if comment == nil || comment.ID != 21 {
+		t.Fatalf("expected normalized review comment to be found, got: %#v", comment)
+	}
+	if selector != "claude:claude-fable-5" {
+		t.Fatalf("expected lowercased selector, got: %q", selector)
+	}
+}
+
+func TestFindReviewCommentReturnsBareDirectiveWithEmptySelector(t *testing.T) {
+	comments := []IssueComment{
+		{ID: 31, Body: "@vigilanteai review"},
+	}
+
+	comment, selector := FindReviewComment(comments, 0)
+	if comment == nil || comment.ID != 31 {
+		t.Fatalf("expected bare review directive to be found, got: %#v", comment)
+	}
+	if selector != "" {
+		t.Fatalf("expected empty selector for bare directive, got: %q", selector)
+	}
+}
+
+func TestIsKnownVigilanteCommandCommentIncludesReview(t *testing.T) {
+	for _, body := range []string{
+		"@vigilanteai review",
+		"@vigilanteai review claude:fable",
+		"  @vigilanteai   review   foo:bar  ",
+	} {
+		if !IsKnownVigilanteCommandComment(body) {
+			t.Fatalf("expected %q to be a known command", body)
+		}
+	}
+	if IsKnownVigilanteCommandComment("@vigilanteai reviewing the latest changes") {
+		t.Fatal("expected a non-review word sharing the prefix to stay an iteration comment")
+	}
+}
+
+func TestFindIterationCommentSkipsReviewCommands(t *testing.T) {
+	now := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
+	comments := []IssueComment{
+		{ID: 10, Body: "@vigilanteai review claude:fable", CreatedAt: now.Add(-1 * time.Minute)},
+	}
+
+	if comment := FindIterationComment(comments, 0, ""); comment != nil {
+		t.Fatalf("expected review directive to not be an iteration comment, got: %#v", comment)
+	}
+	if IsIterationComment(IssueComment{Body: "@vigilanteai review foo:bar"}) {
+		t.Fatal("expected review directive with unknown provider to still not be an iteration comment")
+	}
+}
+
 func TestFindIterationCommentSkipsKnownCommands(t *testing.T) {
 	now := time.Date(2026, 3, 12, 12, 0, 0, 0, time.UTC)
 	comments := []IssueComment{

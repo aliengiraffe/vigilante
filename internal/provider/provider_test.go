@@ -591,6 +591,114 @@ func (p testProvider) BuildPackageRemediationInvocation(task PackageRemediationT
 	return Invocation{}, nil
 }
 
+func (p testProvider) BuildReviewInvocation(task ReviewTask) (Invocation, error) {
+	return Invocation{}, nil
+}
+
+func TestParseAgentSelector(t *testing.T) {
+	cases := []struct {
+		selector string
+		provider string
+		model    string
+	}{
+		{selector: "claude:fable", provider: ClaudeID, model: "fable"},
+		{selector: "claude:opus", provider: ClaudeID, model: "opus"},
+		{selector: "claude:claude-fable-5", provider: ClaudeID, model: "claude-fable-5"},
+		{selector: "codex:gpt-5-codex", provider: CodexID, model: "gpt-5-codex"},
+		{selector: "  claude:fable  ", provider: ClaudeID, model: "fable"},
+	}
+	for _, tc := range cases {
+		selected, model, err := ParseAgentSelector(tc.selector)
+		if err != nil {
+			t.Fatalf("ParseAgentSelector(%q) failed: %v", tc.selector, err)
+		}
+		if selected.ID() != tc.provider {
+			t.Fatalf("ParseAgentSelector(%q) provider = %q, want %q", tc.selector, selected.ID(), tc.provider)
+		}
+		if model != tc.model {
+			t.Fatalf("ParseAgentSelector(%q) model = %q, want %q", tc.selector, model, tc.model)
+		}
+	}
+}
+
+func TestParseAgentSelectorRejectsMalformedSelectors(t *testing.T) {
+	for _, selector := range []string{"", "claude", "claude:", ":fable", ":", "   "} {
+		_, _, err := ParseAgentSelector(selector)
+		if err == nil || !strings.Contains(err.Error(), "expected {provider}:{model}") {
+			t.Fatalf("ParseAgentSelector(%q) error = %v, want malformed-selector error", selector, err)
+		}
+	}
+}
+
+func TestParseAgentSelectorRejectsUnknownProvider(t *testing.T) {
+	_, _, err := ParseAgentSelector("foo:bar")
+	if err == nil || !strings.Contains(err.Error(), "unsupported provider") {
+		t.Fatalf("expected unsupported provider error, got: %v", err)
+	}
+	for _, id := range RegisteredIDs() {
+		if !strings.Contains(err.Error(), id) {
+			t.Fatalf("expected error to list registered provider %q, got: %v", id, err)
+		}
+	}
+}
+
+func TestClaudeBuildReviewInvocationHonorsModel(t *testing.T) {
+	task := ReviewTask{
+		Target: state.WatchTarget{
+			Repo: "owner/repo",
+			Path: "/tmp/repo",
+		},
+		PRNumber: 42,
+		Model:    "fable",
+	}
+	selected, err := Resolve(ClaudeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	invocation, err := selected.BuildReviewInvocation(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if invocation.Dir != "/tmp/repo" {
+		t.Fatalf("expected review invocation to run in the repo path, got: %q", invocation.Dir)
+	}
+	if invocation.Name != "claude" {
+		t.Fatalf("unexpected invocation name: %q", invocation.Name)
+	}
+	if len(invocation.Args) < 2 || invocation.Args[0] != "--model" || invocation.Args[1] != "fable" {
+		t.Fatalf("expected --model fable to be prepended, got: %v", invocation.Args)
+	}
+	prompt := invocation.Args[len(invocation.Args)-1]
+	if !strings.Contains(prompt, "Pull Request: #42") {
+		t.Fatalf("expected prompt to reference the PR, got: %q", prompt)
+	}
+	if !strings.Contains(prompt, "vigilante-adversarial-review") {
+		t.Fatalf("expected prompt to use the adversarial review skill, got: %q", prompt)
+	}
+}
+
+func TestBuildReviewInvocationRejectsProvidersWithoutModelOverride(t *testing.T) {
+	task := ReviewTask{
+		Target: state.WatchTarget{
+			Repo: "owner/repo",
+			Path: "/tmp/repo",
+		},
+		PRNumber: 42,
+		Model:    "some-model",
+	}
+	for _, id := range []string{CodexID, GeminiID, OpenCodeID} {
+		selected, err := Resolve(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = selected.BuildReviewInvocation(task)
+		if err == nil || !strings.Contains(err.Error(), "does not support a model override") {
+			t.Fatalf("expected %s review invocation to reject the model override, got: %v", id, err)
+		}
+	}
+}
+
 func TestBuildIssueCreateInvocationForAllProviders(t *testing.T) {
 	task := IssueCreateTask{
 		Target: state.WatchTarget{
