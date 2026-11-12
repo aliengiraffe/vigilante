@@ -19,15 +19,20 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// DatabaseFileName is the SQLite database under the state root. Watch targets
-// live here; sessions, service config, and hardening state are still JSON
-// files and move in later slices of the SQLite migration.
+// DatabaseFileName is the SQLite database under the state root. Watch
+// targets, sessions, the per-session issue cache, service config, and
+// hardening state all live here.
 const DatabaseFileName = "vigilante.db"
 
-// legacyWatchlistFileName is the pre-SQLite watch target file. It is imported
-// into the database the first time the store opens and then renamed with
-// migratedFileSuffix so a downgrade cannot silently read stale data.
-const legacyWatchlistFileName = "watchlist.json"
+// Legacy file names from the JSON layout. Each is imported into the database
+// the first time the store opens and then renamed with migratedFileSuffix so a
+// downgrade cannot silently read stale data.
+const (
+	legacyWatchlistFileName = "watchlist.json"
+	legacySessionsFileName  = "sessions.json"
+	legacyConfigFileName    = "config.json"
+	legacyHardeningFileName = "hardening_state.json"
+)
 
 const migratedFileSuffix = ".migrated"
 
@@ -63,6 +68,49 @@ var migrations = []migration{
 			`CREATE INDEX watch_targets_repo ON watch_targets (repo)`,
 		},
 	},
+	{
+		version: 2,
+		statements: []string{
+			// body is the Session record without cached_issue_details; the
+			// promoted columns exist for queries and indexes only, body stays
+			// the source of truth. version is bumped on every write so a
+			// writer holding a stale copy can detect it (see CommitSessions).
+			`CREATE TABLE sessions (
+				repo                 TEXT NOT NULL,
+				issue_number         INTEGER NOT NULL,
+				status               TEXT NOT NULL,
+				started_at           TEXT NOT NULL DEFAULT '',
+				updated_at           TEXT NOT NULL DEFAULT '',
+				next_comment_poll_at TEXT NOT NULL DEFAULT '',
+				version              INTEGER NOT NULL DEFAULT 1,
+				body                 TEXT NOT NULL,
+				written_at           TEXT NOT NULL,
+				PRIMARY KEY (repo, issue_number)
+			)`,
+			`CREATE INDEX sessions_status ON sessions (status)`,
+			// The cached issue details are most of a session's bytes and are
+			// only needed by the scan loop, so they live apart from the body.
+			`CREATE TABLE session_issue_cache (
+				repo         TEXT NOT NULL,
+				issue_number INTEGER NOT NULL,
+				fetched_at   TEXT NOT NULL DEFAULT '',
+				details      TEXT NOT NULL,
+				PRIMARY KEY (repo, issue_number)
+			)`,
+			`CREATE TABLE service_config (
+				id         INTEGER PRIMARY KEY CHECK (id = 1),
+				body       TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			)`,
+			`CREATE TABLE hardening_pr_state (
+				key        TEXT PRIMARY KEY,
+				repo       TEXT NOT NULL,
+				pr_number  INTEGER NOT NULL,
+				body       TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			)`,
+		},
+	},
 }
 
 // DatabasePath returns the SQLite database under the state root.
@@ -74,8 +122,20 @@ func (s *Store) legacyWatchlistPath() string {
 	return filepath.Join(s.root, legacyWatchlistFileName)
 }
 
-// Close releases the database connection. Stores that were never used for
-// watch targets have nothing to close.
+func (s *Store) legacySessionsPath() string {
+	return filepath.Join(s.root, legacySessionsFileName)
+}
+
+func (s *Store) legacyConfigPath() string {
+	return filepath.Join(s.root, legacyConfigFileName)
+}
+
+func (s *Store) legacyHardeningPath() string {
+	return filepath.Join(s.root, legacyHardeningFileName)
+}
+
+// Close releases the database connection. Stores that were never opened have
+// nothing to close.
 func (s *Store) Close() error {
 	s.db.mu.Lock()
 	defer s.db.mu.Unlock()
@@ -88,7 +148,7 @@ func (s *Store) Close() error {
 }
 
 // database opens the state database on first use, applies pending migrations,
-// and imports the legacy watchlist.json once. Later calls reuse the pool.
+// and imports the legacy JSON files once. Later calls reuse the pool.
 func (s *Store) database() (*sql.DB, error) {
 	s.db.mu.Lock()
 	defer s.db.mu.Unlock()
@@ -108,7 +168,7 @@ func (s *Store) database() (*sql.DB, error) {
 		_ = conn.Close()
 		return nil, err
 	}
-	if err := s.importLegacyWatchlist(conn); err != nil {
+	if err := s.importLegacyFiles(conn); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
@@ -190,30 +250,90 @@ func applyMigration(ctx context.Context, conn *sql.DB, m migration) error {
 	return tx.Commit()
 }
 
-// importLegacyWatchlist moves watchlist.json into watch_targets. It only runs
-// while the table is empty, so a database that already has targets is never
-// overwritten by a stale file; that file is left alone and logged instead.
-func (s *Store) importLegacyWatchlist(conn *sql.DB) error {
-	path := s.legacyWatchlistPath()
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
+// legacyImport describes one JSON file to fold into the database: its path,
+// the table that must still be empty for the import to run, and the importer
+// that parses the bytes and writes rows inside the shared transaction. A
+// strict importer fails the open on malformed data so nothing is dropped;
+// a lenient one (service config, which has safe defaults) logs and skips.
+type legacyImport struct {
+	path   string
+	table  string
+	strict bool
+	// overwrite imports the file even when the table already has rows. The
+	// service config uses it: writing config.json and restarting the daemon
+	// stays the way operators change settings, and the file is consumed
+	// (renamed) once applied.
+	overwrite bool
+	load      func(ctx context.Context, q dbExecer, data []byte) (int, error)
+}
+
+// importLegacyFiles moves the pre-SQLite JSON files into the database inside
+// one transaction, then renames each imported file so it is not read again.
+// A table that already holds rows is never overwritten by a data file; the
+// file is left alone and logged instead. config.json is the exception (see
+// legacyImport.overwrite).
+func (s *Store) importLegacyFiles(conn *sql.DB) error {
+	imports := []legacyImport{
+		{path: s.legacyWatchlistPath(), table: "watch_targets", strict: true, load: importLegacyWatchlistData},
+		{path: s.legacySessionsPath(), table: "sessions", strict: true, load: importLegacySessionsData},
+		{path: s.legacyConfigPath(), table: "service_config", strict: false, overwrite: true, load: importLegacyConfigData},
+		{path: s.legacyHardeningPath(), table: "hardening_pr_state", strict: true, load: importLegacyHardeningData},
 	}
+	ctx := context.Background()
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	var existing int
-	if err := conn.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM watch_targets`).Scan(&existing); err != nil {
+	defer func() { _ = tx.Rollback() }()
+
+	var imported []string
+	var notes []string
+	for _, imp := range imports {
+		data, err := os.ReadFile(imp.path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		var existing int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+imp.table).Scan(&existing); err != nil {
+			return err
+		}
+		if existing > 0 && !imp.overwrite {
+			notes = append(notes, fmt.Sprintf("legacy %s ignored: %s already holds %d %s rows; remove the file or rename it to keep it", imp.path, s.DatabasePath(), existing, imp.table))
+			continue
+		}
+		count, err := imp.load(ctx, tx, data)
+		if err != nil {
+			if imp.strict {
+				return fmt.Errorf("import legacy %s: %w", imp.path, err)
+			}
+			notes = append(notes, fmt.Sprintf("legacy %s skipped: %v; defaults apply until the file is fixed or removed", imp.path, err))
+			continue
+		}
+		imported = append(imported, imp.path)
+		notes = append(notes, fmt.Sprintf("imported %d %s rows from %s into %s", count, imp.table, imp.path, s.DatabasePath()))
+	}
+	if err := tx.Commit(); err != nil {
 		return err
 	}
-	if existing > 0 {
-		s.AppendDaemonLog("legacy %s ignored: %s already holds %d watch targets; remove the file or rename it to keep it", path, s.DatabasePath(), existing)
-		return nil
+	for _, path := range imported {
+		if err := os.Rename(path, path+migratedFileSuffix); err != nil {
+			return err
+		}
 	}
+	for _, note := range notes {
+		s.AppendDaemonLog("%s", note)
+	}
+	return nil
+}
+
+func importLegacyWatchlistData(ctx context.Context, q dbExecer, data []byte) (int, error) {
 	var targets []WatchTarget
 	if len(bytes.TrimSpace(data)) > 0 {
 		if err := json.Unmarshal(data, &targets); err != nil {
-			return fmt.Errorf("import legacy watchlist %s: %w", path, err)
+			return 0, err
 		}
 	}
 	for i := range targets {
@@ -225,14 +345,43 @@ func (s *Store) importLegacyWatchlist(conn *sql.DB) error {
 		}
 		targets[i].MaxParallel = normalizeMaxParallelSessions(targets[i].MaxParallel)
 	}
-	if err := replaceWatchTargets(conn, targets); err != nil {
-		return fmt.Errorf("import legacy watchlist %s: %w", path, err)
+	return len(targets), replaceWatchTargetRows(ctx, q, targets)
+}
+
+func importLegacySessionsData(ctx context.Context, q dbExecer, data []byte) (int, error) {
+	var sessions []Session
+	if len(bytes.TrimSpace(data)) > 0 {
+		if err := json.Unmarshal(data, &sessions); err != nil {
+			return 0, err
+		}
 	}
-	if err := os.Rename(path, path+migratedFileSuffix); err != nil {
-		return err
+	for i := range sessions {
+		// Legacy migration shim, deliberately pinned to Codex; see decodeSession.
+		if strings.TrimSpace(sessions[i].Provider) == "" {
+			sessions[i].Provider = "codex"
+		}
 	}
-	s.AppendDaemonLog("imported %d watch targets from %s into %s", len(targets), path, s.DatabasePath())
-	return nil
+	return len(sessions), replaceSessionRows(ctx, q, sessions)
+}
+
+func importLegacyConfigData(ctx context.Context, q dbExecer, data []byte) (int, error) {
+	config := defaultServiceConfig()
+	if len(bytes.TrimSpace(data)) > 0 {
+		if err := json.Unmarshal(data, &config); err != nil {
+			return 0, err
+		}
+	}
+	return 1, saveServiceConfigRow(ctx, q, config)
+}
+
+func importLegacyHardeningData(ctx context.Context, q dbExecer, data []byte) (int, error) {
+	hs := make(HardeningState)
+	if len(bytes.TrimSpace(data)) > 0 {
+		if err := json.Unmarshal(data, &hs); err != nil {
+			return 0, err
+		}
+	}
+	return len(hs), replaceHardeningRows(ctx, q, hs)
 }
 
 // LoadWatchTargets returns every watch target in the order it was saved.
@@ -281,17 +430,20 @@ func (s *Store) SaveWatchTargets(targets []WatchTarget) error {
 	if err != nil {
 		return err
 	}
-	return replaceWatchTargets(conn, targets)
-}
-
-func replaceWatchTargets(conn *sql.DB, targets []WatchTarget) error {
 	ctx := context.Background()
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM watch_targets`); err != nil {
+	if err := replaceWatchTargetRows(ctx, tx, targets); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func replaceWatchTargetRows(ctx context.Context, q dbExecer, targets []WatchTarget) error {
+	if _, err := q.ExecContext(ctx, `DELETE FROM watch_targets`); err != nil {
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -300,9 +452,9 @@ func replaceWatchTargets(conn *sql.DB, targets []WatchTarget) error {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO watch_targets (position, path, repo, body, updated_at) VALUES (?, ?, ?, ?, ?)`, i+1, target.Path, target.Repo, string(body), now); err != nil {
+		if _, err := q.ExecContext(ctx, `INSERT INTO watch_targets (position, path, repo, body, updated_at) VALUES (?, ?, ?, ?, ?)`, i+1, target.Path, target.Repo, string(body), now); err != nil {
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }

@@ -106,7 +106,7 @@ func TestStartOneOffSessionSuccess(t *testing.T) {
 	}
 
 	// Verify session was saved.
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -344,7 +344,7 @@ func TestStartOneOffSessionReusesExistingSessionOrchestration(t *testing.T) {
 	}
 
 	// Verify session was saved with blocked status.
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,7 +476,7 @@ func TestStartOneOffSessionWithCustomProvider(t *testing.T) {
 		t.Fatal("expected error for incomplete session without PR")
 	}
 
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -564,7 +564,7 @@ func TestStartOneOffSessionUsesSandboxWhenConfigEnabled(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "sandbox provision") {
 		t.Fatalf("expected sandbox provision failure, got: %v", err)
 	}
-	sessions, err := app.state.LoadSessions()
+	sessions, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}

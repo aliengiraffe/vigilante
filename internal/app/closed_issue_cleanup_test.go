@@ -44,13 +44,13 @@ func TestClosedIssueCleanupRetiresEveryInactiveStatus(t *testing.T) {
 				if err := app.state.EnsureLayout(); err != nil {
 					t.Fatal(err)
 				}
-				if err := app.state.SaveSessions(sessions); err != nil {
+				if err := app.state.ReplaceSessions(sessions); err != nil {
 					t.Fatal(err)
 				}
 				if err := app.ScanOnce(context.Background()); err != nil {
 					t.Fatal(err)
 				}
-				sessions, err := app.state.LoadSessions()
+				sessions, err := app.state.ListSessions()
 				if err != nil {
 					t.Fatal(err)
 				}

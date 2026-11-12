@@ -287,9 +287,6 @@ func TestStatusCommandOutputPreservesServiceState(t *testing.T) {
 	if err := os.MkdirAll(vigilanteHome, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(vigilanteHome, "sessions.json"), []byte("[]"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	app := New()
 	var stdout bytes.Buffer
@@ -342,9 +339,6 @@ func TestStatusCommandOutputShowsConfiguredDaemonVersionWhenStopped(t *testing.T
 	if err := os.MkdirAll(vigilanteHome, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(vigilanteHome, "sessions.json"), []byte("[]"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	app := New()
 	var stdout bytes.Buffer
@@ -377,9 +371,6 @@ func TestStatusCommandOutputOmitsDaemonVersionWhenServiceIsNotInstalled(t *testi
 
 	vigilanteHome := filepath.Join(home, ".vigilante")
 	if err := os.MkdirAll(vigilanteHome, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(vigilanteHome, "sessions.json"), []byte("[]"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -427,8 +418,7 @@ func TestStatusCommandShowsSessionGroups(t *testing.T) {
 		{Repo: "owner/repo", IssueNumber: 2, Status: state.SessionStatusBlocked, BlockedStage: "pr_maintenance", PullRequestNumber: 3, PullRequestState: "OPEN", UpdatedAt: now.Add(-5 * time.Minute).Format(time.RFC3339)},
 		{Repo: "other/repo", IssueNumber: 4, Status: state.SessionStatusBlocked, BlockedStage: "issue_execution", UpdatedAt: now.Add(-5 * time.Minute).Format(time.RFC3339)},
 	}
-	sessionData, _ := json.Marshal(sessions)
-	if err := os.WriteFile(filepath.Join(vigilanteHome, "sessions.json"), sessionData, 0o644); err != nil {
+	if err := state.NewStore().ReplaceSessions(sessions); err != nil {
 		t.Fatal(err)
 	}
 
@@ -541,8 +531,7 @@ func TestStatusCommandShowsWatchedRepositories(t *testing.T) {
 		{Repo: "owner/alpha", IssueNumber: 1, Status: state.SessionStatusRunning},
 		{Repo: "owner/alpha", IssueNumber: 2, Status: state.SessionStatusBlocked, BlockedStage: "issue_execution"},
 	}
-	sessionData, _ := json.Marshal(sessions)
-	if err := os.WriteFile(filepath.Join(vigilanteHome, "sessions.json"), sessionData, 0o644); err != nil {
+	if err := state.NewStore().ReplaceSessions(sessions); err != nil {
 		t.Fatal(err)
 	}
 
@@ -617,9 +606,6 @@ func TestStatusCommandShowsNoWatchedRepositories(t *testing.T) {
 	if err := os.MkdirAll(vigilanteHome, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(vigilanteHome, "sessions.json"), []byte("[]"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	app := New()
 	var stdout bytes.Buffer
@@ -682,9 +668,6 @@ func TestStatusCommandShowsRateLimits(t *testing.T) {
 	if err := os.MkdirAll(vigilanteHome, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(vigilanteHome, "sessions.json"), []byte("[]"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	resetTime := time.Now().Add(30 * time.Minute).Unix()
 	rateLimitJSON := rateLimitResponse(5000, 4800, resetTime, 5000, 4500, resetTime)
@@ -734,9 +717,6 @@ func TestStatusCommandRateLimitFailureGraceful(t *testing.T) {
 	if err := os.MkdirAll(vigilanteHome, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(vigilanteHome, "sessions.json"), []byte("[]"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	app := New()
 	var stdout bytes.Buffer
@@ -784,8 +764,7 @@ func TestStatusCommandStaleSessionsShown(t *testing.T) {
 	sessions := []state.Session{
 		{Repo: "owner/repo", IssueNumber: 99, Status: state.SessionStatusRunning, StartedAt: now.Add(-2 * time.Hour).Format(time.RFC3339)},
 	}
-	sessionData, _ := json.Marshal(sessions)
-	if err := os.WriteFile(filepath.Join(vigilanteHome, "sessions.json"), sessionData, 0o644); err != nil {
+	if err := state.NewStore().ReplaceSessions(sessions); err != nil {
 		t.Fatal(err)
 	}
 
@@ -836,8 +815,7 @@ func TestStatusCommandExcludesClosedSessionsFromCountsAndGroups(t *testing.T) {
 		{Repo: "owner/repo", IssueNumber: 70, Status: state.SessionStatusClosed},
 		{Repo: "owner/repo", IssueNumber: 71, Status: state.SessionStatusSuccess},
 	}
-	sessionData, _ := json.Marshal(sessions)
-	if err := os.WriteFile(filepath.Join(vigilanteHome, "sessions.json"), sessionData, 0o644); err != nil {
+	if err := state.NewStore().ReplaceSessions(sessions); err != nil {
 		t.Fatal(err)
 	}
 
@@ -906,8 +884,7 @@ func TestStatusCommandReconcilesStaleRunningSessionAgainstOpenPullRequest(t *tes
 			UpdatedAt:       now.Add(-2 * time.Hour).Format(time.RFC3339),
 		},
 	}
-	sessionData, _ := json.Marshal(sessions)
-	if err := os.WriteFile(filepath.Join(vigilanteHome, "sessions.json"), sessionData, 0o644); err != nil {
+	if err := state.NewStore().ReplaceSessions(sessions); err != nil {
 		t.Fatal(err)
 	}
 
@@ -938,7 +915,7 @@ func TestStatusCommandReconcilesStaleRunningSessionAgainstOpenPullRequest(t *tes
 		t.Fatalf("expected reconciled session to move out of stale running, got:\n%s", output)
 	}
 
-	loaded, err := app.state.LoadSessions()
+	loaded, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -969,8 +946,7 @@ func TestStatusCommandLeavesStaleRunningSessionWhenGitHubReconciliationFails(t *
 	sessions := []state.Session{
 		{Repo: "owner/repo", IssueNumber: 99, Branch: "vigilante/issue-99", Status: state.SessionStatusRunning, StartedAt: now.Add(-2 * time.Hour).Format(time.RFC3339), LastHeartbeatAt: now.Add(-2 * time.Hour).Format(time.RFC3339)},
 	}
-	sessionData, _ := json.Marshal(sessions)
-	if err := os.WriteFile(filepath.Join(vigilanteHome, "sessions.json"), sessionData, 0o644); err != nil {
+	if err := state.NewStore().ReplaceSessions(sessions); err != nil {
 		t.Fatal(err)
 	}
 
@@ -998,7 +974,7 @@ func TestStatusCommandLeavesStaleRunningSessionWhenGitHubReconciliationFails(t *
 		t.Fatalf("expected stale section when github reconciliation fails, got:\n%s", output)
 	}
 
-	loaded, err := app.state.LoadSessions()
+	loaded, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}

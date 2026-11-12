@@ -198,7 +198,7 @@ func TestCommentPollingSimulatedHourWithHistoricalSessions(t *testing.T) {
 	if err := app.state.SaveWatchTargets(targets); err != nil {
 		t.Fatal(err)
 	}
-	if err := app.state.SaveSessions(sessions); err != nil {
+	if err := app.state.ReplaceSessions(sessions); err != nil {
 		t.Fatal(err)
 	}
 	for minute := 0; minute < 60; minute++ {
@@ -232,7 +232,7 @@ func TestCommentPollingSimulatedHourWithHistoricalSessions(t *testing.T) {
 	if status.Used >= 500 || status.GraphQLUsed > 2000 {
 		t.Fatalf("unexpected budget consumption: %+v", status)
 	}
-	persisted, err := app.state.LoadSessions()
+	persisted, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,7 +368,7 @@ func TestFailedSessionsRetireFromPollingByAgeAndPullRequestState(t *testing.T) {
 	if sessions[0].NextCommentPollAt != "" || sessions[1].NextCommentPollAt != "" {
 		t.Fatal("retired sessions were scheduled")
 	}
-	listed, err := app.state.LoadSessions()
+	listed, err := app.state.ListSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
