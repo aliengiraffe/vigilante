@@ -176,6 +176,14 @@ per retention window. Issue-detail lookups that fail repeatedly without an HTTP
 status (network errors, `gh` exiting without a response) back off exponentially
 after five consecutive failures instead of retrying every scan.
 
+Once an issue is observed closed or unavailable, its inactive session is marked
+`closed` regardless of its previous status and stops issue, comment, and PR
+polling. Local worktrees, branches, and artifacts are cleaned up through the
+normal cleanup path. Failed cleanup retries locally up to the automatic retry
+limit, then requests manual repair without resuming polling. Older closed
+sessions with unfinished cleanup are also retried on the next scan. Running or
+resuming agents and in-flight PR maintenance are left to their existing handlers.
+
 Optional `config.json` settings (restart the daemon after changing them):
 
 ```json
