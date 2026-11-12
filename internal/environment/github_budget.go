@@ -432,3 +432,14 @@ func (r *GitHubBudgetRunner) RunStreaming(ctx context.Context, dir string, w io.
 		return output, err
 	})
 }
+
+// RunStreamingWithEnv passes environment overrides through to the base runner
+// for provider processes, with the same budgeting as the other variants.
+func (r *GitHubBudgetRunner) RunStreamingWithEnv(ctx context.Context, dir string, env map[string]string, w io.Writer, name string, args ...string) (string, error) {
+	return r.run(ctx, dir, name, args, func() (string, error) {
+		if base, ok := r.Base.(EnvRunner); ok {
+			return base.RunStreamingWithEnv(ctx, dir, env, w, name, args...)
+		}
+		return "", fmt.Errorf("%s: runner does not support environment overrides", name)
+	})
+}

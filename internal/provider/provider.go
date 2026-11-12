@@ -42,6 +42,10 @@ type Invocation struct {
 	Dir  string
 	Name string
 	Args []string
+	// Env is applied on top of the daemon environment for this process. It is
+	// only set for targets that use an agent profile; nil means the process
+	// inherits the daemon environment unchanged.
+	Env map[string]string
 }
 
 type IssueTask struct {

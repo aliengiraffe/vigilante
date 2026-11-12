@@ -51,7 +51,11 @@ type WatchTarget struct {
 	ProjectRef            string              `json:"project_ref,omitempty"`
 	SandboxMode           bool                `json:"sandbox_mode,omitempty"`
 	SandboxImage          string              `json:"sandbox_image,omitempty"`
-	CommentSweep          *CommentSweepCursor `json:"comment_sweep,omitempty"`
+	// AgentProfile names an entry of ServiceConfig.AgentProfiles that customizes
+	// how coding agents are launched for this target. Empty means the default
+	// invocation.
+	AgentProfile string              `json:"agent_profile,omitempty"`
+	CommentSweep *CommentSweepCursor `json:"comment_sweep,omitempty"`
 }
 
 // CommentSweepCursor records where the repository-wide comment sweep left off.
@@ -183,6 +187,9 @@ type ServiceConfig struct {
 	LogMaxTotalSize                  string `json:"log_max_total_size,omitempty"`
 	LogMaxFileSize                   string `json:"log_max_file_size,omitempty"`
 	LogMaxBackups                    *int   `json:"log_max_backups,omitempty"`
+	// AgentProfiles are named per-provider agent invocation settings that a
+	// watch target selects through WatchTarget.AgentProfile.
+	AgentProfiles map[string]AgentProfile `json:"agent_profiles,omitempty"`
 }
 
 // LogRotationLimits returns the log rotation limits for the logs directory.
@@ -260,6 +267,7 @@ type Session struct {
 	Repo                           string              `json:"repo"`
 	Provider                       string              `json:"provider,omitempty"`
 	Model                          string              `json:"model,omitempty"`
+	AgentProfile                   string              `json:"agent_profile,omitempty"`
 	IssueBackend                   string              `json:"issue_backend,omitempty"`
 	GitBackend                     string              `json:"git_backend,omitempty"`
 	PRBackend                      string              `json:"pr_backend,omitempty"`

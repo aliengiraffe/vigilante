@@ -372,6 +372,9 @@ func (m statusModel) repoLines() []string {
 			fmt.Sprintf("branch %s (%s)", valueOrUnknown(target.Branch), target.EffectiveBranchMode()),
 			fmt.Sprintf("provider %s", valueOrUnknown(target.Provider)),
 		}
+		if target.AgentProfile != "" {
+			details = append(details, fmt.Sprintf("agent profile %s", target.AgentProfile))
+		}
 		if issueBackend := strings.TrimSpace(target.EffectiveIssueBackend()); issueBackend != "" && issueBackend != "github" {
 			details = append(details, fmt.Sprintf("issues %s", issueBackend))
 		}

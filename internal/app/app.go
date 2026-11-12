@@ -178,10 +178,16 @@ type watchIssueOptions struct {
 	issueStage   string
 }
 
+// watchSandboxOptions carries the watch flags that shape how a target's
+// coding-agent sessions execute: the sandbox settings and the agent profile.
 type watchSandboxOptions struct {
 	sandboxFlagSet bool
 	sandboxMode    bool
 	sandboxImage   string
+	// agentProfileFlagSet distinguishes --agent-profile "" (clear the profile
+	// on an existing target) from the flag being absent (leave it alone).
+	agentProfileFlagSet bool
+	agentProfile        string
 }
 
 func (f *stringListFlag) String() string {
@@ -729,7 +735,7 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 	case "watch":
 		fs := flag.NewFlagSet("watch", flag.ContinueOnError)
 		configureFlagSet(fs, func(w io.Writer) {
-			fmt.Fprintln(w, "usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] [--fork [--fork-owner value]] [--sandbox [--sandbox-image value]] <path>")
+			fmt.Fprintln(w, "usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] [--fork [--fork-owner value]] [--sandbox [--sandbox-image value]] [--agent-profile name] <path>")
 			fmt.Fprintln(w)
 			fmt.Fprintln(w, "Register a local repository for issue monitoring.")
 			fmt.Fprintln(w)
@@ -749,6 +755,7 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 		forkOwner := fs.String("fork-owner", "", "GitHub owner that should host the fork (defaults to the authenticated gh user)")
 		sandboxMode := fs.Bool("sandbox", false, "run coding-agent sessions inside isolated Docker containers")
 		sandboxImage := fs.String("sandbox-image", "", "Docker image for sandbox containers (defaults to vigilante-sandbox:latest)")
+		agentProfile := fs.String("agent-profile", "", "agent profile from config.json agent_profiles that sets the coding agent command, args, and env for this repository (pass an empty value to clear; restart the daemon after editing profiles)")
 		if err := parseFlagSet(fs, args[1:], a.stdout); err != nil {
 			if errors.Is(err, errHelpHandled) {
 				return nil
@@ -756,7 +763,7 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 			return err
 		}
 		if fs.NArg() != 1 {
-			return errors.New("usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] [--fork [--fork-owner value]] [--sandbox [--sandbox-image value]] <path>")
+			return errors.New("usage: vigilante watch [--label value] [--assignee value] [--max-parallel value] [--provider value] [--issue-tracker value] [--issue-tracker-stage value] [--branch value | --track-default-branch] [--fork [--fork-owner value]] [--sandbox [--sandbox-image value]] [--agent-profile name] <path>")
 		}
 		parsedMaxParallel := unsetMaxParallel
 		branchOptions := watchBranchOptions{}
@@ -776,6 +783,9 @@ func (a *App) runCommand(ctx context.Context, args []string) error {
 			case "sandbox":
 				sbxOptions.sandboxFlagSet = true
 				sbxOptions.sandboxMode = *sandboxMode
+			case "agent-profile":
+				sbxOptions.agentProfileFlagSet = true
+				sbxOptions.agentProfile = strings.TrimSpace(*agentProfile)
 			}
 		})
 		branchOptions.pinnedBranch = strings.TrimSpace(*branch)
@@ -1210,7 +1220,7 @@ func (a *App) runCleanupCommand(ctx context.Context, args []string) error {
 func (a *App) runStartCommand(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
 	configureFlagSet(fs, func(w io.Writer) {
-		fmt.Fprintln(w, "usage: vigilante start <repo-folder> --issue <n> [--provider value] [--sandbox]")
+		fmt.Fprintln(w, "usage: vigilante start <repo-folder> --issue <n> [--provider value] [--sandbox] [--agent-profile name]")
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, "Run a one-off issue implementation session against a local repository.")
 		fmt.Fprintln(w, "The repository does not need to be watched.")
@@ -1221,6 +1231,7 @@ func (a *App) runStartCommand(ctx context.Context, args []string) error {
 	issue := fs.Int("issue", 0, "issue number to implement")
 	selectedProvider := fs.String("provider", "", "coding agent provider")
 	sandboxMode := fs.Bool("sandbox", false, "run this one-off session inside an isolated Docker container")
+	agentProfile := fs.String("agent-profile", "", "agent profile from config.json agent_profiles that sets the coding agent command, args, and env for this session")
 	if err := parseFlagSet(fs, args, a.stdout); err != nil {
 		if errors.Is(err, errHelpHandled) {
 			return nil
@@ -1228,19 +1239,29 @@ func (a *App) runStartCommand(ctx context.Context, args []string) error {
 		return err
 	}
 	if fs.NArg() != 1 {
-		return errors.New("usage: vigilante start <repo-folder> --issue <n> [--provider value] [--sandbox]")
+		return errors.New("usage: vigilante start <repo-folder> --issue <n> [--provider value] [--sandbox] [--agent-profile name]")
 	}
 	if *issue <= 0 {
-		return errors.New("usage: vigilante start <repo-folder> --issue <n> [--provider value] [--sandbox]")
+		return errors.New("usage: vigilante start <repo-folder> --issue <n> [--provider value] [--sandbox] [--agent-profile name]")
 	}
-	return a.StartOneOffSession(ctx, fs.Arg(0), *issue, strings.TrimSpace(*selectedProvider), *sandboxMode)
+	return a.StartOneOffSessionWithProfile(ctx, fs.Arg(0), *issue, strings.TrimSpace(*selectedProvider), *sandboxMode, strings.TrimSpace(*agentProfile))
 }
 
 // StartOneOffSession runs a one-off issue implementation session for a local
 // repository that is not necessarily in the watchlist. The repository is not
 // added to the watchlist as a side effect.
 func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumber int, providerID string, sandboxRequested bool) error {
+	return a.StartOneOffSessionWithProfile(ctx, rawPath, issueNumber, providerID, sandboxRequested, "")
+}
+
+// StartOneOffSessionWithProfile is StartOneOffSession with the coding agent
+// launched under the named agent profile from config.json. An empty profile
+// name runs the default invocation.
+func (a *App) StartOneOffSessionWithProfile(ctx context.Context, rawPath string, issueNumber int, providerID string, sandboxRequested bool, agentProfile string) error {
 	if err := a.state.EnsureLayout(); err != nil {
+		return err
+	}
+	if err := a.requireAgentProfile(agentProfile); err != nil {
 		return err
 	}
 
@@ -1275,6 +1296,7 @@ func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumbe
 		Provider:       providerID,
 		MaxParallel:    1,
 		SandboxMode:    sandboxRequested,
+		AgentProfile:   agentProfile,
 	}
 
 	if err := a.ensureIssueTrackerReady(ctx, target.EffectiveIssueBackend()); err != nil {
@@ -1343,6 +1365,7 @@ func (a *App) StartOneOffSession(ctx context.Context, rawPath string, issueNumbe
 		Repo:               target.Repo,
 		Provider:           selectedProvider,
 		Model:              selectedModel,
+		AgentProfile:       target.AgentProfile,
 		IssueBackend:       target.EffectiveIssueBackend(),
 		GitBackend:         target.EffectiveGitBackend(),
 		PRBackend:          target.EffectivePRBackend(),
@@ -1754,7 +1777,92 @@ func (a *App) installBundledSkills() error {
 			return err
 		}
 	}
+	return a.installAgentProfileSkills()
+}
+
+// installAgentProfileSkills installs the bundled skills into every config
+// directory an agent profile points a provider at, so sessions launched under
+// a profile still resolve the /vigilante-* skills. An unusable profile is
+// reported and skipped rather than failing the others.
+func (a *App) installAgentProfileSkills() error {
+	config, err := a.state.LoadServiceConfig()
+	if err != nil {
+		return err
+	}
+	a.reportAgentProfileErrors(config)
+	names := make([]string, 0, len(config.AgentProfiles))
+	for name := range config.AgentProfiles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	installed := map[string]bool{}
+	for _, name := range names {
+		profile, err := config.AgentProfile(name)
+		if err != nil {
+			continue
+		}
+		for _, providerID := range provider.RegisteredIDs() {
+			dir := provider.ProfileConfigDir(providerID, profile.Providers[providerID])
+			// A relative directory is rejected when a session resolves the
+			// profile; do not install into wherever setup happens to run.
+			if dir == "" || !filepath.IsAbs(dir) || installed[providerID+"\x00"+dir] {
+				continue
+			}
+			installed[providerID+"\x00"+dir] = true
+			if err := skill.EnsureInstalled(providerID, dir); err != nil {
+				return fmt.Errorf("install skills for agent profile %q into %s: %w", name, dir, err)
+			}
+		}
+	}
 	return nil
+}
+
+// reportAgentProfileErrors logs every unusable agent profile in config and
+// prints it to stderr.
+func (a *App) reportAgentProfileErrors(config state.ServiceConfig) {
+	for _, err := range config.AgentProfileErrors() {
+		a.logger.Error("agent profile invalid", "err", err)
+		fmt.Fprintln(a.stderr, "config error:", err)
+	}
+}
+
+// checkAgentProfiles validates the agent profiles at daemon start. Problems
+// are reported but never returned: targets that do not use a broken profile
+// keep running, and a target that does is blocked when its session starts.
+func (a *App) checkAgentProfiles() {
+	config, err := a.state.LoadServiceConfig()
+	if err != nil {
+		a.logger.Error("agent profile check skipped: config.json unreadable", "err", err)
+		return
+	}
+	a.reportAgentProfileErrors(config)
+	targets, err := a.state.LoadWatchTargets()
+	if err != nil {
+		return
+	}
+	for _, target := range targets {
+		if target.AgentProfile == "" {
+			continue
+		}
+		if _, err := config.AgentProfile(target.AgentProfile); err != nil {
+			a.logger.Warn("watch target agent profile unavailable; its sessions will be blocked until it is fixed", "repo", target.Repo, "agent_profile", target.AgentProfile, "err", err)
+			fmt.Fprintf(a.stderr, "warning: %s: %v; sessions for this repository will be blocked until it is fixed\n", target.Repo, err)
+		}
+	}
+}
+
+// requireAgentProfile fails when name is set but does not resolve to a usable
+// agent profile in config.json.
+func (a *App) requireAgentProfile(name string) error {
+	if name == "" {
+		return nil
+	}
+	config, err := a.state.LoadServiceConfig()
+	if err != nil {
+		return err
+	}
+	_, err = config.AgentProfile(name)
+	return err
 }
 
 func (a *App) Watch(ctx context.Context, rawPath string, labels []string, assignee string, maxParallel int) error {
@@ -1775,6 +1883,9 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []str
 	}
 	if branchOptions.branchFlagSet && branchOptions.pinnedBranch == "" {
 		return errors.New("branch cannot be empty")
+	}
+	if err := a.requireAgentProfile(sandboxOptions.agentProfile); err != nil {
+		return err
 	}
 	if strings.TrimSpace(providerID) != "" {
 		resolvedProvider, err := provider.Resolve(providerID)
@@ -1895,6 +2006,9 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []str
 			if sandboxOptions.sandboxImage != "" {
 				targets[i].SandboxImage = sandboxOptions.sandboxImage
 			}
+			if sandboxOptions.agentProfileFlagSet {
+				targets[i].AgentProfile = sandboxOptions.agentProfile
+			}
 			updated = true
 			break
 		}
@@ -1918,6 +2032,7 @@ func (a *App) watchWithOptions(ctx context.Context, rawPath string, labels []str
 			IssueStage:     effectiveIssueStage,
 			SandboxMode:    sandboxOptions.sandboxMode,
 			SandboxImage:   sandboxOptions.sandboxImage,
+			AgentProfile:   sandboxOptions.agentProfile,
 		}
 		if providerID != "" {
 			target.Provider = providerID
@@ -2079,6 +2194,8 @@ func (a *App) DaemonRun(ctx context.Context, interval time.Duration, once bool) 
 	// Bring an already-oversized logs directory back within budget before doing
 	// any work, so upgrading operators do not need a manual cleanup step.
 	a.sweepLogsDir()
+
+	a.checkAgentProfiles()
 
 	// Initialize sandbox manager if sandbox mode is enabled.
 	if err := a.initSandboxIfEnabled(ctx); err != nil {
@@ -4748,6 +4865,10 @@ func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Se
 	if err != nil {
 		return err
 	}
+	selectedProvider, err = provider.ForTarget(a.state, target, selectedProvider)
+	if err != nil {
+		return err
+	}
 	if session.BlockedStage == "baseline_preflight" {
 		preflightInvocation, err := selectedProvider.BuildIssuePreflightInvocation(provider.IssueTask{
 			Target:  target,
@@ -4757,7 +4878,7 @@ func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Se
 		if err != nil {
 			return err
 		}
-		preflightOutput, err := a.env.Runner.Run(ctx, preflightInvocation.Dir, preflightInvocation.Name, preflightInvocation.Args...)
+		preflightOutput, err := provider.Run(ctx, a.env.Runner, preflightInvocation, nil)
 		if err != nil {
 			a.logger.Error("resume issue preflight failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err, "output", summarizeText(preflightOutput))
 			return err
@@ -4776,7 +4897,7 @@ func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Se
 	if strings.TrimSpace(session.WorktreePath) != "" {
 		a.commentOnIssueBestEffort(ctx, session.Repo, session.IssueNumber, issuerunner.SessionLaunchComment(*session, selectedProvider.DisplayName()), "resume launch")
 	}
-	output, err := a.env.Runner.Run(ctx, invocation.Dir, invocation.Name, invocation.Args...)
+	output, err := provider.Run(ctx, a.env.Runner, invocation, nil)
 	session.EndedAt = a.clock().Format(time.RFC3339)
 	session.LastHeartbeatAt = session.EndedAt
 	session.UpdatedAt = session.EndedAt
@@ -5343,6 +5464,9 @@ func watchTargetForSession(session state.Session, fallbackTarget state.WatchTarg
 		GitBackend:     fallbackText(session.GitBackend, fallbackTarget.GitBackend),
 		PRBackend:      fallbackText(session.PRBackend, fallbackTarget.PRBackend),
 		ProjectRef:     fallbackTarget.ProjectRef,
+		// The watch target's profile wins; a one-off session, which has no
+		// watch target, keeps the profile it was started with.
+		AgentProfile: fallbackText(fallbackTarget.AgentProfile, session.AgentProfile),
 	}
 	return target
 }
@@ -6535,11 +6659,16 @@ func (a *App) generateResumeFailureDiagnostic(ctx context.Context, session state
 	if err != nil {
 		return resumeFailureDiagnostic{}, err
 	}
+	selectedProvider, err = provider.ForTarget(a.state, watchTargetForSession(session, a.fallbackWatchTargetForSession(session)), selectedProvider)
+	if err != nil {
+		return resumeFailureDiagnostic{}, err
+	}
 	invocation, err := buildResumeFailureSummaryInvocation(selectedProvider, workdir, buildResumeFailureSummaryPrompt(session, previousStage))
 	if err != nil {
 		return resumeFailureDiagnostic{}, err
 	}
-	output, err := a.env.Runner.Run(ctx, invocation.Dir, invocation.Name, invocation.Args...)
+	invocation = provider.ApplyProfile(selectedProvider, invocation)
+	output, err := provider.Run(ctx, a.env.Runner, invocation, nil)
 	if err != nil {
 		return resumeFailureDiagnostic{}, err
 	}
@@ -6859,6 +6988,10 @@ func (a *App) issueCreate(ctx context.Context, repoSlug string, providerOverride
 	if err != nil {
 		return err
 	}
+	selectedProvider, err = provider.ForTarget(a.state, *target, selectedProvider)
+	if err != nil {
+		return err
+	}
 
 	for _, tool := range provider.RequiredToolset(selectedProvider) {
 		if _, err := a.env.Runner.LookPath(tool); err != nil {
@@ -6876,7 +7009,7 @@ func (a *App) issueCreate(ctx context.Context, repoSlug string, providerOverride
 
 	fmt.Fprintf(a.stdout, "Creating issue on %s backend for %s using %s...\n", issueBackend, repoSlug, selectedProvider.DisplayName())
 
-	output, err := a.env.Runner.Run(ctx, invocation.Dir, invocation.Name, invocation.Args...)
+	output, err := provider.Run(ctx, a.env.Runner, invocation, nil)
 	if err != nil {
 		return fmt.Errorf("agent invocation failed: %w", err)
 	}
@@ -7602,6 +7735,13 @@ func (a *App) dispatchPackageRemediation(ctx context.Context, target state.Watch
 		a.logger.Error("package remediation provider failed", "repo", target.Repo, "pr", pr.Number, "err", err)
 		return
 	}
+	selectedProvider, err = provider.ForTarget(a.state, target, selectedProvider)
+	if err != nil {
+		body := hardening.FormatRemediationResultComment(false, fmt.Sprintf("Agent profile unavailable: %s", err.Error()))
+		_ = prMgr.CommentOnPullRequest(ctx, target.Repo, pr.Number, body)
+		a.logger.Warn("package remediation agent profile unavailable", "repo", target.Repo, "pr", pr.Number, "agent_profile", target.AgentProfile, "err", err)
+		return
+	}
 
 	if err := provider.ValidateRuntimeCompatibility(ctx, a.env.Runner, selectedProvider); err != nil {
 		body := hardening.FormatRemediationResultComment(false, fmt.Sprintf("Provider runtime check failed: %s", err.Error()))
@@ -7623,7 +7763,7 @@ func (a *App) dispatchPackageRemediation(ctx context.Context, target state.Watch
 		return
 	}
 
-	output, err := a.env.Runner.Run(ctx, invocation.Dir, invocation.Name, invocation.Args...)
+	output, err := provider.Run(ctx, a.env.Runner, invocation, nil)
 	if err != nil {
 		body := hardening.FormatRemediationResultComment(false, fmt.Sprintf("Remediation session failed.\n\n```\n%s\n```", summarizeMaintenanceError(err)))
 		_ = prMgr.CommentOnPullRequest(ctx, target.Repo, pr.Number, body)
@@ -7640,6 +7780,23 @@ func (a *App) dispatchPackageRemediation(ctx context.Context, target state.Watch
 // inside it, and tears down the sandbox when done.
 func (a *App) runSandboxSession(ctx context.Context, target state.WatchTarget, issue ghcli.Issue, session state.Session) state.Session {
 	config, _ := a.state.LoadServiceConfig()
+
+	// Resolve the agent profile before provisioning: its env has to be baked
+	// into the container, and a broken profile must not cost a container.
+	var profile state.AgentInvocation
+	if target.AgentProfile != "" {
+		selectedProvider, err := provider.Resolve(session.Provider)
+		if err != nil {
+			return issuerunner.RunIssueSession(ctx, a.env, a.state, a.issueTrackerForTarget(target), target, issue, session)
+		}
+		session.Provider = selectedProvider.ID()
+		resolved, err := config.AgentInvocation(target.AgentProfile, session.Provider)
+		if err != nil {
+			a.logger.Warn("sandbox session blocked: agent profile unavailable", "repo", target.Repo, "issue", issue.Number, "agent_profile", target.AgentProfile, "err", err)
+			return issuerunner.BlockSessionOnAgentProfile(ctx, a.state, a.issueTrackerForTarget(target), target, issue, session, err)
+		}
+		profile = resolved
+	}
 
 	var ttl time.Duration
 	if raw := strings.TrimSpace(config.SandboxDefaultTTL); raw != "" {
@@ -7667,6 +7824,7 @@ func (a *App) runSandboxSession(ctx context.Context, target state.WatchTarget, i
 	} else {
 		a.logger.Warn("no host ssh agent available to forward into sandbox; will rely on deploy key or host ssh key fallback")
 	}
+	mounts = applySandboxAgentProfile(session.Provider, profile, mounts, extraEnv)
 
 	sbxSession, err := a.sandboxManager.Provision(ctx, sandbox.SessionConfig{
 		Repository:     target.Repo,
@@ -7745,6 +7903,32 @@ func (a *App) runSandboxSession(ctx context.Context, target state.WatchTarget, i
 	}
 
 	return result
+}
+
+// applySandboxAgentProfile routes an agent profile into a sandbox container.
+// Its env is added to extraEnv so the container is created with it. When the
+// profile points the provider's config directory (CLAUDE_CONFIG_DIR,
+// CODEX_HOME) at a host path, that path is mounted at the container path the
+// default config directory uses — replacing the default mount — and the env
+// variable is rewritten to the container path.
+func applySandboxAgentProfile(providerID string, profile state.AgentInvocation, mounts []container.Mount, extraEnv map[string]string) []container.Mount {
+	for key, value := range profile.Env {
+		extraEnv[key] = value
+	}
+	hostDir := provider.ProfileConfigDir(providerID, profile)
+	configDir, ok := provider.ConfigDirFor(providerID)
+	if hostDir == "" || !ok {
+		return mounts
+	}
+	kept := make([]container.Mount, 0, len(mounts)+1)
+	for _, mount := range mounts {
+		if mount.Target != configDir.ContainerPath {
+			kept = append(kept, mount)
+		}
+	}
+	kept = append(kept, container.Mount{Source: hostDir, Target: configDir.ContainerPath})
+	extraEnv[configDir.EnvName] = configDir.ContainerPath
+	return kept
 }
 
 func sandboxConfigMounts(homeDir string, store *state.Store, enableSSHSigning bool) []container.Mount {

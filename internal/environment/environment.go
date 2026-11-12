@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 )
@@ -29,6 +30,60 @@ type Runner interface {
 type StreamingRunner interface {
 	Runner
 	RunStreaming(ctx context.Context, dir string, w io.Writer, name string, args ...string) (string, error)
+}
+
+// EnvRunner extends Runner with a variant that runs a command with extra
+// environment variables. It exists for coding-agent processes launched under an
+// agent profile; ordinary git and gh calls keep using Run and RunStreaming and
+// inherit the daemon environment untouched.
+type EnvRunner interface {
+	Runner
+	// RunStreamingWithEnv runs the command with env applied on top of the
+	// inherited environment (env wins on a duplicate key). Output is copied to
+	// w as it is produced when w is non-nil.
+	RunStreamingWithEnv(ctx context.Context, dir string, env map[string]string, w io.Writer, name string, args ...string) (string, error)
+}
+
+// RunWithEnv runs a command through runner with env applied on top of the
+// inherited environment. With an empty env it is exactly Run or RunStreaming,
+// so callers that never set env are unaffected. A runner that cannot apply env
+// is an error rather than a silent fallback: dropping the overrides would
+// launch the agent under the wrong configuration.
+func RunWithEnv(ctx context.Context, runner Runner, dir string, env map[string]string, w io.Writer, name string, args ...string) (string, error) {
+	if len(env) == 0 {
+		if sr, ok := runner.(StreamingRunner); ok && w != nil {
+			return sr.RunStreaming(ctx, dir, w, name, args...)
+		}
+		return runner.Run(ctx, dir, name, args...)
+	}
+	er, ok := runner.(EnvRunner)
+	if !ok {
+		return "", fmt.Errorf("%s: runner does not support environment overrides", name)
+	}
+	return er.RunStreamingWithEnv(ctx, dir, env, w, name, args...)
+}
+
+// MergeEnv returns base with overrides applied: an override replaces every
+// inherited entry for the same key, and the remaining inherited entries keep
+// their order. Overrides are appended sorted by key so the result is stable.
+func MergeEnv(base []string, overrides map[string]string) []string {
+	merged := make([]string, 0, len(base)+len(overrides))
+	for _, entry := range base {
+		key, _, _ := strings.Cut(entry, "=")
+		if _, replaced := overrides[key]; replaced {
+			continue
+		}
+		merged = append(merged, entry)
+	}
+	keys := make([]string, 0, len(overrides))
+	for key := range overrides {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		merged = append(merged, key+"="+overrides[key])
+	}
+	return merged
 }
 
 type ExecRunner struct{}
@@ -104,6 +159,39 @@ func (ExecRunner) RunStreaming(ctx context.Context, dir string, w io.Writer, nam
 		return output, fmt.Errorf("%s %v: %w", name, args, err)
 	}
 	return output, nil
+}
+
+// RunStreamingWithEnv executes a command with env applied on top of the
+// inherited environment, copying output to w when it is non-nil. With an empty
+// env the command inherits the daemon environment exactly as RunStreaming does.
+func (ExecRunner) RunStreamingWithEnv(ctx context.Context, dir string, env map[string]string, w io.Writer, name string, args ...string) (string, error) {
+	cmd := envCommand(ctx, dir, env, name, args...)
+	var buf bytes.Buffer
+	var out io.Writer = &buf
+	if w != nil {
+		out = io.MultiWriter(w, &buf)
+	}
+	cmd.Stdout = out
+	cmd.Stderr = out
+	err := cmd.Run()
+	output := buf.String()
+	if err != nil {
+		return output, fmt.Errorf("%s %v: %w", name, args, err)
+	}
+	return output, nil
+}
+
+// envCommand builds the command for RunStreamingWithEnv. cmd.Env stays nil
+// when there are no overrides so the child inherits the environment verbatim.
+func envCommand(ctx context.Context, dir string, env map[string]string, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	if len(env) > 0 {
+		cmd.Env = MergeEnv(os.Environ(), env)
+	}
+	return cmd
 }
 
 func (ExecRunner) LookPath(file string) (string, error) {
@@ -215,6 +303,54 @@ func (r LoggingRunner) RunStreaming(ctx context.Context, dir string, w io.Writer
 		}
 	}
 	return output, err
+}
+
+// RunStreamingWithEnv delegates to the base runner's RunStreamingWithEnv with
+// the usual logging and telemetry. Only the names of the env variables are
+// logged, never their values. A base runner that cannot apply env is an error.
+func (r LoggingRunner) RunStreamingWithEnv(ctx context.Context, dir string, env map[string]string, w io.Writer, name string, args ...string) (string, error) {
+	startedAt := time.Now().UTC()
+	if r.Logger != nil {
+		r.Logger.Info("command start", "dir", dir, "cmd", commandString(name, args...), "streaming", w != nil, "env_names", EnvNames(env))
+	}
+	var output string
+	var err error
+	if er, ok := r.Base.(EnvRunner); ok {
+		output, err = er.RunStreamingWithEnv(ctx, dir, env, w, name, args...)
+	} else {
+		err = fmt.Errorf("%s: runner does not support environment overrides", name)
+	}
+	endedAt := time.Now().UTC()
+	exitCode := exitCodeForError(err)
+	if r.CaptureCommand != nil {
+		r.CaptureCommand(ctx, name, args, exitCode, endedAt.Sub(startedAt).Milliseconds())
+	}
+	if r.AccessLog != nil {
+		r.AccessLog(buildAccessLogEntry(ctx, dir, name, args, startedAt, endedAt, output, err))
+	}
+	if r.Logger != nil {
+		if err != nil {
+			r.Logger.Error("command failed", "cmd", commandString(name, args...), "err", err, "output", trimForLog(output))
+		} else {
+			if r.LogSuccessOutput {
+				r.Logger.Info("command ok", "cmd", commandString(name, args...), "output", trimForLog(output))
+			} else {
+				r.Logger.Info("command ok", "cmd", commandString(name, args...))
+			}
+		}
+	}
+	return output, err
+}
+
+// EnvNames returns the sorted names of env, for logging overrides without
+// exposing their values.
+func EnvNames(env map[string]string) []string {
+	names := make([]string, 0, len(env))
+	for name := range env {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func (r LoggingRunner) LookPath(file string) (string, error) {
