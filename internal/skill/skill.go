@@ -8,6 +8,7 @@ package skill
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -102,6 +103,36 @@ func EnsureInstalled(runtime string, home string) error {
 		}
 		if strings.TrimSpace(runtime) == RuntimeGemini {
 			if err := removeGeminiLegacyCommand(home, name); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// EnsureInstalledIfMissing installs each Vigilante skill that is absent from
+// home and leaves the ones already there untouched. Unlike EnsureInstalled it
+// never rewrites an installed skill, so it is safe to call at session start
+// while another session is reading skills from the same home.
+func EnsureInstalledIfMissing(runtime string, home string) error {
+	for _, name := range VigilanteSkillNames() {
+		targets, err := installTargets(runtime, home, name)
+		if err != nil {
+			return err
+		}
+		var source skillSource
+		for _, target := range targets {
+			if _, err := os.Stat(target); err == nil {
+				continue
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			if source == nil {
+				if source, err = resolveSkillSource(name); err != nil {
+					return err
+				}
+			}
+			if err := source.install(target); err != nil {
 				return err
 			}
 		}

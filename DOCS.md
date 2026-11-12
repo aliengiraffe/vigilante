@@ -380,7 +380,7 @@ package. pip installs the binary only: `git`, an authenticated `gh`, and a
 coding-agent CLI remain prerequisites, and `vigilante setup -d` is still the
 bootstrap step.
 
-### `vigilante watch [--assignee <value>] [--max-parallel <value>] [--provider <codex|claude|gemini|opencode>] [--issue-tracker <github|linear>] [--issue-tracker-stage <value>] [--branch <name> | --track-default-branch] <path>`
+### `vigilante watch [--assignee <value>] [--max-parallel <value>] [--provider <codex|claude|gemini|opencode>] [--issue-tracker <github|linear>] [--issue-tracker-stage <value>] [--branch <name> | --track-default-branch] [--agent-profile <name>] <path>`
 
 Register a local repository for issue monitoring.
 
@@ -400,6 +400,7 @@ Expected behavior:
 - accepts an optional `--issue-tracker-stage` filter; Linear defaults to `Todo` when the flag is omitted
 - resolves `me` to the authenticated GitHub login at runtime before issue queries
 - preserves an existing target's branch mode unless one of the branch flags is supplied
+- accepts an optional `--agent-profile <name>` that launches every coding-agent session for the repository under that [agent profile](#agent-profiles); the command fails without saving the target when the profile is not defined in `config.json` or is invalid. An existing target keeps its profile unless the flag is supplied, and `--agent-profile ""` clears it
 - stores the target in the `watch_targets` table of `~/.vigilante/vigilante.db`
 
 Example:
@@ -439,6 +440,12 @@ vigilante watch --branch develop ~/hello-world-app
 ```sh
 vigilante watch --track-default-branch ~/hello-world-app
 ```
+
+```sh
+vigilante watch --agent-profile client-a ~/client-a-app
+```
+
+`vigilante start <repo-folder> --issue <n>` accepts the same `--agent-profile <name>` flag for a one-off session.
 
 ### `vigilante list`
 
@@ -778,6 +785,7 @@ Suggested `config.json` shape:
 Notes:
 
 - `blocked_session_inactivity_timeout` is a service-level setting shared across all watched repositories.
+- `agent_profiles` is an optional map of named per-provider agent invocation settings; see [Agent Profiles](#agent-profiles).
 - The default is `20m`.
 - `log_max_total_size`, `log_max_file_size`, and `log_max_backups` bound local log growth; see [Log Rotation and Disk Budget](#log-rotation-and-disk-budget). All three are optional and default to `500MB`, `50MB`, and `3`.
 - A blocked session is eligible for automatic local cleanup only after there have been no qualifying user comments on the issue, no session updates, and no worktree updates for longer than the configured timeout.
@@ -785,6 +793,48 @@ Notes:
 - Stale running implementation sessions use a separate recovery path: after Vigilante first confirms the run is stale, it waits 20 minutes before attempting an automatic fresh restart, persists the restart attempt count in session state, and stops after 3 automatic restarts until a human intervenes.
 - When an issue looks blocked or the daemon appears unhealthy, inspect `vigilante logs` alongside `sessions.json`, `vigilante list`, `vigilante status`, and GitHub issue comments so recovery decisions use both local state and remote context.
 - Local log evidence is size-bounded, so it does not persist indefinitely. When investigating an older failure, collect the relevant logs before continued daemon activity pushes the directory over budget and evicts them.
+
+### Agent Profiles
+
+By default every session runs the provider's stock binary (`claude`, `codex`, `gemini`, `opencode`) with the daemon's own environment, so every watched repository shares one agent account and configuration. An agent profile changes that for the repositories that select it: it sets, per provider, the command to run, extra CLI arguments, and environment variables.
+
+Define profiles under `agent_profiles` in `~/.vigilante/config.json`:
+
+```json
+{
+  "agent_profiles": {
+    "client-a": {
+      "claude": {
+        "command": "/opt/claude-v2/bin/claude",
+        "args": ["--settings", "/srv/client-a/claude-settings.json"],
+        "env": { "CLAUDE_CONFIG_DIR": "/srv/client-a/.claude" }
+      },
+      "codex": {
+        "env": { "CODEX_HOME": "/srv/client-a/.codex" }
+      }
+    }
+  }
+}
+```
+
+Then select one for a repository with `vigilante watch --agent-profile client-a <path>` (or `vigilante start --agent-profile client-a ...` for a one-off session). `vigilante list` shows it as `agent_profile`, and `vigilante status` shows it next to the provider.
+
+- A profile is keyed by provider (`claude`, `codex`, `gemini`, `opencode`), so it applies whichever provider a label selects for an issue. A provider the profile does not mention runs with its default invocation.
+- `command`, `args`, and `env` are each optional. `command` replaces the provider binary and may be an absolute path or a bare name resolved through `PATH`; the provider version check runs against it.
+- `args` are inserted after Vigilante's own flags and directly before the prompt. Vigilante's flags (`--print`, `--dangerously-skip-permissions`, `exec --cd ...`, `--model`, ...) are never removed or reordered.
+- `env` is applied on top of the daemon's environment for the agent process only; a profile value wins over an inherited variable of the same name. `git` and `gh` calls made by Vigilante itself are unaffected.
+- The profile applies to every agent launch for the target: issue preflight, issue implementation, conflict resolution, CI remediation, package remediation, `vigilante issue create`, and resumes.
+- Targets without a profile are launched exactly as before.
+- Like the other `config.json` settings, profiles are read by the running daemon: **restart the daemon after editing them** (`vigilante service restart`).
+- Env values are stored as plain text in `config.json`, like the other settings. Session and daemon logs record the profile name, the effective command, and the *names* of the env variables, never their values.
+
+**`CLAUDE_CONFIG_DIR` vs `CLAUDE_HOME`.** These are different variables. `CLAUDE_CONFIG_DIR` is read by Claude Code itself and decides which account, settings, MCP servers, and hooks a session uses — that is the one to put in a profile's `env`. `CLAUDE_HOME` is a Vigilante variable read from the daemon's own environment: it only decides where Vigilante installs its skills for the default, no-profile invocation, and Claude Code does not read it. For Codex the two coincide: `CODEX_HOME` is read by Codex and by Vigilante.
+
+**Skills.** Sessions rely on the bundled `/vigilante-*` skills being present in the agent's config directory. When a profile sets `CLAUDE_CONFIG_DIR` (for `claude`) or `CODEX_HOME` (for `codex`), Vigilante installs its skills into that directory: `vigilante setup` installs or refreshes them for every profile, and each session installs any that are missing before the agent starts. The directory must be an absolute path and writable by the daemon user. Profiles for `gemini` and `opencode` can set `command`, `args`, and `env`, but Vigilante keeps installing their skills into the default home.
+
+**Invalid or removed profiles.** A malformed profile (unknown provider key, unknown field, wrong value type, invalid env variable name) is reported at daemon start — in the daemon log and on stderr — and treated as undefined; the other profiles and all targets that do not use it keep working. When a target references a profile that is undefined or invalid, the daemon logs a warning and keeps scanning, and that target's session is marked **blocked** with cause class `agent_profile_unavailable` instead of being launched: Vigilante does not fall back to the default account, because keeping a repository on its own account is what a profile is for. Fix `config.json` (or change the target's profile), restart the daemon, and resume the session with `vigilante resume --repo <owner/name> --issue <n>`.
+
+**Sandbox mode.** See [Agent profiles in the sandbox](SANDBOX.md#agent-profiles-in-the-sandbox).
 
 ### Log Rotation and Disk Budget
 

@@ -26,6 +26,9 @@ type FakeRunner struct {
 	// StdinInputs records the stdin piped to RunWithStdin, keyed by command.
 	// Leave it nil when a test does not care about piped input.
 	StdinInputs map[string]string
+	// EnvInputs records the env overrides passed to RunStreamingWithEnv, keyed
+	// by command. Leave it nil when a test does not care about env.
+	EnvInputs map[string]map[string]string
 }
 
 func (f FakeRunner) Run(_ context.Context, _ string, name string, args ...string) (string, error) {
@@ -82,6 +85,15 @@ func (f FakeRunner) RunStreaming(_ context.Context, _ string, w io.Writer, name 
 		return out, nil
 	}
 	return "", fmt.Errorf("unexpected command: %s", cmd)
+}
+
+// RunStreamingWithEnv records the env overrides and otherwise answers from the
+// same fixture map as RunStreaming.
+func (f FakeRunner) RunStreamingWithEnv(ctx context.Context, dir string, env map[string]string, w io.Writer, name string, args ...string) (string, error) {
+	if f.EnvInputs != nil {
+		f.EnvInputs[Key(name, args...)] = env
+	}
+	return f.RunStreaming(ctx, dir, w, name, args...)
 }
 
 func (f FakeRunner) LookPath(file string) (string, error) {

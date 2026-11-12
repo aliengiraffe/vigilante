@@ -106,6 +106,15 @@ stateDiagram-v2
 | **Extracting** | Before teardown, Vigilante extracts commits, branch state, and execution logs from the container. |
 | **Tearing Down** | The container is stopped and removed. Scoped credentials are revoked. Temporary volumes are deleted. |
 
+### Agent profiles in the sandbox
+
+A watch target can select an [agent profile](DOCS.md#agent-profiles) that customizes the coding agent's command, arguments, and environment. In sandbox mode the profile is applied when the container is provisioned:
+
+- **Environment.** The profile's `env` for the session's provider is added to the container's environment at creation, so every process in the container sees it (`docker exec <container> env` lists it). The `docker exec` call that launches the agent carries no extra environment of its own, and the profile env is not applied to the host-side `docker` client.
+- **Config directory mount.** The default agent homes are bind-mounted at `/root/.claude` and `/root/.codex`. When a profile sets `CLAUDE_CONFIG_DIR` (for `claude`) or `CODEX_HOME` (for `codex`) to a host directory, that directory is mounted at the same container path instead of the default home, and the variable is rewritten to the container path (`CLAUDE_CONFIG_DIR=/root/.claude`, `CODEX_HOME=/root/.codex`). Vigilante's skills are installed into the host directory before the session starts, so they are visible through the mount.
+- **Command and args.** The profile's `command` runs inside the container (`docker exec -w /workspace <container> <command> ...`), so it must exist in the sandbox image; it is also version-checked on the host before the session starts, like the default binary. Profile `args` are passed through unchanged — host paths inside them are not mounted or rewritten.
+- **Unavailable profile.** If the target's profile is undefined or invalid, the session is blocked before any container is provisioned.
+
 ## Planned Credential Provisioning
 
 Sandbox credentials are intended to be scoped, short-lived, and single-purpose. In this design, the host would not share its own broad tokens or keys with the container directly. Instead, Vigilante would mint constrained credentials at provision time and revoke them at teardown.
