@@ -483,7 +483,7 @@ Output modes:
 
 Dashboard behavior:
 
-- four panes — service, watched repositories, sessions, and GitHub rate limits — refresh in place without growing the scrollback
+- four panes — service, watched repositories, sessions, and GitHub rate limits, plus an Agent profiles pane when profiles are in use — refresh in place without growing the scrollback
 - the arrow keys, `j`/`k`, `PgUp`/`PgDn`, and `Home`/`End` scroll when the content is taller than the terminal
 - session and watch-target data refreshes every second, service state every five seconds, and the GitHub rate-limit snapshot every minute, so the dashboard does not consume the rate limit it reports
 - `NO_COLOR`, `TERM=dumb`, and low-color terminals degrade to uncolored output
@@ -493,6 +493,22 @@ Expected behavior:
 - reports a stable `state` value of `running`, `stopped`, or `not-installed`
 - includes the service manager, service identifier, and installed service file path
 - includes a watched-repositories summary with key per-repo metadata such as repo slug, branch plus branch mode, provider, filters or limits, activity, and last scan time
+- shows each watched repository's [agent profile](#agent-profiles) once any profile is defined in `config.json` or referenced by a watch target, as one of:
+  - `profile <name>`: set explicitly with `--agent-profile`
+  - `profile default`: no profile, so the provider's stock invocation and the daemon's environment are used
+  - `profile <name> (unavailable)`: the profile is undefined in `config.json` or invalid, so the repository's sessions will be blocked; the dashboard shows it in the warning color
+
+  The dashboard puts the profile first on each repository's details line; plain output lists it after the provider.
+- adds an **Agent profiles** summary (a section in plain output, a pane in the dashboard) with one line per profile sorted by name and the watched repositories using it, `(unused)` for profiles no repository uses, `INVALID: <reason>` (truncated) for malformed profiles, `UNDEFINED` for referenced profiles missing from `config.json`, and a final `default` line for repositories without a profile:
+
+  ```
+  Agent profiles
+    broken    INVALID: unknown provider "claud" (supported: ...) (used by: acme/x)
+    client-a  client-a/api, client-a/web
+    default   nicobistolfi/dotfiles
+  ```
+
+  Profile contents (command, args, env names and values) are never shown. When no profile is defined or referenced, neither the profile field nor the summary appears, so the output is unchanged. If the service config cannot be read, repositories show their explicit profile names, the summary carries a single "profile validity unknown" note, and the command still succeeds. Profile information is read locally on the one-second refresh and adds no GitHub API calls.
 - exits successfully when the service is not installed so operators and scripts can inspect the reported state
 - fails with a clear error on unsupported operating systems or when the underlying service manager cannot be queried
 
@@ -817,7 +833,7 @@ Define profiles under `agent_profiles` in `~/.vigilante/config.json`:
 }
 ```
 
-Then select one for a repository with `vigilante watch --agent-profile client-a <path>` (or `vigilante start --agent-profile client-a ...` for a one-off session). `vigilante list` shows it as `agent_profile`, and `vigilante status` shows it next to the provider.
+Then select one for a repository with `vigilante watch --agent-profile client-a <path>` (or `vigilante start --agent-profile client-a ...` for a one-off session). `vigilante list` shows it as `agent_profile`, and `vigilante status` shows each repository's profile (or `profile default`) plus an Agent profiles summary; see [`vigilante status`](#vigilante-status---plain--w).
 
 - A profile is keyed by provider (`claude`, `codex`, `gemini`, `opencode`), so it applies whichever provider a label selects for an issue. A provider the profile does not mention runs with its default invocation.
 - `command`, `args`, and `env` are each optional. `command` replaces the provider binary and may be an absolute path or a bare name resolved through `PATH`; the provider version check runs against it.
