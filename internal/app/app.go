@@ -2182,14 +2182,12 @@ func (a *App) ScanOnce(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		sessions, err = a.maintainPullRequests(ctx, sessions, issueDetailsCache)
-		if err != nil {
-			return err
-		}
+		sessions, maintenanceDue := a.maintainPullRequests(sessions)
 		a.persistScanIssueDetailsCache(sessions, issueDetailsCache)
 		if sessions, err = a.commitSessions(snap, sessions, "maintenance"); err != nil {
 			return err
 		}
+		a.launchDuePullRequestMaintenance(ctx, sessions, maintenanceDue, issueDetailsCache)
 		startedCount := 0
 
 		for i := range targets {
@@ -2715,7 +2713,14 @@ func sessionAffectedByGitHubRateLimitPause(session state.Session) bool {
 	}
 }
 
-func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session, issueCache scanIssueDetailsCache) ([]state.Session, error) {
+// maintainPullRequests marks every session due for pull request maintenance as
+// in flight and returns their keys. It does not start the work: the caller must
+// commit the marked sessions first and then call launchDuePullRequestMaintenance.
+// The background result is only applied while the stored row still carries the
+// flag, so a goroutine started before the flag is persisted can finish first,
+// see the flag unset, and drop its result.
+func (a *App) maintainPullRequests(sessions []state.Session) ([]state.Session, map[string]bool) {
+	due := make(map[string]bool)
 	for i := range sessions {
 		session := &sessions[i]
 		if session.Status != state.SessionStatusSuccess || session.CleanupCompletedAt != "" || session.MonitoringStoppedAt != "" {
@@ -2729,10 +2734,23 @@ func (a *App) maintainPullRequests(ctx context.Context, sessions []state.Session
 		}
 		session.PullRequestMaintenanceInFlight = true
 		session.UpdatedAt = a.clock().Format(time.RFC3339)
-		a.launchPullRequestMaintenance(ctx, *session, issueCache[sessionKey(session.Repo, session.IssueNumber)])
+		due[sessionKey(session.Repo, session.IssueNumber)] = true
 	}
+	return sessions, due
+}
 
-	return sessions, nil
+// launchDuePullRequestMaintenance starts maintenance for the sessions
+// maintainPullRequests marked, once that mark is committed. A session whose
+// committed copy lost the flag, because another writer changed it first, is
+// skipped rather than started without a row to report back to.
+func (a *App) launchDuePullRequestMaintenance(ctx context.Context, sessions []state.Session, due map[string]bool, issueCache scanIssueDetailsCache) {
+	for _, session := range sessions {
+		key := sessionKey(session.Repo, session.IssueNumber)
+		if !due[key] || !session.PullRequestMaintenanceInFlight {
+			continue
+		}
+		a.launchPullRequestMaintenance(ctx, session, issueCache[key])
+	}
 }
 
 func (a *App) cleanupClosedIssueSessions(ctx context.Context, sessions []state.Session, issueCache scanIssueDetailsCache) ([]state.Session, error) {

@@ -703,3 +703,83 @@ func TestResumeAllBlocked(t *testing.T) {
 		}
 	})
 }
+
+// The PR maintenance goroutine applies its result only while the stored row
+// still has PullRequestMaintenanceInFlight set. The scan must therefore persist
+// that flag before starting the goroutine; otherwise a fast maintenance run
+// finishes first, sees the flag unset, drops its result, and the scan's later
+// commit leaves the session stuck in flight.
+func TestScanOnceCommitsMaintenanceFlagBeforeLaunchingMaintenance(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("VIGILANTE_HOME", filepath.Join(home, ".vigilante"))
+	t.Setenv("HOME", home)
+
+	app := New()
+	app.stdout = testutil.IODiscard{}
+	app.stderr = testutil.IODiscard{}
+	prLookup := "gh pr list --repo owner/repo --head vigilante/issue-1 --state all --json number,url,state,mergedAt"
+	var checked bool
+	app.env.Runner = hookedRunner{
+		FakeRunner: testutil.FakeRunner{
+			LookPaths: map[string]string{"git": "/usr/bin/git", "gh": "/usr/bin/gh", "codex": "/usr/bin/codex"},
+			Outputs: map[string]string{
+				prLookup:                  `[{"number":31,"url":"https://github.com/owner/repo/pull/31","state":"OPEN","mergedAt":null}]`,
+				"git fetch origin main":   "ok",
+				"git status --porcelain":  "",
+				"git rebase origin/main":  "Current branch vigilante/issue-1 is up to date.\n",
+				"gh api user --jq .login": "nicobistolfi\n",
+				"gh pr view --repo owner/repo 31 --json number,title,body,url,state,mergedAt,labels,isDraft,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup,baseRefName,headRefOid": automergePRDetailsJSON("vigilante:automerge", "MERGEABLE", "CLEAN", "APPROVED", "COMPLETED", "SUCCESS"),
+				"gh api repos/owner/repo/issues/1":          `{"title":"first","body":"Issue body","html_url":"https://github.com/owner/repo/issues/1","state":"open","labels":[]}`,
+				"gh api repos/owner/repo/issues/1/comments": `[]`,
+				"gh issue list --repo owner/repo --state open --assignee nicobistolfi --json number,title,createdAt,url,labels": "[]",
+			},
+		},
+		fn: func(name string, args []string) error {
+			if checked || testutil.Key(name, args...) != prLookup {
+				return nil
+			}
+			checked = true
+			stored, _, err := state.NewStore().GetSession("owner/repo", 1)
+			if err != nil {
+				t.Errorf("read session from maintenance goroutine: %v", err)
+			} else if !stored.PullRequestMaintenanceInFlight {
+				t.Errorf("maintenance started before the in-flight flag was committed: %#v", stored)
+			}
+			return nil
+		},
+	}
+	if err := app.state.EnsureLayout(); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.SaveWatchTargets([]state.WatchTarget{{Path: "/tmp/repo", Repo: "owner/repo", Branch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.state.ReplaceSessions([]state.Session{{
+		RepoPath:            "/tmp/repo",
+		Repo:                "owner/repo",
+		IssueNumber:         1,
+		IssueTitle:          "first",
+		IssueURL:            "https://github.com/owner/repo/issues/1",
+		Branch:              "vigilante/issue-1",
+		WorktreePath:        filepath.Join("/tmp/repo", ".worktrees", "vigilante", "issue-1"),
+		Status:              state.SessionStatusSuccess,
+		IterationInProgress: true,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := app.ScanOnce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	app.waitForSessions()
+	if !checked {
+		t.Fatal("maintenance never looked up the pull request")
+	}
+	stored, _, err := app.state.GetSession("owner/repo", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.PullRequestMaintenanceInFlight || !strings.Contains(stored.LastMaintenanceError, "iteration is in progress") {
+		t.Fatalf("maintenance result must be applied and the flag cleared: %#v", stored)
+	}
+}
