@@ -2,7 +2,6 @@ package state
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -17,10 +16,28 @@ func writeServiceConfig(t *testing.T, body string) *Store {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	if err := os.WriteFile(store.serviceConfigPath(), []byte(body), 0o644); err != nil {
+	conn, err := store.database()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(`INSERT INTO service_config (id, body, updated_at) VALUES (1, ?, '')
+		ON CONFLICT (id) DO UPDATE SET body = excluded.body`, body); err != nil {
 		t.Fatal(err)
 	}
 	return store
+}
+
+func readStoredServiceConfig(t *testing.T, store *Store) string {
+	t.Helper()
+	conn, err := store.database()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body string
+	if err := conn.QueryRow(`SELECT body FROM service_config WHERE id = 1`).Scan(&body); err != nil {
+		t.Fatal(err)
+	}
+	return body
 }
 
 func TestServiceConfigParsesAgentProfiles(t *testing.T) {
@@ -149,11 +166,8 @@ func TestServiceConfigSavePreservesUndecodableAgentProfile(t *testing.T) {
 	if _, err := reloaded.AgentProfile("broken"); err == nil || !strings.Contains(err.Error(), "malformed profile") {
 		t.Fatalf("broken profile should survive a save still broken, got %v", err)
 	}
-	data, err := os.ReadFile(store.serviceConfigPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(data), `"oops"`) {
+	data := readStoredServiceConfig(t, store)
+	if !strings.Contains(data, `"oops"`) {
 		t.Fatalf("operator's original profile content was dropped: %s", data)
 	}
 	if got, err := reloaded.AgentInvocation("ok", "claude"); err != nil || got.Command != "c" {

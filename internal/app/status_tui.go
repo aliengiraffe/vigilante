@@ -59,10 +59,11 @@ type statusServiceSnapshot struct {
 // statusSessionsSnapshot holds the locally sourced watch-target and session
 // data for one refresh.
 type statusSessionsSnapshot struct {
-	Repos  []watchedRepoStatus
-	Groups []sessionGroup
-	Count  int
-	Loaded bool
+	Repos    []watchedRepoStatus
+	Profiles agentProfilesView
+	Groups   []sessionGroup
+	Count    int
+	Loaded   bool
 }
 
 // statusRateLimitSnapshot holds the GitHub rate-limit data for one refresh.
@@ -252,9 +253,14 @@ func (m statusModel) contentLines() []string {
 	panes := []string{
 		m.renderPane("Service", m.serviceLines()),
 		m.renderPane(fmt.Sprintf("Watched repositories (%d)", len(m.sessions.Repos)), m.repoLines()),
+	}
+	if m.sessions.Profiles.Enabled {
+		panes = append(panes, m.renderPane("Agent profiles", m.agentProfileLines()))
+	}
+	panes = append(panes,
 		m.renderPane(fmt.Sprintf("Sessions (%d)", m.sessions.Count), m.sessionLines()),
 		m.renderPane("GitHub rate limits", m.rateLimitLines()),
-	}
+	)
 	return strings.Split(strings.Join(panes, "\n"), "\n")
 }
 
@@ -372,16 +378,44 @@ func (m statusModel) repoLines() []string {
 			fmt.Sprintf("branch %s (%s)", valueOrUnknown(target.Branch), target.EffectiveBranchMode()),
 			fmt.Sprintf("provider %s", valueOrUnknown(target.Provider)),
 		}
-		if target.AgentProfile != "" {
-			details = append(details, fmt.Sprintf("agent profile %s", target.AgentProfile))
-		}
 		if issueBackend := strings.TrimSpace(target.EffectiveIssueBackend()); issueBackend != "" && issueBackend != "github" {
 			details = append(details, fmt.Sprintf("issues %s", issueBackend))
 		}
 		if scan := formatLastScan(target.LastScanAt); scan != "" {
 			details = append(details, scan)
 		}
-		lines = append(lines, "  "+statusDimStyle.Render(strings.Join(details, " · ")))
+		detailLine := statusDimStyle.Render(strings.Join(details, " · "))
+		if status.Profile != nil {
+			profileStyle := statusDimStyle
+			if status.Profile.Unavailable() {
+				profileStyle = statusWarnStyle
+			}
+			detailLine = profileStyle.Render(formatAgentProfileLabel(*status.Profile)) + statusDimStyle.Render(" · ") + detailLine
+		}
+		lines = append(lines, "  "+detailLine)
+	}
+	return lines
+}
+
+// agentProfileLines renders the Agent profiles pane: one row per profile plus
+// the default row, with unusable profiles in the warning style.
+func (m statusModel) agentProfileLines() []string {
+	view := m.sessions.Profiles
+	lines := make([]string, 0, len(view.Rows)+1)
+	if view.ValidityUnknown {
+		lines = append(lines, statusDimStyle.Render(agentProfileValidityUnknownNote))
+	}
+	width := agentProfileSummaryNameWidth(view.Rows)
+	for _, row := range view.Rows {
+		name := statusStrongStyle.Render(fmt.Sprintf("%-*s", width, agentProfileSummaryName(row)))
+		valueStyle := statusLabelStyle
+		switch {
+		case row.Problem != "":
+			valueStyle = statusWarnStyle
+		case len(row.Repos) == 0:
+			valueStyle = statusDimStyle
+		}
+		lines = append(lines, name+"  "+valueStyle.Render(agentProfileSummaryValue(row)))
 	}
 	return lines
 }
@@ -505,17 +539,20 @@ func (a *App) loadStatusSessions(_ context.Context) statusSessionsSnapshot {
 		sessions = nil
 	}
 	inactivityTimeout := state.DefaultBlockedSessionInactivityTimeout
-	if cfg, cfgErr := a.state.LoadServiceConfig(); cfgErr == nil {
+	cfg, cfgErr := a.state.LoadServiceConfig()
+	if cfgErr == nil {
 		if parsed, parseErr := time.ParseDuration(cfg.BlockedSessionInactivityTimeout); parseErr == nil && parsed > 0 {
 			inactivityTimeout = parsed
 		}
 	}
 	visible := visibleStatusSessions(sessions)
+	repos := watchedRepoStatuses(targets, sessions)
 	return statusSessionsSnapshot{
-		Repos:  watchedRepoStatuses(targets, sessions),
-		Groups: groupSessions(visible, a.clock(), inactivityTimeout),
-		Count:  len(visible),
-		Loaded: true,
+		Repos:    repos,
+		Profiles: applyAgentProfiles(repos, cfg, cfgErr),
+		Groups:   groupSessions(visible, a.clock(), inactivityTimeout),
+		Count:    len(visible),
+		Loaded:   true,
 	}
 }
 

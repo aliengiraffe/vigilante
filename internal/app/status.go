@@ -28,6 +28,9 @@ type watchedRepoStatus struct {
 	Target       state.WatchTarget
 	ActiveCount  int
 	BlockedCount int
+	// Profile is the target's effective agent profile. It is nil when no
+	// profile is defined or referenced, so status output omits it.
+	Profile *watchTargetProfile
 }
 
 func groupSessions(sessions []state.Session, now time.Time, inactivityTimeout time.Duration) []sessionGroup {
@@ -276,8 +279,8 @@ func formatWatchTargetRow(status watchedRepoStatus) string {
 		fmt.Sprintf("branch %s (%s)", valueOrUnknown(target.Branch), target.EffectiveBranchMode()),
 		fmt.Sprintf("provider %s", valueOrUnknown(target.Provider)),
 	}
-	if target.AgentProfile != "" {
-		fields = append(fields, fmt.Sprintf("agent profile %s", target.AgentProfile))
+	if status.Profile != nil {
+		fields = append(fields, formatAgentProfileLabel(*status.Profile))
 	}
 	if issueBackend := strings.TrimSpace(target.EffectiveIssueBackend()); issueBackend != "" && issueBackend != "github" {
 		fields = append(fields, fmt.Sprintf("issues %s", issueBackend))
@@ -398,8 +401,11 @@ func (a *App) statusExpanded(ctx context.Context) error {
 
 	visibleSessions := visibleStatusSessions(sessions)
 
+	repoStatuses := watchedRepoStatuses(targets, sessions)
+	profiles := applyAgentProfiles(repoStatuses, cfg, cfgErr)
 	fmt.Fprintln(a.stdout)
-	writeWatchedReposSection(a.stdout, watchedRepoStatuses(targets, sessions))
+	writeWatchedReposSection(a.stdout, repoStatuses)
+	writeAgentProfilesSection(a.stdout, profiles)
 
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintf(a.stdout, "Sessions: %d total\n", len(visibleSessions))

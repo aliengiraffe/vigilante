@@ -101,8 +101,11 @@ func TestWatchAgentProfileFlagPersistsKnownProfile(t *testing.T) {
 	if !strings.Contains(out.String(), `"agent_profile": "client-a"`) {
 		t.Fatalf("list output should show the profile: %s", out.String())
 	}
-	row := formatWatchTargetRow(watchedRepoStatus{Target: loadSingleTarget(t, app)})
-	if !strings.Contains(row, "agent profile client-a") {
+	config, configErr := app.state.LoadServiceConfig()
+	statuses := []watchedRepoStatus{{Target: loadSingleTarget(t, app)}}
+	applyAgentProfiles(statuses, config, configErr)
+	row := formatWatchTargetRow(statuses[0])
+	if !strings.Contains(row, "profile client-a") || strings.Contains(row, "unavailable") {
 		t.Fatalf("status row should show the profile: %s", row)
 	}
 	app.stdout = testutil.IODiscard{}
@@ -115,8 +118,10 @@ func TestWatchAgentProfileFlagPersistsKnownProfile(t *testing.T) {
 	if target.AgentProfile != "" {
 		t.Fatalf("empty --agent-profile should clear it, got %q", target.AgentProfile)
 	}
-	if row := formatWatchTargetRow(watchedRepoStatus{Target: target}); strings.Contains(row, "agent profile") {
-		t.Fatalf("status row should not mention a profile for targets without one: %s", row)
+	statuses = []watchedRepoStatus{{Target: target}}
+	applyAgentProfiles(statuses, config, configErr)
+	if row := formatWatchTargetRow(statuses[0]); !strings.Contains(row, "profile default") {
+		t.Fatalf("status row should show the default profile for targets without one: %s", row)
 	}
 }
 
