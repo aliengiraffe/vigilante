@@ -1536,10 +1536,18 @@ func (a *App) runServiceCommand(ctx context.Context, args []string) error {
 		a.printServiceUsage(a.stdout)
 		return nil
 	}
-	if len(args) != 1 || args[0] != "restart" {
-		return errors.New("usage: vigilante service restart")
+	if len(args) != 1 {
+		return errors.New("usage: vigilante service <start|stop|restart>")
 	}
-	return a.RestartService(ctx)
+	switch args[0] {
+	case "start":
+		return a.StartService(ctx)
+	case "stop":
+		return a.StopService(ctx)
+	case "restart":
+		return a.RestartService(ctx)
+	}
+	return errors.New("usage: vigilante service <start|stop|restart>")
 }
 
 func (a *App) runCompletionCommand(args []string) error {
@@ -1716,6 +1724,32 @@ func (a *App) statusServiceSection(ctx context.Context) (serviceStatusInfo, erro
 		DaemonVersion: status.DaemonVersion,
 		DaemonCommit:  status.DaemonCommit,
 	}, nil
+}
+
+func (a *App) StartService(ctx context.Context) error {
+	started, err := service.Start(ctx, a.env)
+	if err != nil {
+		return err
+	}
+	if !started {
+		fmt.Fprintln(a.stdout, "vigilante service is already running")
+		return nil
+	}
+	fmt.Fprintln(a.stdout, "vigilante service started")
+	return nil
+}
+
+func (a *App) StopService(ctx context.Context) error {
+	stopped, err := service.Stop(ctx, a.env)
+	if err != nil {
+		return err
+	}
+	if !stopped {
+		fmt.Fprintln(a.stdout, "vigilante service is already stopped")
+		return nil
+	}
+	fmt.Fprintln(a.stdout, "vigilante service stopped")
+	return nil
 }
 
 func (a *App) RestartService(ctx context.Context) error {
@@ -7144,7 +7178,7 @@ func (a *App) printUsage(w io.Writer) {
 	fmt.Fprintln(w, "  vigilante recreate [--repo <owner/name>] --issue <n>")
 	fmt.Fprintln(w, "  vigilante resume --repo <owner/name> --issue <n>")
 	fmt.Fprintln(w, "  vigilante resume --all-blocked")
-	fmt.Fprintln(w, "  vigilante service restart")
+	fmt.Fprintln(w, "  vigilante service <start|stop|restart>")
 	fmt.Fprintln(w, "  vigilante daemon run [--once] [--interval duration]")
 	fmt.Fprintln(w, "  vigilante report --repo <owner/name>")
 	fmt.Fprintln(w, "  vigilante issue create --repo <owner/name> [--provider value] <prompt...>")
@@ -7164,7 +7198,7 @@ func (a *App) printDaemonUsage(w io.Writer) {
 
 func (a *App) printServiceUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage:")
-	fmt.Fprintln(w, "  vigilante service restart")
+	fmt.Fprintln(w, "  vigilante service <start|stop|restart>")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Use \"vigilante status\" to inspect the installed service.")
 }
@@ -7230,7 +7264,7 @@ _vigilante()
             return
             ;;
         service)
-            COMPREPLY=( $(compgen -W "restart" -- "$cur") )
+            COMPREPLY=( $(compgen -W "start stop restart" -- "$cur") )
             return
             ;;
         daemon)
@@ -7296,7 +7330,7 @@ complete -c vigilante -n '__fish_seen_subcommand_from resume' -l repo
 complete -c vigilante -n '__fish_seen_subcommand_from resume' -l issue
 complete -c vigilante -n '__fish_seen_subcommand_from resume' -l all-blocked
 complete -c vigilante -n '__fish_seen_subcommand_from report' -l repo
-complete -c vigilante -n '__fish_seen_subcommand_from service' -a 'restart'
+complete -c vigilante -n '__fish_seen_subcommand_from service' -a 'start stop restart'
 complete -c vigilante -n '__fish_seen_subcommand_from daemon; and not __fish_seen_subcommand_from run' -a 'run'
 complete -c vigilante -n '__fish_seen_subcommand_from run' -l once
 complete -c vigilante -n '__fish_seen_subcommand_from run' -l interval
@@ -7359,7 +7393,7 @@ _vigilante() {
       compadd -- --repo
       ;;
     service)
-      compadd restart
+      compadd start stop restart
       ;;
     daemon)
       if (( CURRENT == 3 )); then

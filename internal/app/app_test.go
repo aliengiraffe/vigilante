@@ -284,7 +284,7 @@ func TestRunSupportsTopLevelHelpFlags(t *testing.T) {
 				"vigilante clone",
 				"vigilante watch",
 				"vigilante status",
-				"vigilante service restart",
+				"vigilante service <start|stop|restart>",
 				"vigilante commit [git-commit-flags...]",
 				"vigilante completion <bash|fish|zsh>",
 				"vigilante <gh|git|docker> ...",
@@ -2081,7 +2081,7 @@ func TestRunSupportsServiceHelp(t *testing.T) {
 	if exitCode != 0 {
 		t.Fatalf("expected success exit code, got %d", exitCode)
 	}
-	if !strings.Contains(stdout.String(), "usage:\n  vigilante service restart") {
+	if !strings.Contains(stdout.String(), "usage:\n  vigilante service <start|stop|restart>") {
 		t.Fatalf("unexpected output: %q", stdout.String())
 	}
 }
@@ -11206,5 +11206,46 @@ func TestResolveIssueProviderPrefersLabelOverDefault(t *testing.T) {
 
 	if _, _, err := resolveIssueProvider(target, ghcli.Issue{Number: 7, Labels: []ghcli.Label{{Name: provider.CodexID}, {Name: provider.GeminiID}}}); err == nil {
 		t.Fatal("expected conflicting provider labels to error")
+	}
+}
+
+func TestServiceStopStartAndInvalidSubcommands(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	unit := filepath.Join(home, ".config", "systemd", "user", "vigilante.service")
+	if err := os.MkdirAll(filepath.Dir(unit), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unit, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	show := "systemctl --user show --property=LoadState,ActiveState vigilante.service"
+	run := func(active string, args ...string) (int, string, string) {
+		app := New()
+		var stdout, stderr bytes.Buffer
+		app.stdout, app.stderr = &stdout, &stderr
+		app.env.OS = "linux"
+		app.env.Runner = testutil.FakeRunner{Outputs: map[string]string{show: "LoadState=loaded\nActiveState=" + active + "\n", "systemctl --user stop vigilante.service": "", "systemctl --user start vigilante.service": ""}}
+		code := app.Run(context.Background(), args)
+		return code, stdout.String(), stderr.String()
+	}
+	for _, tc := range []struct {
+		active, sub, want string
+	}{
+		{"active", "stop", "vigilante service stopped"},
+		{"inactive", "stop", "already stopped"},
+		{"inactive", "start", "vigilante service started"},
+		{"active", "start", "already running"},
+	} {
+		code, out, _ := run(tc.active, "service", tc.sub)
+		if code != 0 || !strings.Contains(out, tc.want) {
+			t.Fatalf("%s/%s: code=%d out=%q", tc.active, tc.sub, code, out)
+		}
+	}
+	for _, args := range [][]string{{"service", "pause"}, {"service", "start", "extra"}} {
+		code, _, errOut := run("active", args...)
+		if code == 0 || !strings.Contains(errOut, "usage: vigilante service <start|stop|restart>") {
+			t.Fatalf("%v: code=%d stderr=%q", args, code, errOut)
+		}
 	}
 }

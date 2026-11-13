@@ -140,6 +140,8 @@ vigilante list
 vigilante list --running
 vigilante status
 vigilante logs
+vigilante service start
+vigilante service stop
 vigilante service restart
 ```
 
