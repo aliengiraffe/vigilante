@@ -52,13 +52,14 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		return session
 	}
 	session.Provider = selectedProvider.ID()
-	selectedProvider, err = provider.ForTarget(store, target, selectedProvider)
+	var profileName string
+	var profileAuto bool
+	selectedProvider, profileName, profileAuto, err = provider.ForTargetWithProfile(store, target, selectedProvider)
 	if err != nil {
 		return BlockSessionOnAgentProfile(ctx, store, issueTracker, target, issue, session, err)
 	}
-	if target.AgentProfile != "" {
-		session.AgentProfile = target.AgentProfile
-	}
+	session.AgentProfile = profileName
+	session.AgentProfileAuto = profileAuto
 	session.ProcessID = os.Getpid()
 	session.LastHeartbeatAt = time.Now().UTC().Format(time.RFC3339)
 	session.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
@@ -92,7 +93,7 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 		defer logWriter.Close()
 	}
 	writeLifecycleEvent(logWriter, fmt.Sprintf("session started provider=%s issue=%d worktree=%s%s",
-		session.Provider, issue.Number, session.WorktreePath, agentProfileLogSuffix(target)))
+		session.Provider, issue.Number, session.WorktreePath, agentProfileLogSuffix(profileName, profileAuto)))
 
 	appendSessionLog(logPath, "session started", session, "")
 	if err := issueTracker.CommentOnWorkItem(ctx, target.Repo, issue.Number, startBody); err != nil {
@@ -300,11 +301,15 @@ func runProviderInvocationStreaming(ctx context.Context, runner environment.Runn
 
 // agentProfileLogSuffix names the target's agent profile for a lifecycle log
 // line. It is empty for targets without one so their log lines are unchanged.
-func agentProfileLogSuffix(target state.WatchTarget) string {
-	if target.AgentProfile == "" {
+func agentProfileLogSuffix(name string, auto bool) string {
+	if name == "" {
 		return ""
 	}
-	return " agent_profile=" + target.AgentProfile
+	suffix := " agent_profile=" + name
+	if auto {
+		suffix += " agent_profile_source=auto"
+	}
+	return suffix
 }
 
 // BlockSessionOnAgentProfile marks session blocked because target's agent
@@ -314,13 +319,24 @@ func agentProfileLogSuffix(target state.WatchTarget) string {
 // repository on its own account and settings. The session resumes normally once
 // the profile is fixed.
 func BlockSessionOnAgentProfile(ctx context.Context, store *state.Store, issueTracker backend.IssueTracker, target state.WatchTarget, issue ghcli.Issue, session state.Session, cause error) state.Session {
+	name, auto := target.AgentProfile, false
+	if config, err := store.LoadServiceConfig(); err == nil {
+		name, auto, _ = config.EffectiveAgentProfile(target)
+	}
+	session.AgentProfile = name
+	session.AgentProfileAuto = auto
+	label := name
+	if auto {
+		label += " (auto)"
+	}
+
 	if session.Repo == "" {
 		session.Repo = target.Repo
 	}
 	now := time.Now().UTC()
 	markSessionBlocked(&session, "agent_profile", state.BlockedReason{
 		Kind:      "agent_profile_unavailable",
-		Operation: "agent profile " + target.AgentProfile,
+		Operation: "agent profile " + label,
 		Summary:   summarizeError(cause),
 		Detail:    summarizeError(cause),
 	}, now)
@@ -329,15 +345,15 @@ func BlockSessionOnAgentProfile(ctx context.Context, store *state.Store, issueTr
 	session.EndedAt = now.Format(time.RFC3339)
 	session.LastHeartbeatAt = session.EndedAt
 	session.UpdatedAt = session.EndedAt
-	store.AppendDaemonLog("warning: %s#%d blocked: %s", session.Repo, issue.Number, cause)
-	appendSessionLog(store.SessionLogPath(session.Repo, issue.Number), "session blocked: agent profile unavailable", session, cause.Error())
+	store.AppendDaemonLog("warning: %s#%d blocked:%s %s", session.Repo, issue.Number, agentProfileLogSuffix(name, auto), cause)
+	appendSessionLog(store.SessionLogPath(session.Repo, issue.Number), "session blocked: agent profile unavailable", session, cause.Error()+agentProfileLogSuffix(name, auto))
 	body := ghcli.FormatProgressComment(ghcli.ProgressComment{
 		Stage:      "Blocked",
 		Emoji:      "🧱",
 		Percent:    20,
 		ETAMinutes: 10,
 		Items: []string{
-			fmt.Sprintf("This repository is configured to run coding agents with agent profile `%s`, which Vigilante could not use: %s.", target.AgentProfile, sanitizeDiagnosticText(cause.Error(), 280)),
+			fmt.Sprintf("This repository is configured to run coding agents with agent profile `%s`, which Vigilante could not use: %s.", label, sanitizeDiagnosticText(cause.Error(), 280)),
 			blocking.CauseLine(session.BlockedReason),
 			fmt.Sprintf("Next step: fix `agent_profiles` in `config.json` (or change the profile with `vigilante watch --agent-profile`), restart the daemon, then run `%s` or request resume from GitHub.", session.ResumeHint),
 		},
@@ -393,7 +409,9 @@ func RunConflictResolutionSession(ctx context.Context, env *environment.Environm
 		return err
 	}
 	session.Provider = selectedProvider.ID()
-	selectedProvider, err = provider.ForTarget(store, target, selectedProvider)
+	var profileName string
+	var profileAuto bool
+	selectedProvider, profileName, profileAuto, err = provider.ForTargetWithProfile(store, target, selectedProvider)
 	if err != nil {
 		appendSessionLog(logPath, "conflict resolution agent profile unavailable", session, err.Error())
 		return err
@@ -402,7 +420,7 @@ func RunConflictResolutionSession(ctx context.Context, env *environment.Environm
 	if logWriterErr == nil {
 		defer logWriter.Close()
 	}
-	writeLifecycleEvent(logWriter, fmt.Sprintf("conflict resolution started pr=%d%s", pr.Number, agentProfileLogSuffix(target)))
+	writeLifecycleEvent(logWriter, fmt.Sprintf("conflict resolution started pr=%d%s", pr.Number, agentProfileLogSuffix(profileName, profileAuto)))
 	appendSessionLog(logPath, "conflict resolution started", session, fmt.Sprintf("pr=%d url=%s", pr.Number, pr.URL))
 	if err := provider.ValidateRuntimeCompatibility(ctx, env.Runner, selectedProvider); err != nil {
 		appendSessionLog(logPath, "conflict resolution provider compatibility failed", session, err.Error())
@@ -461,7 +479,9 @@ func RunCIRemediationSession(ctx context.Context, env *environment.Environment, 
 		return err
 	}
 	session.Provider = selectedProvider.ID()
-	selectedProvider, err = provider.ForTarget(store, target, selectedProvider)
+	var profileName string
+	var profileAuto bool
+	selectedProvider, profileName, profileAuto, err = provider.ForTargetWithProfile(store, target, selectedProvider)
 	if err != nil {
 		appendSessionLog(logPath, "ci remediation agent profile unavailable", session, err.Error())
 		return err
@@ -470,7 +490,7 @@ func RunCIRemediationSession(ctx context.Context, env *environment.Environment, 
 	if logWriterErr == nil {
 		defer logWriter.Close()
 	}
-	writeLifecycleEvent(logWriter, fmt.Sprintf("ci remediation started pr=%d%s", pr.Number, agentProfileLogSuffix(target)))
+	writeLifecycleEvent(logWriter, fmt.Sprintf("ci remediation started pr=%d%s", pr.Number, agentProfileLogSuffix(profileName, profileAuto)))
 	appendSessionLog(logPath, "ci remediation started", session, fmt.Sprintf("pr=%d url=%s", pr.Number, pr.URL))
 	if err := provider.ValidateRuntimeCompatibility(ctx, env.Runner, selectedProvider); err != nil {
 		appendSessionLog(logPath, "ci remediation provider compatibility failed", session, err.Error())

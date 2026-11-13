@@ -204,3 +204,72 @@ func TestWatchTargetWithoutAgentProfileFieldLoads(t *testing.T) {
 		t.Fatalf("unexpected agent profile %q", target.AgentProfile)
 	}
 }
+
+func TestEffectiveAgentProfile(t *testing.T) {
+	for _, tc := range []struct {
+		name, profiles, explicit, repo, want string
+		auto, fail                           bool
+	}{
+		{"order", `{"beta":{"match":"acme"},"alpha":{"match":"acme"}}`, "", "acme/x", "alpha", true, false},
+		{"rename", `{"beta":{"match":"acme"},"zeta":{"match":"acme"}}`, "", "acme/x", "beta", true, false},
+		{"explicit", `{"alpha":{"match":"acme"},"other":{}}`, "other", "acme/x", "other", false, false},
+		{"missing explicit", `{"alpha":{"match":"acme"}}`, "missing", "acme/x", "missing", false, true},
+		{"no match", `{"alpha":{"match":"^other/"}}`, "", "acme/x", "", false, false},
+		{"no regex", `{"alpha":{}}`, "", "acme/x", "", false, false},
+		{"skip regex", `{"alpha":{"match":"("},"beta":{"match":"acme"}}`, "", "acme/x", "beta", true, false},
+		{"bad env blocks", `{"alpha":{"match":"acme","claude":{"env":{"A=B":"x"}}},"beta":{"match":"acme"}}`, "", "acme/x", "alpha", true, true},
+		{"unknown blocks", `{"alpha":{"match":"acme","unknown":{}},"beta":{"match":"acme"}}`, "", "acme/x", "alpha", true, true},
+		{"decode blocks", `{"alpha":{"claude":{"args":1},"match":"acme"},"beta":{"match":"acme"}}`, "", "acme/x", "alpha", true, true},
+		{"wrong match type skipped", `{"alpha":{"match":3},"beta":{"match":"acme"}}`, "", "acme/x", "beta", true, false},
+		{"null match skipped", `{"alpha":{"match":null},"beta":{"match":"acme"}}`, "", "acme/x", "beta", true, false},
+		{"unanchored", `{"alpha":{"match":"me/"}}`, "", "acme/x", "alpha", true, false},
+		{"case sensitive", `{"alpha":{"match":"ACME"}}`, "", "acme/x", "", false, false},
+		{"case insensitive", `{"alpha":{"match":"(?i)ACME"}}`, "", "acme/x", "alpha", true, false},
+		{"empty regex matches", `{"alpha":{"match":""}}`, "", "acme/x", "alpha", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var profiles map[string]AgentProfile
+			if err := json.Unmarshal([]byte(tc.profiles), &profiles); err != nil {
+				t.Fatal(err)
+			}
+			cfg := ServiceConfig{AgentProfiles: profiles}
+			name, auto, err := cfg.EffectiveAgentProfile(WatchTarget{Repo: tc.repo, AgentProfile: tc.explicit})
+			if name != tc.want || auto != tc.auto || (err != nil) != tc.fail {
+				t.Fatalf("got %q, %v, %v", name, auto, err)
+			}
+		})
+	}
+}
+
+func TestAgentProfileMatchRoundTrip(t *testing.T) {
+	for _, body := range []string{
+		`{"match":"(?i)^acme/","claude":{"command":"custom"}}`,
+		`{"match":""}`,
+		`{"match":"(","claude":{}}`,
+		`{"match":"acme","claude":{"args":3}}`,
+		`{"match":null}`,
+		`{"match":false}`,
+		`{"match":"acme","unknown":{}}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			var profile AgentProfile
+			if err := json.Unmarshal([]byte(body), &profile); err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal(profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var want, got any
+			_ = json.Unmarshal([]byte(body), &want)
+			_ = json.Unmarshal(data, &got)
+			if !reflect.DeepEqual(want, got) {
+				t.Fatalf("round trip: %s", data)
+			}
+			valid := body == `{"match":"(?i)^acme/","claude":{"command":"custom"}}` || body == `{"match":""}`
+			if (profile.Validate() == nil) != valid {
+				t.Fatalf("validation = %v", profile.Validate())
+			}
+		})
+	}
+}

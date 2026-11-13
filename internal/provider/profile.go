@@ -46,36 +46,41 @@ func ProfileConfigDir(providerID string, profile state.AgentInvocation) string {
 	return strings.TrimSpace(profile.Env[dir.EnvName])
 }
 
-// ForTarget returns p configured with target's agent profile. A target with no
-// profile gets p back untouched, without reading config.json. A profile that
-// is undefined or invalid is an error naming it, so the caller can stop the
-// session instead of launching the agent under the default configuration.
-//
-// When the profile moves the provider's config directory, Vigilante's skills
-// are installed there if missing, so they resolve before the session starts.
+// ForTarget returns p configured with the effective profile from config.json.
+// Invalid selections fail instead of falling back to the default account.
 func ForTarget(store *state.Store, target state.WatchTarget, p Provider) (Provider, error) {
-	name := target.AgentProfile
-	if name == "" {
-		return p, nil
-	}
+	resolved, _, _, err := ForTargetWithProfile(store, target, p)
+	return resolved, err
+}
+
+// ForTargetWithProfile also returns the selected name and whether it matched
+// automatically, so launch records and logs describe the actual invocation.
+func ForTargetWithProfile(store *state.Store, target state.WatchTarget, p Provider) (Provider, string, bool, error) {
 	config, err := store.LoadServiceConfig()
 	if err != nil {
-		return nil, fmt.Errorf("load config.json for agent profile %q: %w", name, err)
+		return nil, target.AgentProfile, false, fmt.Errorf("load config.json for agent profile: %w", err)
+	}
+	name, auto, err := config.EffectiveAgentProfile(target)
+	if err != nil {
+		return nil, name, auto, err
+	}
+	if name == "" {
+		return p, "", false, nil
 	}
 	profile, err := config.AgentInvocation(name, p.ID())
 	if err != nil {
-		return nil, err
+		return nil, name, auto, err
 	}
 	if dir := ProfileConfigDir(p.ID(), profile); dir != "" {
 		if !filepath.IsAbs(dir) {
 			configDir, _ := ConfigDirFor(p.ID())
-			return nil, fmt.Errorf("agent profile %q: %s must be an absolute path, got %q", name, configDir.EnvName, dir)
+			return nil, name, auto, fmt.Errorf("agent profile %q: %s must be an absolute path, got %q", name, configDir.EnvName, dir)
 		}
 		if err := skill.EnsureInstalledIfMissing(p.ID(), dir); err != nil {
-			return nil, fmt.Errorf("install vigilante skills for agent profile %q into %s: %w", name, dir, err)
+			return nil, name, auto, fmt.Errorf("install vigilante skills for agent profile %q into %s: %w", name, dir, err)
 		}
 	}
-	return WithProfile(p, profile), nil
+	return WithProfile(p, profile), name, auto, nil
 }
 
 // WithProfile wraps p so every invocation it builds carries profile's command,

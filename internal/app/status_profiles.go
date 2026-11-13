@@ -22,8 +22,7 @@ type agentProfileSource string
 const (
 	agentProfileSourceDefault  agentProfileSource = "default"
 	agentProfileSourceExplicit agentProfileSource = "explicit"
-	// agentProfileSourceAuto is reserved for profiles chosen by regex
-	// auto-selection (#552).
+	// agentProfileSourceAuto identifies profiles chosen by regex.
 	agentProfileSourceAuto agentProfileSource = "auto"
 )
 
@@ -64,19 +63,20 @@ type agentProfilesView struct {
 	Rows            []agentProfileSummaryRow
 }
 
-// resolveWatchTargetProfile returns the effective profile for target. This is
-// the single call site to swap for #552's effective-profile resolver.
+// resolveWatchTargetProfile resolves profile selection for display.
 func resolveWatchTargetProfile(target state.WatchTarget, config state.ServiceConfig, configErr error) watchTargetProfile {
-	if target.AgentProfile == "" {
+	name, auto, err := config.EffectiveAgentProfile(target)
+	if configErr != nil {
+		name, auto, err = target.AgentProfile, false, nil
+	}
+	if name == "" && !auto {
 		return watchTargetProfile{Name: agentProfileDefaultName, Source: agentProfileSourceDefault}
 	}
-	profile := watchTargetProfile{Name: target.AgentProfile, Source: agentProfileSourceExplicit}
-	if configErr == nil {
-		if _, err := config.AgentProfile(target.AgentProfile); err != nil {
-			profile.Err = err
-		}
+	source := agentProfileSourceExplicit
+	if auto {
+		source = agentProfileSourceAuto
 	}
-	return profile
+	return watchTargetProfile{Name: name, Source: source, Err: err}
 }
 
 // applyAgentProfiles fills in each status's profile and builds the summary.
@@ -181,6 +181,8 @@ func formatAgentProfileLabel(profile watchTargetProfile) string {
 	switch {
 	case profile.Source == agentProfileSourceDefault:
 		return "profile " + agentProfileDefaultName
+	case profile.Unavailable() && profile.Source == agentProfileSourceAuto:
+		return fmt.Sprintf("profile %s (auto, unavailable)", profile.Name)
 	case profile.Unavailable():
 		return fmt.Sprintf("profile %s (unavailable)", profile.Name)
 	case profile.Source == agentProfileSourceAuto:
