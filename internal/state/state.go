@@ -187,6 +187,12 @@ type ServiceConfig struct {
 	LogMaxTotalSize                  string `json:"log_max_total_size,omitempty"`
 	LogMaxFileSize                   string `json:"log_max_file_size,omitempty"`
 	LogMaxBackups                    *int   `json:"log_max_backups,omitempty"`
+	// IncompleteRerunLimit caps automatic reruns of an incomplete session
+	// before it is blocked; nil means DefaultIncompleteRerunLimit.
+	IncompleteRerunLimit *int `json:"incomplete_rerun_limit,omitempty"`
+	// IncompleteRerunBackoff is the delay before the first automatic rerun of
+	// an incomplete session; each later rerun doubles it.
+	IncompleteRerunBackoff string `json:"incomplete_rerun_backoff,omitempty"`
 	// AgentProfiles are named per-provider agent invocation settings that a
 	// watch target selects explicitly or through a repository regex.
 	AgentProfiles map[string]AgentProfile `json:"agent_profiles,omitempty"`
@@ -207,6 +213,45 @@ func (c ServiceConfig) LogRotationLimits() logging.Limits {
 		limits.MaxBackups = *c.LogMaxBackups
 	}
 	return limits
+}
+
+const (
+	// DefaultIncompleteRerunLimit is how many automatic reruns an incomplete
+	// session gets before it is blocked.
+	DefaultIncompleteRerunLimit = 3
+	// DefaultIncompleteRerunBackoff is the delay before the first automatic
+	// rerun of an incomplete session.
+	DefaultIncompleteRerunBackoff = 5 * time.Minute
+	// maxIncompleteRerunBackoff bounds the doubling rerun delay.
+	maxIncompleteRerunBackoff = 2 * time.Hour
+)
+
+// IncompleteRerunPolicy returns the automatic rerun limit and base backoff for
+// incomplete sessions. Unset or malformed values fall back to the defaults.
+func (c ServiceConfig) IncompleteRerunPolicy() (int, time.Duration) {
+	limit := DefaultIncompleteRerunLimit
+	if c.IncompleteRerunLimit != nil && *c.IncompleteRerunLimit >= 0 {
+		limit = *c.IncompleteRerunLimit
+	}
+	backoff := DefaultIncompleteRerunBackoff
+	if parsed, err := time.ParseDuration(strings.TrimSpace(c.IncompleteRerunBackoff)); err == nil && parsed > 0 {
+		backoff = parsed
+	}
+	return limit, backoff
+}
+
+// IncompleteRerunDelay returns how long to wait after an attempt ends before
+// the next automatic rerun, given how many reruns already happened: the base
+// backoff doubles per rerun, bounded at two hours.
+func IncompleteRerunDelay(base time.Duration, reruns int) time.Duration {
+	delay := base
+	for i := 0; i < reruns && delay < maxIncompleteRerunBackoff; i++ {
+		delay *= 2
+	}
+	if delay > maxIncompleteRerunBackoff {
+		delay = maxIncompleteRerunBackoff
+	}
+	return delay
 }
 
 // IsSandboxEnabled returns whether sandbox mode is enabled.
@@ -347,27 +392,36 @@ type Session struct {
 	LastRecreateCommentID          int64               `json:"last_recreate_comment_id,omitempty"`
 	LastRecreateCommentAt          string              `json:"last_recreate_comment_at,omitempty"`
 	IncompleteReason               string              `json:"incomplete_reason,omitempty"`
-	RecreatedAsIssue               int                 `json:"recreated_as_issue,omitempty"`
-	RecreatedAsIssueURL            string              `json:"recreated_as_issue_url,omitempty"`
-	StaleAutoRestartAttempts       int                 `json:"stale_auto_restart_attempts,omitempty"`
-	StaleAutoRestartPendingSince   string              `json:"stale_auto_restart_pending_since,omitempty"`
-	StaleAutoRestartStoppedAt      string              `json:"stale_auto_restart_stopped_at,omitempty"`
-	RecoveredAt                    string              `json:"recovered_at,omitempty"`
-	MonitoringStoppedAt            string              `json:"monitoring_stopped_at,omitempty"`
-	CleanupCompletedAt             string              `json:"cleanup_completed_at,omitempty"`
-	CleanupAttempts                int                 `json:"cleanup_attempts,omitempty"`
-	CleanupError                   string              `json:"cleanup_error,omitempty"`
-	ProcessID                      int                 `json:"process_id,omitempty"`
-	StartedAt                      string              `json:"started_at,omitempty"`
-	LastHeartbeatAt                string              `json:"last_heartbeat_at,omitempty"`
-	EndedAt                        string              `json:"ended_at,omitempty"`
-	UpdatedAt                      string              `json:"updated_at,omitempty"`
-	LastError                      string              `json:"last_error,omitempty"`
-	SandboxMode                    bool                `json:"sandbox_mode,omitempty"`
-	SandboxSessionID               string              `json:"sandbox_session_id,omitempty"`
-	SandboxContainerName           string              `json:"sandbox_container_name,omitempty"`
-	SandboxContainerID             string              `json:"sandbox_container_id,omitempty"`
-	SandboxExpiresAt               string              `json:"sandbox_expires_at,omitempty"`
+	// IncompleteRerunCount counts automatic reruns of an incomplete session
+	// since the last pull request or explicit resume.
+	IncompleteRerunCount int `json:"incomplete_rerun_count,omitempty"`
+	// LastAttemptFingerprint identifies the branch HEAD and worktree status at
+	// the end of the latest attempt that ended without a pull request.
+	LastAttemptFingerprint string `json:"last_attempt_fingerprint,omitempty"`
+	// StackedBaseBranch is the branch named by the issue's `Base branch:`
+	// directive, used to measure the session's progress.
+	StackedBaseBranch            string `json:"stacked_base_branch,omitempty"`
+	RecreatedAsIssue             int    `json:"recreated_as_issue,omitempty"`
+	RecreatedAsIssueURL          string `json:"recreated_as_issue_url,omitempty"`
+	StaleAutoRestartAttempts     int    `json:"stale_auto_restart_attempts,omitempty"`
+	StaleAutoRestartPendingSince string `json:"stale_auto_restart_pending_since,omitempty"`
+	StaleAutoRestartStoppedAt    string `json:"stale_auto_restart_stopped_at,omitempty"`
+	RecoveredAt                  string `json:"recovered_at,omitempty"`
+	MonitoringStoppedAt          string `json:"monitoring_stopped_at,omitempty"`
+	CleanupCompletedAt           string `json:"cleanup_completed_at,omitempty"`
+	CleanupAttempts              int    `json:"cleanup_attempts,omitempty"`
+	CleanupError                 string `json:"cleanup_error,omitempty"`
+	ProcessID                    int    `json:"process_id,omitempty"`
+	StartedAt                    string `json:"started_at,omitempty"`
+	LastHeartbeatAt              string `json:"last_heartbeat_at,omitempty"`
+	EndedAt                      string `json:"ended_at,omitempty"`
+	UpdatedAt                    string `json:"updated_at,omitempty"`
+	LastError                    string `json:"last_error,omitempty"`
+	SandboxMode                  bool   `json:"sandbox_mode,omitempty"`
+	SandboxSessionID             string `json:"sandbox_session_id,omitempty"`
+	SandboxContainerName         string `json:"sandbox_container_name,omitempty"`
+	SandboxContainerID           string `json:"sandbox_container_id,omitempty"`
+	SandboxExpiresAt             string `json:"sandbox_expires_at,omitempty"`
 }
 
 // CIAttempt records one handled PR-head/check observation.

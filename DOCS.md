@@ -1015,6 +1015,40 @@ When that directive is present:
 
 When the directive is absent, Vigilante uses the watch target's base branch as today. Only an explicit top-level `Base branch:` line triggers stacking; prose mentions of other branches, linked issue numbers, and native sub-issue relationships are ignored. If the specified branch does not exist on the remote, the session is reported as failed on the issue rather than silently falling back to the default branch.
 
+Vigilante also reads the directive itself (persisted as the session's `stacked_base_branch`) so that progress detection counts only commits ahead of `origin/<branch-name>`, and the resumed-session comment shows `Diff summary against <branch-name>`. Commits inherited from the stacked base are never mistaken for new work.
+
+## Incomplete Sessions and Reruns
+
+A session whose coding agent exits successfully without an open pull request is `incomplete`. Vigilante reruns it in the same worktree, with three guards that keep a session from looping:
+
+- **No-progress block.** At the end of every attempt Vigilante records a fingerprint of the branch `HEAD` and the worktree status. When a rerun ends with the same fingerprint as the attempt before it, the session moves to `blocked` (`no_progress_repeated`) instead of being rerun again. A zero-progress session is therefore rerun at most once.
+- **Rerun cap with backoff.** Reruns wait `incomplete_rerun_backoff` (default `5m`) after the previous attempt ended, doubling for each later rerun (bounded at two hours). After `incomplete_rerun_limit` reruns (default `3`) without a pull request the session moves to `blocked` (`incomplete_rerun_limit`). Both knobs live in `~/.vigilante/config.json`:
+
+  ```json
+  {
+    "incomplete_rerun_limit": 3,
+    "incomplete_rerun_backoff": "5m"
+  }
+  ```
+
+- **Stop label.** An incomplete issue is labeled `vigilante:queued`; Vigilante never applies `vigilante:blocked` to it. A `vigilante:blocked` label on an incomplete issue is therefore always a human or agent stop signal: Vigilante keeps it, and the rerun loop turns the session into `blocked` (`issue_labeled_blocked`) instead of relaunching it.
+
+Each rerun decision is logged with the attempt number, progress fingerprint, and base branch. Opening a pull request or an explicit `@vigilanteai resume` resets the rerun counter. Sessions blocked by these rules post one blocked comment naming the reason and wait for `@vigilanteai resume` (or `vigilante resume`).
+
+### Agent Blocked Signal
+
+A coding agent that hits a blocker it cannot resolve (for example a prerequisite that only exists in an unmerged pull request) declares it by writing `.vigilante/blocked.json` at the worktree root before exiting:
+
+```json
+{
+  "kind": "dependency_missing",
+  "summary": "PR #12 must merge into stack/base first",
+  "detail": "The issue depends on the store package added in PR #12, which stack/base does not contain yet."
+}
+```
+
+`kind` is `dependency_missing` or `agent_declared` (any other value is treated as `agent_declared`). After the agent exits, Vigilante removes the file, sets the session to `blocked` with that reason, and posts a blocked comment instead of the `⚠️ Incomplete` comment. The session is not rerun until a human resumes it. A file that cannot be parsed still blocks the session. The issue implementation skills use this signal for unresolvable prerequisites; a free-text blocked comment alone does not stop reruns.
+
 ## Package Hardening
 
 Vigilante runs a deterministic, code-driven package hardening scan for watched repositories classified with the `nodejs` tech stack. The scan is not LLM-driven — all checks use static analysis of manifest files, lockfiles, and CI configuration.
@@ -1095,6 +1129,7 @@ Recommended lifecycle:
 1. When an issue becomes eligible but has not started, add `vigilante:queued`.
 2. When execution starts, replace `vigilante:queued` with `vigilante:running`.
 3. If execution stalls on a known blocker, replace `vigilante:running` with `vigilante:blocked` and add exactly one matching `vigilante:needs-*` label when possible.
+   An incomplete session waiting for an automatic rerun is labeled `vigilante:queued`, not `vigilante:blocked`; see [Incomplete Sessions and Reruns](#incomplete-sessions-and-reruns).
 4. When implementation is ready for a human to inspect, replace blocked or running state with `vigilante:ready-for-review` as the single review-handoff label.
 5. When code review is complete but a product or operator check is still required, use `vigilante:awaiting-user-validation`.
 6. When the issue reaches a terminal successful state, clear transient labels and leave `vigilante:done`.
