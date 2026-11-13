@@ -163,12 +163,12 @@ func TestIncompleteSessionItems(t *testing.T) {
 		{
 			name:     "commits and worktree changes",
 			signal:   ProgressSignal{HasNewCommits: true, HasWorktreeChanges: true},
-			contains: "New commits were pushed to the branch and uncommitted changes remain",
+			contains: "The branch has commits ahead of `main` and uncommitted changes remain",
 		},
 		{
 			name:     "commits only",
 			signal:   ProgressSignal{HasNewCommits: true},
-			contains: "New commits were pushed to the branch but no PR was opened",
+			contains: "The branch has commits ahead of `main` but no PR was opened",
 		},
 		{
 			name:     "worktree changes only",

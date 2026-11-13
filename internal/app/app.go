@@ -4259,6 +4259,10 @@ func (a *App) CleanupSession(ctx context.Context, repo string, issue int, source
 }
 
 func (a *App) rerunIncompleteSessions(ctx context.Context, sessions []state.Session, issueCache scanIssueDetailsCache) ([]state.Session, error) {
+	rerunLimit, rerunBackoff := state.DefaultIncompleteRerunLimit, state.DefaultIncompleteRerunBackoff
+	if config, err := a.state.LoadServiceConfig(); err == nil {
+		rerunLimit, rerunBackoff = config.IncompleteRerunPolicy()
+	}
 	for i := range sessions {
 		session := &sessions[i]
 		if session.Status != state.SessionStatusIncomplete {
@@ -4300,7 +4304,33 @@ func (a *App) rerunIncompleteSessions(ctx context.Context, sessions []state.Sess
 		if !ok {
 			continue
 		}
-		a.logger.Info("rerunning incomplete session", "repo", session.Repo, "issue", session.IssueNumber, "reason", session.IncompleteReason)
+		action, due := issuerunner.RerunDecision(*session, a.clock(), rerunLimit, rerunBackoff)
+		if action == issuerunner.RerunWait {
+			a.logger.Info("incomplete session rerun waiting for backoff", "repo", session.Repo, "issue", session.IssueNumber, "reason", session.IncompleteReason, "attempt", session.IncompleteRerunCount+1, "due", due.Format(time.RFC3339))
+			continue
+		}
+		details, err := a.loadIssueDetailsForScan(ctx, issueCache, session.Repo, session.IssueNumber)
+		if err != nil {
+			a.logger.Warn("incomplete session issue lookup failed, skipping rerun", "repo", session.Repo, "issue", session.IssueNumber, "err", err)
+			continue
+		}
+		if issueDetailsHaveLabel(details, labelBlocked) {
+			a.blockIncompleteSession(ctx, session, state.BlockedReason{
+				Kind:      issuerunner.BlockedKindIssueLabel,
+				Operation: "incomplete_rerun",
+				Summary:   fmt.Sprintf("the issue carries the `%s` label", labelBlocked),
+			}, "incomplete_rerun_label_blocked")
+			continue
+		}
+		if action == issuerunner.RerunBlock {
+			a.blockIncompleteSession(ctx, session, issuerunner.RerunLimitBlockedReason(rerunLimit), "incomplete_rerun_limit")
+			continue
+		}
+		if strings.TrimSpace(session.StackedBaseBranch) == "" {
+			session.StackedBaseBranch = issuerunner.ParseBaseBranchDirective(details.Body)
+		}
+		session.IncompleteRerunCount++
+		a.logger.Info("rerunning incomplete session", "repo", session.Repo, "issue", session.IssueNumber, "reason", session.IncompleteReason, "attempt", session.IncompleteRerunCount, "limit", rerunLimit, "fingerprint", session.LastAttemptFingerprint, "base", issuerunner.ProgressBaseBranch(*session))
 
 		previousStatus := session.Status
 		now := a.clock().Format(time.RFC3339)
@@ -4312,7 +4342,14 @@ func (a *App) rerunIncompleteSessions(ctx context.Context, sessions []state.Sess
 		session.ProcessID = os.Getpid()
 		session.LastError = ""
 
-		diffSummary, _ := summarizeIssueBranchDiff(ctx, a.env.Runner, session.RepoPath, effectiveSessionBaseBranch(*session, target), session.Branch)
+		progressBase := sessionProgressBaseBranch(*session, target)
+		diffSummary, err := summarizeIssueBranchDiff(ctx, a.env.Runner, session.RepoPath, progressBase, session.Branch)
+		if err != nil && strings.TrimSpace(session.StackedBaseBranch) != "" {
+			// A stacked base often exists only as a remote-tracking branch.
+			if remoteSummary, remoteErr := summarizeIssueBranchDiff(ctx, a.env.Runner, session.RepoPath, "origin/"+progressBase, session.Branch); remoteErr == nil {
+				diffSummary = strings.Replace(remoteSummary, "`origin/"+progressBase+"`", "`"+progressBase+"`", 1)
+			}
+		}
 		session.BranchDiffSummary = diffSummary
 		session.ReusedRemoteBranch = session.Branch
 		session.ContinuationSource = continuationSourceIncompleteRerun
@@ -4327,6 +4364,31 @@ func (a *App) rerunIncompleteSessions(ctx context.Context, sessions []state.Sess
 		a.launchIssueSession(ctx, target, ghIssue, *session)
 	}
 	return sessions, nil
+}
+
+// blockIncompleteSession stops automatic reruns of an incomplete session,
+// tells the issue why, and waits for an explicit resume.
+func (a *App) blockIncompleteSession(ctx context.Context, session *state.Session, reason state.BlockedReason, transition string) {
+	previousStatus := session.Status
+	markSessionBlocked(session, "issue_execution", reason, a.clock())
+	session.IncompleteReason = ""
+	session.UpdatedAt = a.clock().Format(time.RFC3339)
+	a.emitSessionTransition(previousStatus, *session, transition)
+	a.logger.Info("incomplete session blocked", "repo", session.Repo, "issue", session.IssueNumber, "kind", reason.Kind, "reruns", session.IncompleteRerunCount, "fingerprint", session.LastAttemptFingerprint)
+	a.commentOnIssueBestEffort(ctx, session.Repo, session.IssueNumber, issuerunner.SessionBlockedComment(*session), "incomplete session blocked")
+	a.syncSessionIssueLabelsBestEffort(ctx, session, nil, nil, nil)
+}
+
+func issueDetailsHaveLabel(details *ghcli.IssueDetails, name string) bool {
+	if details == nil {
+		return false
+	}
+	for _, label := range details.Labels {
+		if strings.EqualFold(strings.TrimSpace(label.Name), name) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *App) ResumeSession(ctx context.Context, repo string, issue int, source string) error {
@@ -4803,6 +4865,10 @@ func resetStaleAutoRestartState(session *state.Session) {
 	clearStaleAutoRestartPending(session)
 }
 
+// errSessionReblocked reports that a resumed session ran and was blocked again
+// with a specific reason already recorded on the session.
+var errSessionReblocked = errors.New("session blocked again after resume")
+
 func (a *App) resumeBlockedSession(ctx context.Context, session *state.Session, source string) error {
 	if session.Status != state.SessionStatusBlocked {
 		return nil
@@ -4837,6 +4903,11 @@ func (a *App) resumeBlockedSession(ctx context.Context, session *state.Session, 
 		err = a.resumeBlockedConflictResolution(ctx, session)
 	default:
 		err = a.resumeBlockedIssueExecution(ctx, session)
+	}
+	if errors.Is(err, errSessionReblocked) {
+		a.emitSessionTransition(state.SessionStatusResuming, *session, source)
+		a.commentOnIssueBestEffort(ctx, session.Repo, session.IssueNumber, issuerunner.SessionBlockedComment(*session), "resume blocked")
+		return nil
 	}
 	if err != nil {
 		if session.BlockedReason.Kind != "agent_profile_unavailable" || session.LastError != err.Error() {
@@ -4977,6 +5048,7 @@ func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Se
 		a.logger.Info("resume issue preflight succeeded", "repo", session.Repo, "issue", session.IssueNumber, "output", summarizeText(preflightOutput))
 	}
 	session.ContinuationSource = continuationSourceBlockedResume
+	issuerunner.ResetIncompleteRerunTracking(session)
 	invocation, err := selectedProvider.BuildIssueInvocation(provider.IssueTask{
 		Target:  target,
 		Issue:   issue,
@@ -4996,6 +5068,8 @@ func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Se
 		a.logger.Error("resume issue execution failed", "repo", session.Repo, "issue", session.IssueNumber, "err", err, "output", summarizeText(output))
 		return err
 	}
+	agentBlock := issuerunner.ConsumeAgentBlockedSignal(session.WorktreePath)
+	issuerunner.ResolveStackedBaseBranch(ctx, a.issueTrackerForSession(*session), a.issueProjectForSession(*session), session)
 	signal := issuerunner.EvaluateSessionProgress(ctx, a.env.Runner, *session)
 	if !signal.HasPullRequest {
 		pr, err := a.loadPullRequestForSession(ctx, *session)
@@ -5006,12 +5080,19 @@ func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Se
 			signal.HasPullRequest = true
 		}
 	}
-	if signal.HasPullRequest {
+	switch {
+	case signal.HasPullRequest:
 		session.Status = state.SessionStatusSuccess
 		session.IncompleteReason = ""
-	} else {
+	case agentBlock != nil:
+		session.IncompleteReason = ""
+		markSessionBlocked(session, "issue_execution", *agentBlock, a.clock())
+		a.logger.Info("resume issue execution blocked by agent", "repo", session.Repo, "issue", session.IssueNumber, "kind", agentBlock.Kind)
+		return errSessionReblocked
+	default:
 		session.Status = state.SessionStatusIncomplete
 		session.IncompleteReason = issuerunner.ClassifyIncompleteReason(signal)
+		issuerunner.RecordIncompleteAttempt(session, signal)
 	}
 	session.LastError = ""
 	a.logger.Info("resume issue execution completed", "repo", session.Repo, "issue", session.IssueNumber, "status", session.Status, "output", summarizeText(output))
@@ -5536,6 +5617,16 @@ func effectiveSessionBaseBranch(session state.Session, fallbackTarget state.Watc
 		return baseBranch
 	}
 	return "main"
+}
+
+// sessionProgressBaseBranch is the branch an issue session's work is measured
+// against: the issue's stacked `Base branch:` directive first, then the usual
+// effective base branch.
+func sessionProgressBaseBranch(session state.Session, fallbackTarget state.WatchTarget) string {
+	if branch := strings.TrimSpace(session.StackedBaseBranch); branch != "" {
+		return branch
+	}
+	return effectiveSessionBaseBranch(session, fallbackTarget)
 }
 
 func watchTargetForSession(session state.Session, fallbackTarget state.WatchTarget) state.WatchTarget {
@@ -6129,6 +6220,8 @@ func (a *App) dispatchIssueSession(ctx context.Context, target state.WatchTarget
 	session.IssueBody = strings.TrimSpace(issueBody)
 	session.IssueURL = issue.URL
 	session.BaseBranch = target.Branch
+	session.StackedBaseBranch = issuerunner.ParseBaseBranchDirective(issueBody)
+	issuerunner.ResetIncompleteRerunTracking(&session)
 	session.Branch = wt.Branch
 	session.WorktreePath = wt.Path
 	session.ForkMode = target.ForkMode
@@ -6203,6 +6296,8 @@ func reuseExistingIterationSession(target state.WatchTarget, issue ghcli.Issue, 
 	session.IssueBody = strings.TrimSpace(issueBody)
 	session.IssueURL = issue.URL
 	session.BaseBranch = target.Branch
+	session.StackedBaseBranch = issuerunner.ParseBaseBranchDirective(issueBody)
+	issuerunner.ResetIncompleteRerunTracking(&session)
 	session.Branch = branch
 	session.WorktreePath = expectedPath
 	session.Status = state.SessionStatusRunning
@@ -6265,6 +6360,23 @@ func (a *App) syncSessionIssueLabels(ctx context.Context, session *state.Session
 		}
 	}
 	labels := sessionManagedLabels(*session, pr)
+	if session.Status == state.SessionStatusIncomplete {
+		if issueDetails == nil {
+			details, err := a.loadIssueDetailsForScan(ctx, issueCache, session.Repo, session.IssueNumber)
+			if err != nil {
+				if ghcli.IsIssueUnavailableError(err) {
+					a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
+					return nil
+				}
+				return err
+			}
+			issueDetails = details
+		}
+		// Keep a human- or agent-applied stop signal so the rerun loop sees it.
+		if issueDetailsHaveLabel(issueDetails, labelBlocked) {
+			labels = []string{labelBlocked}
+		}
+	}
 	if err := a.syncIssueManagedLabels(ctx, session.Repo, session.IssueNumber, labels, issueDetails, issueCache); err != nil {
 		if ghcli.IsIssueUnavailableError(err) {
 			a.stopMonitoringUnavailableIssueSession(ctx, session, "issue_deleted", err)
@@ -6374,7 +6486,10 @@ func desiredSessionLabels(session state.Session, pr *ghcli.PullRequest) (string,
 		}
 		return labelReadyForReview, ""
 	case state.SessionStatusIncomplete:
-		return labelBlocked, ""
+		// An incomplete session is waiting for an automatic rerun. Vigilante
+		// never applies vigilante:blocked to it, so that label on an
+		// incomplete issue is always a human or agent stop signal.
+		return labelQueued, ""
 	default:
 		return "", ""
 	}
@@ -6386,7 +6501,8 @@ func blockedInterventionLabel(reason state.BlockedReason) string {
 		return labelNeedsProviderFix
 	case "git_auth", "gh_auth", "dirty_worktree", "validation_failed":
 		return labelNeedsGitFix
-	case "unknown_operator_action_required":
+	case "unknown_operator_action_required", issuerunner.BlockedKindAgentDeclared, issuerunner.BlockedKindDependencyMissing,
+		issuerunner.BlockedKindNoProgressRepeated, issuerunner.BlockedKindRerunLimit, issuerunner.BlockedKindIssueLabel:
 		return labelNeedsHumanInput
 	default:
 		return ""

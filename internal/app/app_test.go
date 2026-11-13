@@ -1080,9 +1080,9 @@ func TestDesiredSessionLabels(t *testing.T) {
 			wantIntervention: "",
 		},
 		{
-			name:             "incomplete blocked",
+			name:             "incomplete queued for rerun",
 			session:          state.Session{Status: state.SessionStatusIncomplete, IncompleteReason: "commits_without_pr"},
-			wantState:        labelBlocked,
+			wantState:        labelQueued,
 			wantIntervention: "",
 		},
 		{
@@ -6298,6 +6298,7 @@ func TestRerunIncompleteSessionsPostsResumedLaunchComment(t *testing.T) {
 	expected.ReusedRemoteBranch = branch
 	expected.BranchDiffSummary = "No diff detected between `main` and `" + branch + "`."
 	expected.ContinuationSource = "incomplete_rerun"
+	expected.IncompleteRerunCount = 1
 	resumedComment := sessionStartCommentCommand("owner/repo", 1, worktreePath, expected)
 	if !strings.Contains(resumedComment, "Vigilante Session Resumed") || strings.Contains(resumedComment, "Vigilante Session Start") {
 		t.Fatalf("expected rerun comment helper to use the resumed heading, got %q", resumedComment)
@@ -6309,6 +6310,7 @@ func TestRerunIncompleteSessionsPostsResumedLaunchComment(t *testing.T) {
 			"codex --version": "codex 1.0.0",
 			"gh pr list --repo owner/repo --head " + branch + " --state all --json number,url,state,mergedAt": `[]`,
 			"git diff --stat main..." + branch: "",
+			"gh api repos/owner/repo/issues/1": `{"title":"first","body":"Issue body","labels":[{"name":"vigilante:queued"}]}`,
 			resumedComment:                     "ok",
 			preflightPromptCommandForSession(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", expected): "baseline ok",
 			issuePromptCommandForSession(worktreePath, "owner/repo", repoPath, 1, "first", "https://github.com/owner/repo/issues/1", expected):     "done",
@@ -6392,6 +6394,9 @@ func TestResumeBlockedSessionPostsResumedLaunchComment(t *testing.T) {
 		BlockedReason:  state.BlockedReason{Kind: "git_signing", Operation: "git commit", Summary: "signing approval pending", Detail: "waiting for 1Password approval"},
 		ResumeRequired: true,
 		ResumeHint:     "vigilante resume --repo owner/repo --issue 1",
+		// A human resume gives the session a fresh rerun budget.
+		IncompleteRerunCount:   3,
+		LastAttemptFingerprint: "abc123:e3b0c44298fc1c14",
 	}
 	resumedComment := "gh issue comment --repo owner/repo 1 --body " + ghcli.FormatProgressComment(ghcli.ProgressComment{
 		Stage:      "Vigilante Session Resumed",
@@ -6447,6 +6452,9 @@ func TestResumeBlockedSessionPostsResumedLaunchComment(t *testing.T) {
 	}
 	if session.Status != state.SessionStatusIncomplete || session.IncompleteReason != "uncommitted_changes" {
 		t.Fatalf("expected resumed session with only local changes to stay incomplete: %#v", session)
+	}
+	if session.IncompleteRerunCount != 0 {
+		t.Fatalf("expected resume to reset the rerun counter, got %d", session.IncompleteRerunCount)
 	}
 }
 
@@ -10056,10 +10064,7 @@ func sessionStartCommentCommand(repo string, issueNumber int, worktreePath strin
 		"Common issue-comment commands: `@vigilanteai resume` retries a blocked session after the underlying problem is fixed, and `@vigilanteai cleanup` removes the local session state for this issue.",
 	}
 	if session.ReusedRemoteBranch != "" {
-		base := session.BaseBranch
-		if base == "" {
-			base = "main"
-		}
+		base := issuerunner.ProgressBaseBranch(session)
 		items = []string{
 			"Vigilante launched this implementation session in `" + worktreePath + "` from existing remote branch `origin/" + session.ReusedRemoteBranch + "`.",
 			"Diff summary against `" + base + "`: " + session.BranchDiffSummary,

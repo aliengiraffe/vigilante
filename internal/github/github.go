@@ -175,6 +175,11 @@ func sessionPreventsRedispatch(session state.Session) bool {
 	if sessionSuppressesRedispatchAfterMaintenanceCleanup(session) {
 		return true
 	}
+	if session.Status == state.SessionStatusIncomplete {
+		// An incomplete session is rerun in its own worktree; a fresh
+		// dispatch would collide with it.
+		return session.CleanupCompletedAt == "" && session.MonitoringStoppedAt == ""
+	}
 	if session.Status != state.SessionStatusSuccess {
 		return false
 	}
