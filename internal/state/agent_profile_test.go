@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -16,12 +17,7 @@ func writeServiceConfig(t *testing.T, body string) *Store {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	conn, err := store.database()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := conn.Exec(`INSERT INTO service_config (id, body, updated_at) VALUES (1, ?, '')
-		ON CONFLICT (id) DO UPDATE SET body = excluded.body`, body); err != nil {
+	if err := os.WriteFile(store.ServiceConfigPath(), []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return store
@@ -29,15 +25,11 @@ func writeServiceConfig(t *testing.T, body string) *Store {
 
 func readStoredServiceConfig(t *testing.T, store *Store) string {
 	t.Helper()
-	conn, err := store.database()
+	data, err := os.ReadFile(store.ServiceConfigPath())
 	if err != nil {
 		t.Fatal(err)
 	}
-	var body string
-	if err := conn.QueryRow(`SELECT body FROM service_config WHERE id = 1`).Scan(&body); err != nil {
-		t.Fatal(err)
-	}
-	return body
+	return string(data)
 }
 
 func TestServiceConfigParsesAgentProfiles(t *testing.T) {

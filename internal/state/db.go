@@ -20,8 +20,8 @@ import (
 )
 
 // DatabaseFileName is the SQLite database under the state root. Watch
-// targets, sessions, the per-session issue cache, service config, and
-// hardening state all live here.
+// targets, sessions, the per-session issue cache, and hardening state live
+// here. Service config does not: it stays in config.json, read in place.
 const DatabaseFileName = "vigilante.db"
 
 // Legacy file names from the JSON layout. Each is imported into the database
@@ -30,9 +30,12 @@ const DatabaseFileName = "vigilante.db"
 const (
 	legacyWatchlistFileName = "watchlist.json"
 	legacySessionsFileName  = "sessions.json"
-	legacyConfigFileName    = "config.json"
 	legacyHardeningFileName = "hardening_state.json"
 )
+
+// ServiceConfigFileName is the operator-authored service configuration under
+// the state root. Vigilante reads it in place and never renames or consumes it.
+const ServiceConfigFileName = "config.json"
 
 const migratedFileSuffix = ".migrated"
 
@@ -111,6 +114,14 @@ var migrations = []migration{
 			)`,
 		},
 	},
+	{
+		// Service config moves back to config.json. Store.database restores
+		// the row to the file (see restoreServiceConfigFile) before this runs.
+		version: 3,
+		statements: []string{
+			`DROP TABLE IF EXISTS service_config`,
+		},
+	},
 }
 
 // DatabasePath returns the SQLite database under the state root.
@@ -126,8 +137,9 @@ func (s *Store) legacySessionsPath() string {
 	return filepath.Join(s.root, legacySessionsFileName)
 }
 
-func (s *Store) legacyConfigPath() string {
-	return filepath.Join(s.root, legacyConfigFileName)
+// ServiceConfigPath returns config.json under the state root.
+func (s *Store) ServiceConfigPath() string {
+	return filepath.Join(s.root, ServiceConfigFileName)
 }
 
 func (s *Store) legacyHardeningPath() string {
@@ -162,6 +174,10 @@ func (s *Store) database() (*sql.DB, error) {
 	}
 	conn, err := openDatabase(s.DatabasePath())
 	if err != nil {
+		return nil, err
+	}
+	if err := s.restoreServiceConfigFile(conn); err != nil {
+		_ = conn.Close()
 		return nil, err
 	}
 	if err := applyMigrations(conn); err != nil {
@@ -250,34 +266,70 @@ func applyMigration(ctx context.Context, conn *sql.DB, m migration) error {
 	return tx.Commit()
 }
 
+// restoreServiceConfigFile is the pre-step of schema migration 3 for stores
+// that kept service config in the service_config table. When that table still
+// exists and config.json does not, the row is written back out as config.json
+// (mode 0600, since it may hold agent-profile env values). An existing
+// config.json always wins and is never touched. Once migration 3 drops the
+// table this does nothing, and a crash between the write and the drop is
+// recovered on the next open because the file then exists. A leftover
+// config.json.migrated is never read: it may be older than the row.
+func (s *Store) restoreServiceConfigFile(conn *sql.DB) error {
+	ctx := context.Background()
+	var tables int
+	if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'service_config'`).Scan(&tables); err != nil {
+		return err
+	}
+	if tables == 0 {
+		return nil
+	}
+	path := s.ServiceConfigPath()
+	if _, err := os.Lstat(path); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	var body string
+	err := conn.QueryRowContext(ctx, `SELECT body FROM service_config WHERE id = 1`).Scan(&body)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var data bytes.Buffer
+	if err := json.Indent(&data, []byte(body), "", "  "); err != nil {
+		data.Reset()
+		data.WriteString(body)
+	}
+	data.WriteByte('\n')
+	if err := writeFileAtomic(path, data.Bytes(), 0o600); err != nil {
+		return fmt.Errorf("restore %s from %s: %w", path, s.DatabasePath(), err)
+	}
+	s.AppendDaemonLog("restored service config from %s to %s; edit that file and restart the daemon to change settings", s.DatabasePath(), path)
+	return nil
+}
+
 // legacyImport describes one JSON file to fold into the database: its path,
 // the table that must still be empty for the import to run, and the importer
-// that parses the bytes and writes rows inside the shared transaction. A
-// strict importer fails the open on malformed data so nothing is dropped;
-// a lenient one (service config, which has safe defaults) logs and skips.
+// that parses the bytes and writes rows inside the shared transaction.
+// Malformed data fails the open so nothing is dropped.
 type legacyImport struct {
-	path   string
-	table  string
-	strict bool
-	// overwrite imports the file even when the table already has rows. The
-	// service config uses it: writing config.json and restarting the daemon
-	// stays the way operators change settings, and the file is consumed
-	// (renamed) once applied.
-	overwrite bool
-	load      func(ctx context.Context, q dbExecer, data []byte) (int, error)
+	path  string
+	table string
+	load  func(ctx context.Context, q dbExecer, data []byte) (int, error)
 }
 
 // importLegacyFiles moves the pre-SQLite JSON files into the database inside
 // one transaction, then renames each imported file so it is not read again.
 // A table that already holds rows is never overwritten by a data file; the
-// file is left alone and logged instead. config.json is the exception (see
-// legacyImport.overwrite).
+// file is left alone and logged instead. config.json is not a legacy file: it
+// stays in place and is read by LoadServiceConfig.
 func (s *Store) importLegacyFiles(conn *sql.DB) error {
 	imports := []legacyImport{
-		{path: s.legacyWatchlistPath(), table: "watch_targets", strict: true, load: importLegacyWatchlistData},
-		{path: s.legacySessionsPath(), table: "sessions", strict: true, load: importLegacySessionsData},
-		{path: s.legacyConfigPath(), table: "service_config", strict: false, overwrite: true, load: importLegacyConfigData},
-		{path: s.legacyHardeningPath(), table: "hardening_pr_state", strict: true, load: importLegacyHardeningData},
+		{path: s.legacyWatchlistPath(), table: "watch_targets", load: importLegacyWatchlistData},
+		{path: s.legacySessionsPath(), table: "sessions", load: importLegacySessionsData},
+		{path: s.legacyHardeningPath(), table: "hardening_pr_state", load: importLegacyHardeningData},
 	}
 	ctx := context.Background()
 	tx, err := conn.BeginTx(ctx, nil)
@@ -300,17 +352,13 @@ func (s *Store) importLegacyFiles(conn *sql.DB) error {
 		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+imp.table).Scan(&existing); err != nil {
 			return err
 		}
-		if existing > 0 && !imp.overwrite {
+		if existing > 0 {
 			notes = append(notes, fmt.Sprintf("legacy %s ignored: %s already holds %d %s rows; remove the file or rename it to keep it", imp.path, s.DatabasePath(), existing, imp.table))
 			continue
 		}
 		count, err := imp.load(ctx, tx, data)
 		if err != nil {
-			if imp.strict {
-				return fmt.Errorf("import legacy %s: %w", imp.path, err)
-			}
-			notes = append(notes, fmt.Sprintf("legacy %s skipped: %v; defaults apply until the file is fixed or removed", imp.path, err))
-			continue
+			return fmt.Errorf("import legacy %s: %w", imp.path, err)
 		}
 		imported = append(imported, imp.path)
 		notes = append(notes, fmt.Sprintf("imported %d %s rows from %s into %s", count, imp.table, imp.path, s.DatabasePath()))
@@ -362,16 +410,6 @@ func importLegacySessionsData(ctx context.Context, q dbExecer, data []byte) (int
 		}
 	}
 	return len(sessions), replaceSessionRows(ctx, q, sessions)
-}
-
-func importLegacyConfigData(ctx context.Context, q dbExecer, data []byte) (int, error) {
-	config := defaultServiceConfig()
-	if len(bytes.TrimSpace(data)) > 0 {
-		if err := json.Unmarshal(data, &config); err != nil {
-			return 0, err
-		}
-	}
-	return 1, saveServiceConfigRow(ctx, q, config)
 }
 
 func importLegacyHardeningData(ctx context.Context, q dbExecer, data []byte) (int, error) {

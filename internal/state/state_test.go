@@ -466,7 +466,7 @@ func TestEnsureLayoutCreatesDatabaseInsteadOfWatchlistJSON(t *testing.T) {
 	if _, err := os.Stat(store.DatabasePath()); err != nil {
 		t.Fatalf("database not created: %v", err)
 	}
-	for _, legacy := range []string{store.legacyWatchlistPath(), store.legacySessionsPath(), store.legacyConfigPath(), store.legacyHardeningPath()} {
+	for _, legacy := range []string{store.legacyWatchlistPath(), store.legacySessionsPath(), store.ServiceConfigPath(), store.legacyHardeningPath()} {
 		if _, err := os.Stat(legacy); !os.IsNotExist(err) {
 			t.Fatalf("fresh layout must not create %s, stat err=%v", filepath.Base(legacy), err)
 		}

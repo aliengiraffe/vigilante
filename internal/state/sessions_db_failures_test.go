@@ -71,8 +71,6 @@ func storeCalls(store *Store) map[string]func() error {
 			_, _, err := store.CommitSessions(&SessionSnapshot{rows: map[string]sessionRow{}}, []Session{{Repo: "owner/repo", IssueNumber: 1}})
 			return err
 		},
-		"LoadServiceConfig":  func() error { _, err := store.LoadServiceConfig(); return err },
-		"SaveServiceConfig":  func() error { return store.SaveServiceConfig(ServiceConfig{}) },
 		"LoadHardeningState": func() error { _, err := store.LoadHardeningState(); return err },
 		"SaveHardeningState": func() error { return store.SaveHardeningState(HardeningState{"k": {}}) },
 		"LoadWatchTargets":   func() error { _, err := store.LoadWatchTargets(); return err },
@@ -94,6 +92,12 @@ func TestStoreMethodsFailWhenDatabaseCannotOpen(t *testing.T) {
 		if err := call(); err == nil {
 			t.Errorf("%s: expected an error when the state root is a file", name)
 		}
+	}
+	if _, err := store.LoadServiceConfig(); err == nil {
+		t.Error("LoadServiceConfig: expected an error when the state root is a file")
+	}
+	if err := store.SaveServiceConfig(ServiceConfig{}); err == nil {
+		t.Error("SaveServiceConfig: expected an error when the state root is a file")
 	}
 }
 
@@ -203,14 +207,18 @@ func TestConfigHardeningAndWatchTargetDecodeFailures(t *testing.T) {
 	}
 	execSQL(t, store, `DELETE FROM hardening_pr_state`)
 
-	execSQL(t, store, `INSERT INTO service_config (id, body, updated_at) VALUES (1, '{bad', '')`)
+	if err := os.WriteFile(store.ServiceConfigPath(), []byte(`{bad`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.LoadServiceConfig(); err == nil || !strings.Contains(err.Error(), "decode service config") {
 		t.Fatalf("expected config decode error, got %v", err)
 	}
 	if _, err := store.Export(); err == nil {
 		t.Fatal("Export must fail when the config cannot be decoded")
 	}
-	execSQL(t, store, `DELETE FROM service_config`)
+	if err := os.Remove(store.ServiceConfigPath()); err != nil {
+		t.Fatal(err)
+	}
 
 	execSQL(t, store, `INSERT INTO watch_targets (position, path, repo, body, updated_at) VALUES (1, '/p', 'owner/repo', '{bad', '')`)
 	if _, err := store.LoadWatchTargets(); err == nil || !strings.Contains(err.Error(), "decode watch target") {
@@ -327,14 +335,17 @@ func TestStoreMethodsFailWhenTablesAreMissing(t *testing.T) {
 		}
 	})
 
-	t.Run("service_config", func(t *testing.T) {
+	t.Run("config.json", func(t *testing.T) {
 		store, _ := newTestStore(t)
-		execSQL(t, store, `DROP TABLE service_config`)
+		// A directory where config.json should be cannot be read or replaced.
+		if err := os.Mkdir(store.ServiceConfigPath(), 0o755); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := store.LoadServiceConfig(); err == nil {
-			t.Error("LoadServiceConfig must fail without its table")
+			t.Error("LoadServiceConfig must fail when config.json cannot be read")
 		}
 		if err := store.SaveServiceConfig(ServiceConfig{}); err == nil {
-			t.Error("SaveServiceConfig must fail without its table")
+			t.Error("SaveServiceConfig must fail when config.json cannot be replaced")
 		}
 	})
 

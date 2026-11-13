@@ -184,7 +184,7 @@ limit, then requests manual repair without resuming polling. Older closed
 sessions with unfinished cleanup are also retried on the next scan. Running or
 resuming agents and in-flight PR maintenance are left to their existing handlers.
 
-Optional service settings. Write them to `~/.vigilante/config.json` and restart the daemon: the file is applied to the state database on the next start and renamed to `config.json.migrated`, and `vigilante state export` shows the values in effect.
+Optional service settings live in `~/.vigilante/config.json`. Vigilante reads the file in place and never renames, rewrites, or deletes it, so it can be managed with dotfiles or config management. Restart the daemon after editing it (`vigilante service restart`). A malformed file stops the daemon from starting and is reported by `vigilante status`, with the file named in the error.
 
 ```json
 {
@@ -782,9 +782,9 @@ You can also confirm the Homebrew cask will target the published release archive
 
 Initial files:
 
-- `vigilante.db`: SQLite database holding the watched repositories (`watch_targets`), active and past issue sessions (`sessions`, with the cached issue details split into `session_issue_cache`), the service configuration (`service_config`), and package-hardening bookkeeping (`hardening_pr_state`). Read-only inspection with `sqlite3 ~/.vigilante/vigilante.db` is supported; each row's `body` column is the JSON record. `vigilante state export [--dir <path>]` writes the same data back out as the legacy `watchlist.json`, `sessions.json`, `config.json`, and `hardening_state.json` files
-- `config.json`: optional operator input for service settings; it is imported and renamed to `config.json.migrated` on the next daemon start (the available settings are the `config.json` keys documented throughout this file)
-- `*.json.migrated`: the pre-SQLite files after their one-time import; safe to delete once you are satisfied with the upgrade
+- `vigilante.db`: SQLite database holding the watched repositories (`watch_targets`), active and past issue sessions (`sessions`, with the cached issue details split into `session_issue_cache`), and package-hardening bookkeeping (`hardening_pr_state`). Read-only inspection with `sqlite3 ~/.vigilante/vigilante.db` is supported; each row's `body` column is the JSON record. `vigilante state export [--dir <path>]` writes the same data back out as the legacy `watchlist.json`, `sessions.json`, and `hardening_state.json` files, plus the effective `config.json` settings
+- `config.json`: optional service settings, read in place and never modified by Vigilante; restart the daemon after editing it (the available settings are the `config.json` keys documented throughout this file). A missing file means defaults. Installs that ran a build which stored config in the database get the stored settings written back to `config.json` (mode `0600`) once, on the first start of a newer build, when no `config.json` exists; an existing `config.json` always wins
+- `*.json.migrated`: the pre-SQLite files after their one-time import; safe to delete once you are satisfied with the upgrade. A leftover `config.json.migrated` from that earlier build is never read
 - `logs/`: daemon and run logs, plus their rotated backups, size-capped at `log_max_total_size` (default 500MB) in total
 
 Suggested `config.json` shape (the same shape `vigilante state export` emits for `config`):
@@ -879,7 +879,7 @@ bytes, so a missing log can be distinguished from a rotated one.
 
 Notes:
 
-- All three settings are set through `~/.vigilante/config.json` (applied and consumed on the next daemon start) and are optional.
+- All three settings are set in `~/.vigilante/config.json` and are optional; restart the daemon after editing the file.
   Existing config files without them keep working and are not rewritten.
 - Sizes accept human-readable values (`"500MB"`, `"1GB"`, `"512KB"`) or a plain
   byte count. Suffixes are powers of 1024.
@@ -1013,7 +1013,7 @@ Vigilante monitors checkbox state only for PRs that already have a recorded hard
 
 ### Configuration
 
-The feature is controlled by the `package_hardening_enabled` field of the service configuration, set through `~/.vigilante/config.json`:
+The feature is controlled by the `package_hardening_enabled` field in `~/.vigilante/config.json` (restart the daemon after editing it):
 
 ```json
 {

@@ -550,11 +550,20 @@ func discoverStateRoot() string {
 }
 
 func writeJSONFile(path string, value any) error {
+	return writeJSONFileMode(path, value, 0o644)
+}
+
+func writeJSONFileMode(path string, value any, mode os.FileMode) error {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return err
 	}
-	data = append(data, '\n')
+	return writeFileAtomic(path, append(data, '\n'), mode)
+}
+
+// writeFileAtomic writes data to a temp file in path's directory with mode and
+// renames it over path, so readers never see a partial file.
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -567,7 +576,7 @@ func writeJSONFile(path string, value any) error {
 	defer func() {
 		_ = os.Remove(tmpPath)
 	}()
-	if err := tmp.Chmod(0o644); err != nil {
+	if err := tmp.Chmod(mode); err != nil {
 		_ = tmp.Close()
 		return err
 	}

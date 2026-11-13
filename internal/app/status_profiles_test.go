@@ -220,6 +220,35 @@ func TestStatusCommandOmitsAgentProfilesWhenUnused(t *testing.T) {
 	}
 }
 
+func TestStatusCommandReportsMalformedConfigFile(t *testing.T) {
+	app, stdout := newPlainStatusTestApp(t)
+	t.Cleanup(func() { _ = app.state.Close() })
+	if err := os.WriteFile(app.state.ServiceConfigPath(), []byte(`{not json`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if exitCode := app.Run(context.Background(), []string{"status"}); exitCode != 0 {
+		t.Fatalf("expected success exit code, got %d", exitCode)
+	}
+	output := stdout.String()
+	want := "Config\n  error: decode service config " + app.state.ServiceConfigPath()
+	if !strings.Contains(output, want) {
+		t.Fatalf("expected output to contain %q, got:\n%s", want, output)
+	}
+}
+
+func TestStatusModelShowsConfigError(t *testing.T) {
+	model := loadedStatusModel()
+	model.width = 200
+	model.height = 80
+	model.sessions.ConfigErr = errors.New("decode service config /x/config.json: boom")
+	if view := model.View(); !strings.Contains(view, "error: decode service config /x/config.json: boom") {
+		t.Fatalf("expected the config error in the dashboard, got:\n%s", view)
+	}
+	if view := loadedStatusModel().View(); strings.Contains(view, "Config") {
+		t.Fatalf("no config pane expected without an error, got:\n%s", view)
+	}
+}
+
 func TestLoadStatusSessionsIncludesAgentProfiles(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

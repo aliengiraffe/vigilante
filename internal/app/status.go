@@ -342,6 +342,17 @@ func valueOrUnknown(value string) string {
 	return value
 }
 
+// writeConfigErrorSection reports an unreadable or malformed config.json so it
+// is not mistaken for default settings. It writes nothing when err is nil.
+func writeConfigErrorSection(w io.Writer, err error) {
+	if err == nil {
+		return
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Config")
+	fmt.Fprintf(w, "  error: %v\n", err)
+}
+
 func writeWatchedReposSection(w io.Writer, statuses []watchedRepoStatus) {
 	fmt.Fprintf(w, "Watched repositories (%d)\n", len(statuses))
 	if len(statuses) == 0 {
@@ -403,6 +414,7 @@ func (a *App) statusExpanded(ctx context.Context) error {
 
 	repoStatuses := watchedRepoStatuses(targets, sessions)
 	profiles := applyAgentProfiles(repoStatuses, cfg, cfgErr)
+	writeConfigErrorSection(a.stdout, cfgErr)
 	fmt.Fprintln(a.stdout)
 	writeWatchedReposSection(a.stdout, repoStatuses)
 	writeAgentProfilesSection(a.stdout, profiles)
