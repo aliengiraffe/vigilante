@@ -1,11 +1,13 @@
 package state
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -523,47 +525,42 @@ func splitSessionKey(key string) (string, int) {
 	return key[:idx], issue
 }
 
-// LoadServiceConfig returns the service configuration, with defaults for
-// anything not stored.
+// LoadServiceConfig reads config.json from the state root on every call and
+// merges it over the defaults. A missing file means defaults; a malformed file
+// is an error naming the file. The store is opened first so the one-time
+// restore of a pre-file config (see restoreServiceConfigFile) has run.
 func (s *Store) LoadServiceConfig() (ServiceConfig, error) {
-	conn, err := s.database()
-	if err != nil {
+	if _, err := s.database(); err != nil {
 		return ServiceConfig{}, err
 	}
+	path := s.ServiceConfigPath()
 	config := defaultServiceConfig()
-	var body string
-	err = conn.QueryRowContext(context.Background(), `SELECT body FROM service_config WHERE id = 1`).Scan(&body)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return ServiceConfig{}, err
+	data, err := os.ReadFile(path)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return ServiceConfig{}, fmt.Errorf("read service config %s: %w", path, err)
 	}
-	if err == nil {
-		if err := json.Unmarshal([]byte(body), &config); err != nil {
-			return ServiceConfig{}, fmt.Errorf("decode service config: %w", err)
+	if len(bytes.TrimSpace(data)) > 0 {
+		if err := json.Unmarshal(data, &config); err != nil {
+			return ServiceConfig{}, fmt.Errorf("decode service config %s: %w", path, err)
 		}
 	}
 	config.BlockedSessionInactivityTimeout = normalizeBlockedSessionInactivityTimeout(config.BlockedSessionInactivityTimeout)
 	return config, nil
 }
 
-// SaveServiceConfig stores the service configuration.
+// SaveServiceConfig writes config to config.json atomically. A new file is
+// created with mode 0600 because it may hold agent-profile env values; an
+// existing file keeps its mode. Vigilante itself never calls this at runtime.
 func (s *Store) SaveServiceConfig(config ServiceConfig) error {
-	conn, err := s.database()
-	if err != nil {
-		return err
-	}
-	return saveServiceConfigRow(context.Background(), conn, config)
-}
-
-func saveServiceConfigRow(ctx context.Context, q dbExecer, config ServiceConfig) error {
 	config.BlockedSessionInactivityTimeout = normalizeBlockedSessionInactivityTimeout(config.BlockedSessionInactivityTimeout)
-	body, err := json.Marshal(config)
-	if err != nil {
+	path := s.ServiceConfigPath()
+	mode := os.FileMode(0o600)
+	if info, err := os.Stat(path); err == nil {
+		mode = info.Mode().Perm()
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	_, err = q.ExecContext(ctx, `INSERT INTO service_config (id, body, updated_at) VALUES (1, ?, ?)
-		ON CONFLICT (id) DO UPDATE SET body = excluded.body, updated_at = excluded.updated_at`,
-		string(body), time.Now().UTC().Format(time.RFC3339))
-	return err
+	return writeJSONFileMode(path, config, mode)
 }
 
 // LoadHardeningState returns the package hardening state for every PR.
@@ -640,7 +637,8 @@ type LegacyExport struct {
 	Hardening    HardeningState `json:"hardening_state"`
 }
 
-// Export reads everything in the database back into the legacy JSON shapes.
+// Export reads everything in the database back into the legacy JSON shapes,
+// plus the effective service config from config.json.
 func (s *Store) Export() (LegacyExport, error) {
 	targets, err := s.LoadWatchTargets()
 	if err != nil {
@@ -671,7 +669,7 @@ func (s *Store) WriteExport(dir string) error {
 	files := map[string]any{
 		legacyWatchlistFileName: export.WatchTargets,
 		legacySessionsFileName:  export.Sessions,
-		legacyConfigFileName:    export.Config,
+		ServiceConfigFileName:   export.Config,
 		legacyHardeningFileName: export.Hardening,
 	}
 	for name, value := range files {

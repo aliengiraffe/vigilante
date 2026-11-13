@@ -240,7 +240,9 @@ func TestCheckAgentProfilesReportsProblemsWithoutFailing(t *testing.T) {
 	}
 	var stderr bytes.Buffer
 	app.stderr = &stderr
-	app.checkAgentProfiles()
+	if err := app.checkAgentProfiles(); err != nil {
+		t.Fatalf("profile problems must not fail daemon start: %v", err)
+	}
 	out := stderr.String()
 	for _, want := range []string{
 		`config error: agent profile "broken" in config.json is invalid: unknown provider "cursor"`,
@@ -252,6 +254,24 @@ func TestCheckAgentProfilesReportsProblemsWithoutFailing(t *testing.T) {
 	}
 	if strings.Contains(out, "owner/ok") || strings.Contains(out, "owner/plain") {
 		t.Fatalf("healthy targets should not be reported:\n%s", out)
+	}
+}
+
+// A malformed config.json must stop daemon start with an error naming the
+// file instead of running on defaulted settings.
+func TestCheckAgentProfilesFailsOnMalformedConfigFile(t *testing.T) {
+	app, _, _ := newAgentProfileApp(t)
+	if err := os.WriteFile(app.state.ServiceConfigPath(), []byte(`{"agent_profiles": `), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	app.stderr = &stderr
+	err := app.checkAgentProfiles()
+	if err == nil || !strings.Contains(err.Error(), app.state.ServiceConfigPath()) {
+		t.Fatalf("expected an error naming config.json, got %v", err)
+	}
+	if !strings.Contains(stderr.String(), "config error: decode service config "+app.state.ServiceConfigPath()) {
+		t.Fatalf("expected the config error on stderr, got %q", stderr.String())
 	}
 }
 

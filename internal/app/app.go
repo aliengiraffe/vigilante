@@ -1816,19 +1816,22 @@ func (a *App) reportAgentProfileErrors(config state.ServiceConfig) {
 	}
 }
 
-// checkAgentProfiles validates the agent profiles at daemon start. Problems
-// are reported but never returned: targets that do not use a broken profile
-// keep running, and a target that does is blocked when its session starts.
-func (a *App) checkAgentProfiles() {
+// checkAgentProfiles validates config.json and the agent profiles at daemon
+// start. An unreadable or malformed config.json is returned so the daemon does
+// not run on silently defaulted settings. Individual profile problems are
+// reported but never returned: targets that do not use a broken profile keep
+// running, and a target that does is blocked when its session starts.
+func (a *App) checkAgentProfiles() error {
 	config, err := a.state.LoadServiceConfig()
 	if err != nil {
-		a.logger.Error("agent profile check skipped: config.json unreadable", "err", err)
-		return
+		a.logger.Error("service config unreadable", "err", err)
+		fmt.Fprintln(a.stderr, "config error:", err)
+		return err
 	}
 	a.reportAgentProfileErrors(config)
 	targets, err := a.state.LoadWatchTargets()
 	if err != nil {
-		return
+		return nil
 	}
 	for _, target := range targets {
 		if target.AgentProfile == "" {
@@ -1839,6 +1842,7 @@ func (a *App) checkAgentProfiles() {
 			fmt.Fprintf(a.stderr, "warning: %s: %v; sessions for this repository will be blocked until it is fixed\n", target.Repo, err)
 		}
 	}
+	return nil
 }
 
 // requireAgentProfile fails when name is set but does not resolve to a usable
@@ -2185,7 +2189,9 @@ func (a *App) DaemonRun(ctx context.Context, interval time.Duration, once bool) 
 	// any work, so upgrading operators do not need a manual cleanup step.
 	a.sweepLogsDir()
 
-	a.checkAgentProfiles()
+	if err := a.checkAgentProfiles(); err != nil {
+		return err
+	}
 
 	// Initialize sandbox manager if sandbox mode is enabled.
 	if err := a.initSandboxIfEnabled(ctx); err != nil {

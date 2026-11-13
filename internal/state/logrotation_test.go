@@ -106,9 +106,9 @@ func TestServiceConfigLogFieldsRoundTrip(t *testing.T) {
 	}
 }
 
-// A config file that predates this feature must import with defaults applied
-// in memory only, and must not have the new keys written into the migrated
-// copy just because defaults were applied.
+// A config file that predates this feature must load with defaults applied
+// in memory only, and must not have the new keys written into the file just
+// because defaults were applied.
 func TestServiceConfigWithoutLogFieldsUsesDefaults(t *testing.T) {
 	home := t.TempDir()
 	root := filepath.Join(home, ".vigilante")
@@ -134,14 +134,14 @@ func TestServiceConfigWithoutLogFieldsUsesDefaults(t *testing.T) {
 		t.Fatalf("MaxTotalSize = %d, want 500MB default", got)
 	}
 
-	// The import renames the file; the migrated copy must keep the original
-	// bytes rather than gaining keys that were only defaults.
-	raw, err := os.ReadFile(filepath.Join(root, "config.json"+migratedFileSuffix))
+	// The file is read in place and must keep its original bytes rather than
+	// gaining keys that were only defaults.
+	raw, err := os.ReadFile(filepath.Join(root, "config.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(raw) != legacy {
-		t.Fatalf("import rewrote the legacy config: %s", raw)
+		t.Fatalf("loading rewrote config.json: %s", raw)
 	}
 }
 

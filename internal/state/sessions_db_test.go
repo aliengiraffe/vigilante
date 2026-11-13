@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -351,13 +352,16 @@ func TestImportLegacyFilesMovesEverythingAndRenames(t *testing.T) {
 	files := map[string]string{
 		store.legacyWatchlistPath(): `[{"path":"/repos/a","repo":"owner/repo","provider":"claude"}]`,
 		store.legacySessionsPath():  string(sessionsJSON),
-		store.legacyConfigPath():    `{"github_background_budget": 7, "blocked_session_inactivity_timeout": "45m"}`,
 		store.legacyHardeningPath(): `{"owner/repo#3": {"repo":"owner/repo","pr_number":3,"comment_id":5}}`,
 	}
 	for path, content := range files {
 		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+	configJSON := `{"github_background_budget": 7, "blocked_session_inactivity_timeout": "45m"}`
+	if err := os.WriteFile(store.ServiceConfigPath(), []byte(configJSON), 0o644); err != nil {
+		t.Fatal(err)
 	}
 
 	if err := store.EnsureLayout(); err != nil {
@@ -387,7 +391,13 @@ func TestImportLegacyFilesMovesEverythingAndRenames(t *testing.T) {
 	}
 	config, _ := store.LoadServiceConfig()
 	if config.GitHubBackgroundBudget != 7 || config.BlockedSessionInactivityTimeout != "45m0s" {
-		t.Fatalf("config not imported: %#v", config)
+		t.Fatalf("config.json not read: %#v", config)
+	}
+	if data, err := os.ReadFile(store.ServiceConfigPath()); err != nil || string(data) != configJSON {
+		t.Fatalf("config.json must stay in place unchanged, got %q err=%v", data, err)
+	}
+	if _, err := os.Stat(store.ServiceConfigPath() + migratedFileSuffix); !os.IsNotExist(err) {
+		t.Fatalf("config.json must not be renamed, stat err=%v", err)
 	}
 	hs, _ := store.LoadHardeningState()
 	if hs["owner/repo#3"].CommentID != 5 {
@@ -411,31 +421,43 @@ func TestImportLegacyFilesMovesEverythingAndRenames(t *testing.T) {
 	if !reflect.DeepEqual(exported, legacySessions) {
 		t.Fatalf("export differs from import:\n got %#v\nwant %#v", exported, legacySessions)
 	}
-	for _, name := range []string{legacyWatchlistFileName, legacyConfigFileName, legacyHardeningFileName} {
+	for _, name := range []string{legacyWatchlistFileName, ServiceConfigFileName, legacyHardeningFileName} {
 		if _, err := os.Stat(filepath.Join(exportDir, name)); err != nil {
 			t.Fatalf("export missing %s: %v", name, err)
 		}
 	}
+	var exportedConfig ServiceConfig
+	data, err = os.ReadFile(filepath.Join(exportDir, ServiceConfigFileName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &exportedConfig); err != nil {
+		t.Fatal(err)
+	}
+	if exportedConfig.GitHubBackgroundBudget != 7 {
+		t.Fatalf("export must carry the effective config from config.json, got %#v", exportedConfig)
+	}
 }
 
-func TestImportLegacyConfigSkipsMalformedFileButKeepsOpening(t *testing.T) {
+func TestLoadServiceConfigRejectsMalformedFile(t *testing.T) {
 	t.Setenv("VIGILANTE_HOME", filepath.Join(t.TempDir(), ".vigilante"))
 	store := NewStore()
 	if err := os.MkdirAll(store.Root(), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(store.legacyConfigPath(), []byte(`{not json`), 0o644); err != nil {
+	if err := os.WriteFile(store.ServiceConfigPath(), []byte(`{not json`), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	config, err := store.LoadServiceConfig()
-	if err != nil {
-		t.Fatalf("malformed config.json must not block the open: %v", err)
+	_, err := store.LoadServiceConfig()
+	if err == nil || !strings.Contains(err.Error(), store.ServiceConfigPath()) {
+		t.Fatalf("malformed config.json must fail with an error naming the file, got %v", err)
 	}
-	if config.BlockedSessionInactivityTimeout != DefaultBlockedSessionInactivityTimeout.String() {
-		t.Fatalf("expected defaults, got %#v", config)
+	// Other state is unaffected by a broken config file.
+	if _, err := store.LoadWatchTargets(); err != nil {
+		t.Fatalf("store must still open: %v", err)
 	}
-	if _, err := os.Stat(store.legacyConfigPath()); err != nil {
-		t.Fatalf("skipped config.json must be left in place: %v", err)
+	if data, err := os.ReadFile(store.ServiceConfigPath()); err != nil || string(data) != `{not json` {
+		t.Fatalf("malformed config.json must be left in place, got %q err=%v", data, err)
 	}
 }
 
@@ -503,28 +525,240 @@ func TestOpenUpgradesVersionOneDatabase(t *testing.T) {
 	}
 }
 
-func TestConfigFileOverridesStoredConfigAndIsConsumed(t *testing.T) {
+func TestConfigFileIsReadInPlaceOnEveryLoad(t *testing.T) {
 	store, _ := newTestStore(t)
-	if err := store.SaveServiceConfig(ServiceConfig{GitHubBackgroundBudget: 1}); err != nil {
+	config, err := store.LoadServiceConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.BlockedSessionInactivityTimeout != DefaultBlockedSessionInactivityTimeout.String() {
+		t.Fatalf("missing config.json must mean defaults, got %#v", config)
+	}
+	if _, err := os.Stat(store.ServiceConfigPath()); !os.IsNotExist(err) {
+		t.Fatalf("loading defaults must not create config.json, stat err=%v", err)
+	}
+	if err := os.WriteFile(store.ServiceConfigPath(), []byte(`{"github_background_budget": 9}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if config, err = store.LoadServiceConfig(); err != nil || config.GitHubBackgroundBudget != 9 {
+		t.Fatalf("config.json not read, got %#v err=%v", config, err)
+	}
+	if err := os.WriteFile(store.ServiceConfigPath(), []byte(`{"github_background_budget": 3, "blocked_session_inactivity_timeout": "nope"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(store.legacyConfigPath(), []byte(`{"github_background_budget": 9}`), 0o644); err != nil {
+	if config, err = NewStore().LoadServiceConfig(); err != nil || config.GitHubBackgroundBudget != 3 {
+		t.Fatalf("edited config.json not applied, got %#v err=%v", config, err)
+	}
+	if config.BlockedSessionInactivityTimeout != DefaultBlockedSessionInactivityTimeout.String() {
+		t.Fatalf("invalid timeout must normalize to the default, got %q", config.BlockedSessionInactivityTimeout)
+	}
+	if _, err := os.Stat(store.ServiceConfigPath() + migratedFileSuffix); !os.IsNotExist(err) {
+		t.Fatalf("config.json must never be consumed, stat err=%v", err)
+	}
+}
+
+func TestSaveServiceConfigWritesFileAtomically(t *testing.T) {
+	store, _ := newTestStore(t)
+	if err := store.SaveServiceConfig(ServiceConfig{GitHubBackgroundBudget: 4, BlockedSessionInactivityTimeout: "90m"}); err != nil {
 		t.Fatal(err)
 	}
+	info, err := os.Stat(store.ServiceConfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("new config.json mode = %v, want 0600", info.Mode().Perm())
+	}
+	config, err := store.LoadServiceConfig()
+	if err != nil || config.GitHubBackgroundBudget != 4 || config.BlockedSessionInactivityTimeout != "1h30m0s" {
+		t.Fatalf("saved config not read back, got %#v err=%v", config, err)
+	}
+	if err := os.Chmod(store.ServiceConfigPath(), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveServiceConfig(ServiceConfig{GitHubBackgroundBudget: 5}); err != nil {
+		t.Fatal(err)
+	}
+	if info, err = os.Stat(store.ServiceConfigPath()); err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatalf("rewrite must keep the existing mode, got %v err=%v", info.Mode().Perm(), err)
+	}
+}
+
+// seedVersionTwoDatabase builds a database as #546 left it: schema version 2
+// with service config stored in the service_config table. body is the row, or
+// "" for no row.
+func seedVersionTwoDatabase(t *testing.T, store *Store, body string) {
+	t.Helper()
+	if err := os.MkdirAll(store.Root(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := openDatabase(store.DatabasePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	ctx := context.Background()
+	if _, err := conn.ExecContext(ctx, `CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range migrations[:2] {
+		if err := applyMigration(ctx, conn, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if body != "" {
+		if _, err := conn.ExecContext(ctx, `INSERT INTO service_config (id, body, updated_at) VALUES (1, ?, ?)`, body, "2026-01-01T00:00:00Z"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func assertServiceConfigTableDropped(t *testing.T, store *Store) {
+	t.Helper()
+	db, err := store.database()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tables int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'service_config'`).Scan(&tables); err != nil {
+		t.Fatal(err)
+	}
+	if tables != 0 {
+		t.Fatal("service_config table must be dropped")
+	}
+	var version int
+	if err := db.QueryRow(`SELECT MAX(version) FROM schema_migrations`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if version != 3 {
+		t.Fatalf("schema version = %d, want 3", version)
+	}
+}
+
+func TestUpgradeRestoresConfigFileFromServiceConfigRow(t *testing.T) {
+	t.Setenv("VIGILANTE_HOME", filepath.Join(t.TempDir(), ".vigilante"))
+	store := NewStore()
+	seedVersionTwoDatabase(t, store, `{"github_background_budget":11,"sandbox_enabled":true}`)
+	// A stale consumed copy from the #546 flow must be ignored and kept.
+	migrated := store.ServiceConfigPath() + migratedFileSuffix
+	if err := os.WriteFile(migrated, []byte(`{"github_background_budget":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	config, err := store.LoadServiceConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.GitHubBackgroundBudget != 11 || !config.IsSandboxEnabled() {
+		t.Fatalf("row values not restored: %#v", config)
+	}
+	info, err := os.Stat(store.ServiceConfigPath())
+	if err != nil {
+		t.Fatalf("config.json must be restored: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("restored config.json mode = %v, want 0600", info.Mode().Perm())
+	}
+	assertServiceConfigTableDropped(t, store)
+	if data, err := os.ReadFile(migrated); err != nil || string(data) != `{"github_background_budget":1}` {
+		t.Fatalf("config.json.migrated must be left untouched, got %q err=%v", data, err)
+	}
+	logData, err := os.ReadFile(store.DaemonLogPath())
+	if err != nil || !strings.Contains(string(logData), "restored service config") || !strings.Contains(string(logData), store.ServiceConfigPath()) {
+		t.Fatalf("daemon log must record the restore, got %q err=%v", logData, err)
+	}
+
+	// Re-opening does nothing further.
+	restored, _ := os.ReadFile(store.ServiceConfigPath())
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	again := NewStore()
+	if _, err := again.LoadServiceConfig(); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(again.ServiceConfigPath()); string(data) != string(restored) {
+		t.Fatalf("re-open must not rewrite config.json:\n got %q\nwant %q", data, restored)
+	}
+	assertServiceConfigTableDropped(t, again)
+}
+
+func TestUpgradeKeepsExistingConfigFileOverServiceConfigRow(t *testing.T) {
+	t.Setenv("VIGILANTE_HOME", filepath.Join(t.TempDir(), ".vigilante"))
+	store := NewStore()
+	seedVersionTwoDatabase(t, store, `{"github_background_budget":11}`)
+	const fileJSON = "{\"github_background_budget\": 2}\n"
+	if err := os.WriteFile(store.ServiceConfigPath(), []byte(fileJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	config, err := store.LoadServiceConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.GitHubBackgroundBudget != 2 {
+		t.Fatalf("existing config.json must win, got %#v", config)
+	}
+	info, err := os.Stat(store.ServiceConfigPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(store.ServiceConfigPath()); string(data) != fileJSON || info.Mode().Perm() != 0o644 {
+		t.Fatalf("existing config.json must be untouched, got %q mode %v", data, info.Mode().Perm())
+	}
+	assertServiceConfigTableDropped(t, store)
+}
+
+func TestUpgradeWithoutServiceConfigRowCreatesNoFile(t *testing.T) {
+	t.Setenv("VIGILANTE_HOME", filepath.Join(t.TempDir(), ".vigilante"))
+	store := NewStore()
+	seedVersionTwoDatabase(t, store, "")
+	config, err := store.LoadServiceConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.BlockedSessionInactivityTimeout != DefaultBlockedSessionInactivityTimeout.String() {
+		t.Fatalf("expected defaults, got %#v", config)
+	}
+	if _, err := os.Stat(store.ServiceConfigPath()); !os.IsNotExist(err) {
+		t.Fatalf("no row means no config.json, stat err=%v", err)
+	}
+	assertServiceConfigTableDropped(t, store)
+}
+
+func TestUpgradeRecoversFromCrashBetweenRestoreAndDrop(t *testing.T) {
+	t.Setenv("VIGILANTE_HOME", filepath.Join(t.TempDir(), ".vigilante"))
+	store := NewStore()
+	seedVersionTwoDatabase(t, store, `{"github_background_budget":11}`)
+	// Simulate a crash after the restore wrote config.json but before
+	// migration 3 dropped the table: run only the restore step.
+	conn, err := openDatabase(store.DatabasePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.restoreServiceConfigFile(conn); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The operator edits the restored file before the next start.
+	const edited = "{\"github_background_budget\": 12}\n"
+	if err := os.WriteFile(store.ServiceConfigPath(), []byte(edited), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	config, err := NewStore().LoadServiceConfig()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.GitHubBackgroundBudget != 9 {
-		t.Fatalf("config.json must override the stored config, got %#v", config)
+	if config.GitHubBackgroundBudget != 12 {
+		t.Fatalf("config.json must not be overwritten after a crash, got %#v", config)
 	}
-	if _, err := os.Stat(store.legacyConfigPath()); !os.IsNotExist(err) {
-		t.Fatalf("applied config.json must be renamed, stat err=%v", err)
+	if data, _ := os.ReadFile(store.ServiceConfigPath()); string(data) != edited {
+		t.Fatalf("config.json changed on recovery: %q", data)
 	}
-	if _, err := os.Stat(store.legacyConfigPath() + migratedFileSuffix); err != nil {
-		t.Fatalf("migrated copy missing: %v", err)
-	}
+	assertServiceConfigTableDropped(t, NewStore())
 }

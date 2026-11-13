@@ -64,6 +64,8 @@ type statusSessionsSnapshot struct {
 	Groups   []sessionGroup
 	Count    int
 	Loaded   bool
+	// ConfigErr is set when config.json could not be read or decoded.
+	ConfigErr error
 }
 
 // statusRateLimitSnapshot holds the GitHub rate-limit data for one refresh.
@@ -252,8 +254,11 @@ func (m *statusModel) clampOffset() {
 func (m statusModel) contentLines() []string {
 	panes := []string{
 		m.renderPane("Service", m.serviceLines()),
-		m.renderPane(fmt.Sprintf("Watched repositories (%d)", len(m.sessions.Repos)), m.repoLines()),
 	}
+	if m.sessions.ConfigErr != nil {
+		panes = append(panes, m.renderPane("Config", []string{statusWarnStyle.Render("error: " + m.sessions.ConfigErr.Error())}))
+	}
+	panes = append(panes, m.renderPane(fmt.Sprintf("Watched repositories (%d)", len(m.sessions.Repos)), m.repoLines()))
 	if m.sessions.Profiles.Enabled {
 		panes = append(panes, m.renderPane("Agent profiles", m.agentProfileLines()))
 	}
@@ -548,11 +553,12 @@ func (a *App) loadStatusSessions(_ context.Context) statusSessionsSnapshot {
 	visible := visibleStatusSessions(sessions)
 	repos := watchedRepoStatuses(targets, sessions)
 	return statusSessionsSnapshot{
-		Repos:    repos,
-		Profiles: applyAgentProfiles(repos, cfg, cfgErr),
-		Groups:   groupSessions(visible, a.clock(), inactivityTimeout),
-		Count:    len(visible),
-		Loaded:   true,
+		Repos:     repos,
+		Profiles:  applyAgentProfiles(repos, cfg, cfgErr),
+		Groups:    groupSessions(visible, a.clock(), inactivityTimeout),
+		Count:     len(visible),
+		Loaded:    true,
+		ConfigErr: cfgErr,
 	}
 }
 
