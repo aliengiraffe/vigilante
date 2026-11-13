@@ -188,7 +188,7 @@ type ServiceConfig struct {
 	LogMaxFileSize                   string `json:"log_max_file_size,omitempty"`
 	LogMaxBackups                    *int   `json:"log_max_backups,omitempty"`
 	// AgentProfiles are named per-provider agent invocation settings that a
-	// watch target selects through WatchTarget.AgentProfile.
+	// watch target selects explicitly or through a repository regex.
 	AgentProfiles map[string]AgentProfile `json:"agent_profiles,omitempty"`
 }
 
@@ -268,6 +268,7 @@ type Session struct {
 	Provider                       string              `json:"provider,omitempty"`
 	Model                          string              `json:"model,omitempty"`
 	AgentProfile                   string              `json:"agent_profile,omitempty"`
+	AgentProfileAuto               bool                `json:"agent_profile_auto,omitempty"`
 	IssueBackend                   string              `json:"issue_backend,omitempty"`
 	GitBackend                     string              `json:"git_backend,omitempty"`
 	PRBackend                      string              `json:"pr_backend,omitempty"`

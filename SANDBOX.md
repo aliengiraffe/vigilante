@@ -108,7 +108,7 @@ stateDiagram-v2
 
 ### Agent profiles in the sandbox
 
-A watch target can select an [agent profile](DOCS.md#agent-profiles) that customizes the coding agent's command, arguments, and environment. In sandbox mode the profile is applied when the container is provisioned:
+A watch target can select an [agent profile](DOCS.md#agent-profiles) that customizes the coding agent's command, arguments, and environment. Explicit profiles take precedence over automatic repo-regex selection. In sandbox mode the effective profile is resolved before provisioning, with the same alphabetical first-match and invalid-profile blocking rules as host execution. The profile is applied when the container is provisioned:
 
 - **Environment.** The profile's `env` for the session's provider is added to the container's environment at creation, so every process in the container sees it (`docker exec <container> env` lists it). The `docker exec` call that launches the agent carries no extra environment of its own, and the profile env is not applied to the host-side `docker` client.
 - **Config directory mount.** The default agent homes are bind-mounted at `/root/.claude` and `/root/.codex`. When a profile sets `CLAUDE_CONFIG_DIR` (for `claude`) or `CODEX_HOME` (for `codex`) to a host directory, that directory is mounted at the same container path instead of the default home, and the variable is rewritten to the container path (`CLAUDE_CONFIG_DIR=/root/.claude`, `CODEX_HOME=/root/.codex`). Vigilante's skills are installed into the host directory before the session starts, so they are visible through the mount.

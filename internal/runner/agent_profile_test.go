@@ -370,3 +370,73 @@ func TestFormatInvocationDebugShowsEnvNamesOnly(t *testing.T) {
 		t.Fatalf("debug output = %q, want %q", got, want)
 	}
 }
+
+func TestAutoAgentProfileLaunches(t *testing.T) {
+	for _, stage := range []string{"issue", "conflict", "ci", "sandbox", "invalid"} {
+		t.Run(stage, func(t *testing.T) {
+			f := newProfileFixture(t)
+			cfg, err := f.store.LoadServiceConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := cfg.AgentProfiles["client-a"]
+			p.Match = "^owner/"
+			if stage == "invalid" {
+				p.Providers["unknown"] = state.AgentInvocation{}
+			}
+			cfg.AgentProfiles["client-a"] = p
+			if err := f.store.SaveServiceConfig(cfg); err != nil {
+				t.Fatal(err)
+			}
+			f.target.AgentProfile = ""
+			tracker := githubbackend.NewBackend(&f.env.Runner)
+			switch stage {
+			case "conflict":
+				err = RunConflictResolutionSession(context.Background(), f.env, f.store, tracker, f.target, f.session, ghcli.PullRequest{Number: 42})
+			case "ci":
+				err = RunCIRemediationSession(context.Background(), f.env, f.store, tracker, f.target, f.session, ghcli.PullRequest{Number: 42}, nil)
+			default:
+				if stage == "sandbox" {
+					f.session.SandboxMode = true
+					f.session.SandboxContainerName = "sandbox-test"
+				}
+				got := RunIssueSession(context.Background(), f.env, f.store, tracker, f.target, f.issue, f.session)
+				if got.AgentProfile != "client-a" || !got.AgentProfileAuto {
+					t.Fatalf("selection not recorded: %#v", got)
+				}
+				if stage == "invalid" {
+					if got.Status != state.SessionStatusBlocked || got.BlockedReason.Kind != "agent_profile_unavailable" || len(f.runner.agentCalls()) != 0 {
+						t.Fatalf("did not block: %#v", got)
+					}
+					if !strings.Contains(got.BlockedReason.Operation, "client-a (auto)") {
+						t.Fatal(got.BlockedReason.Operation)
+					}
+					return
+				}
+				if got.Status != state.SessionStatusSuccess {
+					t.Fatalf("session failed: %#v", got)
+				}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := f.runner.agentCalls()
+			if len(calls) == 0 {
+				t.Fatal("no agent calls")
+			}
+			for _, call := range calls {
+				if stage == "sandbox" {
+					if call.name != "docker" || indexOfArg(call.args, "/opt/claude-v2/bin/claude") < 0 || call.env != nil {
+						t.Fatalf("sandbox call: %#v", call)
+					}
+				} else {
+					assertProfiledClaudeCall(t, f, call)
+				}
+			}
+			log := f.sessionLog(t)
+			if !strings.Contains(log, "agent_profile=client-a agent_profile_source=auto") || strings.Contains(log, profileSecret) {
+				t.Fatal("missing selection or leaked env")
+			}
+		})
+	}
+}

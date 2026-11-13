@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -41,6 +42,9 @@ func (i AgentInvocation) IsZero() bool {
 // cannot take down targets that do not use it.
 type AgentProfile struct {
 	Providers map[string]AgentInvocation
+	// Match is an optional RE2 expression matched against the repository slug.
+	Match    string
+	matchSet bool
 
 	raw       json.RawMessage
 	decodeErr error
@@ -50,15 +54,34 @@ type AgentProfile struct {
 // decode failure; Validate reports it.
 func (p *AgentProfile) UnmarshalJSON(data []byte) error {
 	*p = AgentProfile{}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	var providers map[string]AgentInvocation
-	if err := decoder.Decode(&providers); err != nil {
-		p.raw = append(json.RawMessage(nil), data...)
+	p.raw = append(json.RawMessage(nil), data...)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
 		p.decodeErr = err
 		return nil
 	}
-	p.Providers = providers
+	if raw, ok := fields["match"]; ok {
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			p.decodeErr = fmt.Errorf("match must be a string")
+		} else if err := json.Unmarshal(raw, &p.Match); err != nil {
+			p.decodeErr = fmt.Errorf("match must be a string")
+		}
+		p.matchSet = p.decodeErr == nil
+		delete(fields, "match")
+	}
+	p.Providers = make(map[string]AgentInvocation)
+	for id, raw := range fields {
+		decoder := json.NewDecoder(bytes.NewReader(raw))
+		decoder.DisallowUnknownFields()
+		var invocation AgentInvocation
+		if err := decoder.Decode(&invocation); err != nil {
+			if p.decodeErr == nil {
+				p.decodeErr = fmt.Errorf("provider %q: %w", id, err)
+			}
+			continue
+		}
+		p.Providers[id] = invocation
+	}
 	return nil
 }
 
@@ -68,14 +91,23 @@ func (p AgentProfile) MarshalJSON() ([]byte, error) {
 	if p.decodeErr != nil && len(p.raw) > 0 {
 		return p.raw, nil
 	}
-	if p.Providers == nil {
-		return []byte("{}"), nil
+	fields := make(map[string]any, len(p.Providers)+1)
+	for id, invocation := range p.Providers {
+		fields[id] = invocation
 	}
-	return json.Marshal(p.Providers)
+	if p.matchSet || p.Match != "" {
+		fields["match"] = p.Match
+	}
+	return json.Marshal(fields)
 }
 
 // Validate reports the first problem that makes the profile unusable.
 func (p AgentProfile) Validate() error {
+	if p.matchSet || p.Match != "" {
+		if _, err := regexp.Compile(p.Match); err != nil {
+			return fmt.Errorf("invalid match regex: %w", err)
+		}
+	}
 	if p.decodeErr != nil {
 		return fmt.Errorf("malformed profile: %w", p.decodeErr)
 	}
@@ -166,4 +198,31 @@ func (c ServiceConfig) AgentProfileErrors() []error {
 		}
 	}
 	return errs
+}
+
+// EffectiveAgentProfile selects an explicit profile or the alphabetically first
+// matching profile. Invalid regexes are skipped; other invalid matches block.
+func (c ServiceConfig) EffectiveAgentProfile(target WatchTarget) (name string, auto bool, err error) {
+	if target.AgentProfile != "" {
+		_, err = c.AgentProfile(target.AgentProfile)
+		return target.AgentProfile, false, err
+	}
+	names := make([]string, 0, len(c.AgentProfiles))
+	for name := range c.AgentProfiles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		profile := c.AgentProfiles[name]
+		if !profile.matchSet && profile.Match == "" {
+			continue
+		}
+		re, compileErr := regexp.Compile(profile.Match)
+		if compileErr != nil || !re.MatchString(target.Repo) {
+			continue
+		}
+		_, err = c.AgentProfile(name)
+		return name, true, err
+	}
+	return "", false, nil
 }

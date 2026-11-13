@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/nicobistolfi/vigilante/internal/backend"
+	ghcli "github.com/nicobistolfi/vigilante/internal/github"
 	"github.com/nicobistolfi/vigilante/internal/sandbox/container"
 	"github.com/nicobistolfi/vigilante/internal/skill"
 	"github.com/nicobistolfi/vigilante/internal/state"
@@ -393,4 +394,143 @@ func TestResumeBlockedIssueExecutionAppliesAgentProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertAgentProfileCall(t, runner.agentCalls(), claudeDir)
+}
+
+func TestAutoProfileAppPaths(t *testing.T) {
+	for _, stage := range []string{"list", "create", "package", "resume", "sandbox-invalid", "sandbox-mounts", "setup"} {
+		t.Run(stage, func(t *testing.T) {
+			app, repoPath, dir := newAgentProfileApp(t)
+			cfg, err := app.state.LoadServiceConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+			p := cfg.AgentProfiles["client-a"]
+			p.Match = "^owner/"
+			cfg.AgentProfiles["client-a"] = p
+			if err := app.state.SaveServiceConfig(cfg); err != nil {
+				t.Fatal(err)
+			}
+			target := state.WatchTarget{Path: repoPath, Repo: "owner/repo", Provider: "claude"}
+			if err := app.state.SaveWatchTargets([]state.WatchTarget{target}); err != nil {
+				t.Fatal(err)
+			}
+			runner := &agentProfileRunner{}
+			app.env.Runner = runner
+			ctx := context.Background()
+			switch stage {
+			case "list":
+				var out bytes.Buffer
+				app.stdout = &out
+				if err := app.List(false, false); err != nil {
+					t.Fatal(err)
+				}
+				for _, want := range []string{`"effective_agent_profile": "client-a"`, `"agent_profile_source": "auto"`} {
+					if !strings.Contains(out.String(), want) {
+						t.Fatal(out.String())
+					}
+				}
+				statuses := []watchedRepoStatus{{Target: target}}
+				view := applyAgentProfiles(statuses, cfg, nil)
+				if !strings.Contains(formatWatchTargetRow(statuses[0]), "profile client-a (auto)") || !view.Rows[1].Auto {
+					t.Fatalf("status: %#v", view)
+				}
+				if loadSingleTarget(t, app).AgentProfile != "" {
+					t.Fatal("persisted auto selection")
+				}
+			case "create":
+				if err := app.issueCreate(ctx, target.Repo, "", "add a feature"); err != nil {
+					t.Fatal(err)
+				}
+				assertAgentProfileCall(t, runner.agentCalls(), dir)
+			case "package":
+				app.dispatchPackageRemediation(ctx, target, backend.PullRequest{Number: 9, BaseRefName: "main"}, &state.HardeningPRState{FindingsCount: 2})
+				assertAgentProfileCall(t, runner.agentCalls(), dir)
+			case "resume":
+				session := state.Session{RepoPath: repoPath, Repo: target.Repo, IssueNumber: 7, Provider: "claude", Branch: "vigilante/issue-7", Status: state.SessionStatusBlocked, BlockedStage: "agent_profile", AgentProfile: "old-auto", AgentProfileAuto: true}
+				if err := app.resumeBlockedIssueExecution(ctx, &session); err != nil {
+					t.Fatal(err)
+				}
+				assertAgentProfileCall(t, runner.agentCalls(), dir)
+			case "sandbox-invalid":
+				p.Providers["unknown"] = state.AgentInvocation{}
+				cfg.AgentProfiles["client-a"] = p
+				if err := app.state.SaveServiceConfig(cfg); err != nil {
+					t.Fatal(err)
+				}
+				got := app.runSandboxSession(ctx, target, ghcli.Issue{Number: 7}, state.Session{Repo: target.Repo, Provider: "claude"})
+				if got.Status != state.SessionStatusBlocked || got.AgentProfile != "client-a" || !got.AgentProfileAuto {
+					t.Fatalf("sandbox did not block before provisioning: %#v", got)
+				}
+			case "sandbox-mounts":
+				name, auto, err := cfg.EffectiveAgentProfile(target)
+				if err != nil || !auto {
+					t.Fatalf("selection: %v", err)
+				}
+				invocation, err := cfg.AgentInvocation(name, "claude")
+				if err != nil {
+					t.Fatal(err)
+				}
+				env := map[string]string{}
+				mounts := applySandboxAgentProfile("claude", invocation, nil, env)
+				if len(mounts) != 1 || env["CLAUDE_CONFIG_DIR"] != "/root/.claude" || mounts[0].Source != dir {
+					t.Fatalf("mounts=%#v env=%#v", mounts, env)
+				}
+			case "setup":
+				if err := app.installAgentProfileSkills(); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := os.Stat(filepath.Join(dir, "skills", skill.VigilanteIssueImplementation, "SKILL.md")); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestResumeDoesNotPinAutoProfile(t *testing.T) {
+	session := state.Session{AgentProfile: "old", AgentProfileAuto: true}
+	for _, target := range []state.WatchTarget{{}, {Path: "/repo"}} {
+		if got := watchTargetForSession(session, target); got.AgentProfile != "" {
+			t.Fatalf("auto selection became explicit: %#v", got)
+		}
+	}
+	session.AgentProfileAuto = false
+	if got := watchTargetForSession(session, state.WatchTarget{Path: "/repo"}); got.AgentProfile != "" {
+		t.Fatal("cleared explicit profile resurrected")
+	}
+}
+
+func TestPrepareSessionAutoProfile(t *testing.T) {
+	app, _, _ := newAgentProfileApp(t)
+	cfg, err := app.state.LoadServiceConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := cfg.AgentProfiles["client-a"]
+	p.Match = "^owner/"
+	cfg.AgentProfiles["client-a"] = p
+	if err := app.state.SaveServiceConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	target := state.WatchTarget{Repo: "owner/repo"}
+	session := state.Session{Repo: target.Repo, IssueNumber: 7, AgentProfile: "old"}
+	if err := app.prepareSessionAgentProfile(context.Background(), target, &session); err != nil {
+		t.Fatal(err)
+	}
+	if session.AgentProfile != "client-a" || !session.AgentProfileAuto {
+		t.Fatalf("selection: %#v", session)
+	}
+	p.Providers["unknown"] = state.AgentInvocation{}
+	cfg.AgentProfiles["client-a"] = p
+	if err := app.state.SaveServiceConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.prepareSessionAgentProfile(context.Background(), target, &session); err == nil {
+		t.Fatal("expected invalid profile")
+	} else if shouldCommentMaintenanceFailure(session, err) {
+		t.Fatal("outer maintenance handler would replace profile block")
+	}
+	if session.Status != state.SessionStatusBlocked || session.BlockedReason.Kind != "agent_profile_unavailable" {
+		t.Fatalf("block: %#v", session)
+	}
 }

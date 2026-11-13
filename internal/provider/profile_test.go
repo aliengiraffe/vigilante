@@ -80,7 +80,7 @@ func TestEmptyProfileYieldsIdenticalInvocations(t *testing.T) {
 	}
 }
 
-func TestForTargetWithoutProfileDoesNotReadConfig(t *testing.T) {
+func TestForTargetWithoutConfigKeepsDefaultInvocation(t *testing.T) {
 	t.Setenv("VIGILANTE_HOME", filepath.Join(t.TempDir(), "missing-root"))
 	base, _ := Resolve(ClaudeID)
 	got, err := ForTarget(state.NewStore(), profileTestTarget, base)
@@ -280,5 +280,29 @@ func TestProfiledProviderEnsureRuntimeInstalledCoversProfileDir(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(dir, "skills", skill.VigilanteIssueImplementation, "SKILL.md")); err != nil {
 			t.Errorf("skills missing under %s: %v", dir, err)
 		}
+	}
+}
+
+func TestForTargetAutoProfile(t *testing.T) {
+	t.Setenv("VIGILANTE_HOME", t.TempDir())
+	store := state.NewStore()
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.SaveServiceConfig(state.ServiceConfig{AgentProfiles: map[string]state.AgentProfile{
+		"auto": {Match: "^acme/", Providers: map[string]state.AgentInvocation{"claude": {Command: "custom-claude", Args: []string{"--extra"}, Env: map[string]string{"ACCOUNT": "client"}}}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	base, _ := Resolve(ClaudeID)
+	p, name, auto, err := ForTargetWithProfile(store, state.WatchTarget{Repo: "acme/x"}, base)
+	if err != nil || name != "auto" || !auto {
+		t.Fatalf("selection = %s %v %v", name, auto, err)
+	}
+	inv := ApplyProfile(p, Invocation{Name: "claude", Args: []string{"prompt"}})
+	if inv.Name != "custom-claude" || inv.Env["ACCOUNT"] != "client" || inv.Args[0] != "--extra" {
+		t.Fatalf("invocation = %#v", inv)
+	}
+	p, err = ForTarget(store, state.WatchTarget{Repo: "other/x"}, base)
+	if err != nil || p != base {
+		t.Fatalf("no match = %v %v", p, err)
 	}
 }

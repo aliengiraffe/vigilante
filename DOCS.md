@@ -840,9 +840,53 @@ Then select one for a repository with `vigilante watch --agent-profile client-a 
 - `args` are inserted after Vigilante's own flags and directly before the prompt. Vigilante's flags (`--print`, `--dangerously-skip-permissions`, `exec --cd ...`, `--model`, ...) are never removed or reordered.
 - `env` is applied on top of the daemon's environment for the agent process only; a profile value wins over an inherited variable of the same name. `git` and `gh` calls made by Vigilante itself are unaffected.
 - The profile applies to every agent launch for the target: issue preflight, issue implementation, conflict resolution, CI remediation, package remediation, `vigilante issue create`, and resumes.
-- Targets without a profile are launched exactly as before.
+- Targets with neither an explicit nor an auto-matched profile are launched exactly as before.
 - Like the other `config.json` settings, profiles are read by the running daemon: **restart the daemon after editing them** (`vigilante service restart`).
 - Env values are stored as plain text in `config.json`, like the other settings. Session and daemon logs record the profile name, the effective command, and the *names* of the env variables, never their values.
+
+**Automatic selection.** Add a `match` string alongside the provider entries:
+
+```json
+{
+  "agent_profiles": {
+    "client-a": {
+      "match": "(?i)^client-a/",
+      "claude": { "env": { "CLAUDE_CONFIG_DIR": "/srv/client-a/.claude" } }
+    },
+    "oss": {
+      "match": "^(nicobistolfi|aliengiraffe)/",
+      "codex": { "env": { "CODEX_HOME": "/srv/oss/.codex" } }
+    }
+  }
+}
+```
+
+An explicit `--agent-profile` always wins. Otherwise, profiles declaring `match`
+are tested in alphabetical name order (Go `sort.Strings`, ascending byte order);
+the first match wins. Matching uses Go RE2 regex syntax and unanchored
+`MatchString` against the repository's stored `owner/name` slug. Use `^` and
+`$` for anchors and `(?i)` for case-insensitivity (recommended for GitHub slugs).
+These are regexes, not globs. An empty regex matches every slug; an omitted
+`match` does not participate. A profile containing only `match` is valid and
+uses each provider's default invocation under that profile name.
+
+No match means the default invocation, with no profile overrides. Invalid regexes
+are reported at daemon start and skipped. If the first matching profile has
+another error, such as an unknown provider or invalid env, its session is blocked
+with `agent_profile_unavailable`; selection does not fall through.
+
+Selection is resolved from config when launching an agent, including resumes and
+sandbox launches. Restart the daemon after editing profiles; no re-`watch` is
+needed. Auto-selection is never saved onto the watch target. Session records
+retain the name used and whether it was auto-selected. Plain and TUI status mark
+matches with `(auto)`; JSON `list` adds `effective_agent_profile` and
+`agent_profile_source` (`auto` or `explicit`) while preserving the configured
+`agent_profile`. Daemon and session logs identify auto-selection without env values.
+
+Clearing `--agent-profile ""` enables automatic selection again. There is no
+per-target opt-out: narrow the regex to exclude a repository. Setup still installs
+skills into every valid profile's config directories. Older Vigilante versions
+reject profiles containing `match` as malformed; upgrade before adding it.
 
 **`CLAUDE_CONFIG_DIR` vs `CLAUDE_HOME`.** These are different variables. `CLAUDE_CONFIG_DIR` is read by Claude Code itself and decides which account, settings, MCP servers, and hooks a session uses — that is the one to put in a profile's `env`. `CLAUDE_HOME` is a Vigilante variable read from the daemon's own environment: it only decides where Vigilante installs its skills for the default, no-profile invocation, and Claude Code does not read it. For Codex the two coincide: `CODEX_HOME` is read by Codex and by Vigilante.
 

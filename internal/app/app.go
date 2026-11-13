@@ -1834,11 +1834,10 @@ func (a *App) checkAgentProfiles() error {
 		return nil
 	}
 	for _, target := range targets {
-		if target.AgentProfile == "" {
-			continue
-		}
-		if _, err := config.AgentProfile(target.AgentProfile); err != nil {
-			a.logger.Warn("watch target agent profile unavailable; its sessions will be blocked until it is fixed", "repo", target.Repo, "agent_profile", target.AgentProfile, "err", err)
+		name, auto, err := config.EffectiveAgentProfile(target)
+		a.logger.Info("watch target agent profile selection", "repo", target.Repo, "agent_profile", name, "auto", auto)
+		if err != nil {
+			a.logger.Warn("watch target agent profile unavailable; its sessions will be blocked until it is fixed", "repo", target.Repo, "agent_profile", name, "err", err)
 			fmt.Fprintf(a.stderr, "warning: %s: %v; sessions for this repository will be blocked until it is fixed\n", target.Repo, err)
 		}
 	}
@@ -2149,7 +2148,22 @@ func (a *App) List(blockedOnly bool, runningOnly bool) error {
 	}
 	enc := json.NewEncoder(a.stdout)
 	enc.SetIndent("", "  ")
-	return enc.Encode(targets)
+	config, configErr := a.state.LoadServiceConfig()
+	type listedTarget struct {
+		state.WatchTarget
+		EffectiveAgentProfile string             `json:"effective_agent_profile,omitempty"`
+		AgentProfileSource    agentProfileSource `json:"agent_profile_source,omitempty"`
+	}
+	rows := make([]listedTarget, len(targets))
+	for i, target := range targets {
+		rows[i].WatchTarget = target
+		profile := resolveWatchTargetProfile(target, config, configErr)
+		if profile.Source != agentProfileSourceDefault {
+			rows[i].EffectiveAgentProfile = profile.Name
+			rows[i].AgentProfileSource = profile.Source
+		}
+	}
+	return enc.Encode(rows)
 }
 
 func (a *App) DaemonRun(ctx context.Context, interval time.Duration, once bool) (runErr error) {
@@ -3379,6 +3393,9 @@ func (a *App) dispatchConflictResolution(ctx context.Context, session *state.Ses
 	}
 
 	target := watchTargetForSession(*session, a.fallbackWatchTargetForSession(*session))
+	if err := a.prepareSessionAgentProfile(ctx, target, session); err != nil {
+		return err
+	}
 	if conflictErr := issuerunner.RunConflictResolutionSession(ctx, a.env, a.state, a.issueTrackerForTarget(target), target, *session, pr); conflictErr != nil {
 		return conflictErr
 	}
@@ -3726,6 +3743,9 @@ func (a *App) handleFailingPullRequestChecks(ctx context.Context, session *state
 		Checks:      formatFailingChecksSummary(failingChecks),
 		AttemptedAt: attemptedAt,
 	})
+	if err := a.prepareSessionAgentProfile(ctx, target, session); err != nil {
+		return err
+	}
 	if err := issuerunner.RunCIRemediationSession(ctx, a.env, a.state, a.issueTrackerForTarget(target), target, *session, pr, failingChecks); err != nil {
 		blocked := classifyBlockedReason("ci_remediation", "coding agent remediation", err)
 		markSessionBlocked(session, "ci_remediation", blocked, a.clock())
@@ -4795,8 +4815,10 @@ func (a *App) resumeBlockedSession(ctx context.Context, session *state.Session, 
 	a.emitSessionTransition(previousStatus, *session, source)
 
 	if err := a.preflightResume(ctx, *session); err != nil {
-		blocked := classifyBlockedReason(session.BlockedStage, session.BlockedReason.Operation, err)
-		markSessionBlocked(session, fallbackText(session.BlockedStage, "pr_maintenance"), blocked, a.clock())
+		if session.BlockedReason.Kind != "agent_profile_unavailable" || session.LastError != err.Error() {
+			blocked := classifyBlockedReason(session.BlockedStage, session.BlockedReason.Operation, err)
+			markSessionBlocked(session, fallbackText(session.BlockedStage, "pr_maintenance"), blocked, a.clock())
+		}
 		session.LastError = err.Error()
 		if source == "cli" {
 			a.commentOnIssueBestEffort(ctx, session.Repo, session.IssueNumber, localResumeFailureComment(*session, previousStage), "local resume failure")
@@ -4817,8 +4839,10 @@ func (a *App) resumeBlockedSession(ctx context.Context, session *state.Session, 
 		err = a.resumeBlockedIssueExecution(ctx, session)
 	}
 	if err != nil {
-		blocked := classifyBlockedReason(session.BlockedStage, session.BlockedReason.Operation, err)
-		markSessionBlocked(session, fallbackText(session.BlockedStage, "pr_maintenance"), blocked, a.clock())
+		if session.BlockedReason.Kind != "agent_profile_unavailable" || session.LastError != err.Error() {
+			blocked := classifyBlockedReason(session.BlockedStage, session.BlockedReason.Operation, err)
+			markSessionBlocked(session, fallbackText(session.BlockedStage, "pr_maintenance"), blocked, a.clock())
+		}
 		session.LastError = err.Error()
 		if source == "cli" {
 			a.commentOnIssueBestEffort(ctx, session.Repo, session.IssueNumber, localResumeFailureComment(*session, previousStage), "local resume failure")
@@ -4906,6 +4930,23 @@ func (a *App) resumeBlockedMaintenance(ctx context.Context, session *state.Sessi
 	return nil
 }
 
+// prepareSessionAgentProfile records the current selection for maintenance
+// launches and preserves the profile-unavailable blocking classification.
+func (a *App) prepareSessionAgentProfile(ctx context.Context, target state.WatchTarget, session *state.Session) error {
+	config, err := a.state.LoadServiceConfig()
+	if err == nil {
+		session.AgentProfile, session.AgentProfileAuto, err = config.EffectiveAgentProfile(target)
+	}
+	if err != nil {
+		issue := ghcli.Issue{Number: session.IssueNumber, Title: session.IssueTitle, URL: session.IssueURL}
+		*session = issuerunner.BlockSessionOnAgentProfile(ctx, a.state, a.issueTrackerForTarget(target), target, issue, *session, err)
+		// The block comment is already posted; prevent the outer maintenance
+		// handler from replacing its specific cause with a generic git failure.
+		session.LastMaintenanceError = err.Error()
+	}
+	return err
+}
+
 func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Session) error {
 	issue := ghcli.Issue{Number: session.IssueNumber, Title: session.IssueTitle, URL: session.IssueURL}
 	target := watchTargetForSession(*session, a.fallbackWatchTargetForSession(*session))
@@ -4913,8 +4954,10 @@ func (a *App) resumeBlockedIssueExecution(ctx context.Context, session *state.Se
 	if err != nil {
 		return err
 	}
-	selectedProvider, err = provider.ForTarget(a.state, target, selectedProvider)
+	selectedProvider, session.AgentProfile, session.AgentProfileAuto, err = provider.ForTargetWithProfile(a.state, target, selectedProvider)
+	a.logger.Info("resume agent profile selection", "repo", target.Repo, "agent_profile", session.AgentProfile, "auto", session.AgentProfileAuto)
 	if err != nil {
+		*session = issuerunner.BlockSessionOnAgentProfile(ctx, a.state, a.issueTrackerForTarget(target), target, issue, *session, err)
 		return err
 	}
 	if session.BlockedStage == "baseline_preflight" {
@@ -4987,6 +5030,9 @@ func (a *App) resumeBlockedConflictResolution(ctx context.Context, session *stat
 		session.PullRequestBaseBranch = strings.TrimSpace(pr.BaseRefName)
 	}
 	target := watchTargetForSession(*session, a.fallbackWatchTargetForSession(*session))
+	if err := a.prepareSessionAgentProfile(ctx, target, session); err != nil {
+		return err
+	}
 	if err := issuerunner.RunConflictResolutionSession(ctx, a.env, a.state, a.issueTrackerForTarget(target), target, *session, *pr); err != nil {
 		return err
 	}
@@ -5514,7 +5560,10 @@ func watchTargetForSession(session state.Session, fallbackTarget state.WatchTarg
 		ProjectRef:     fallbackTarget.ProjectRef,
 		// The watch target's profile wins; a one-off session, which has no
 		// watch target, keeps the profile it was started with.
-		AgentProfile: fallbackText(fallbackTarget.AgentProfile, session.AgentProfile),
+		AgentProfile: fallbackTarget.AgentProfile,
+	}
+	if fallbackTarget.Path == "" && fallbackTarget.AgentProfile == "" && !session.AgentProfileAuto {
+		target.AgentProfile = session.AgentProfile
 	}
 	return target
 }
@@ -5526,15 +5575,20 @@ func (a *App) fallbackWatchTargetForSession(session state.Session) state.WatchTa
 			return target
 		}
 	}
+	profile := ""
+	if !session.AgentProfileAuto {
+		profile = session.AgentProfile
+	}
 	return state.WatchTarget{
-		Path:       session.RepoPath,
-		Repo:       session.Repo,
-		BranchMode: state.BranchModePinned,
-		Branch:     strings.TrimSpace(session.BaseBranch),
-		ForkMode:   session.ForkMode,
-		ForkOwner:  session.ForkOwner,
-		PushRemote: session.PushRemote,
-		PushRepo:   session.PushRepo,
+		AgentProfile: profile,
+		Path:         session.RepoPath,
+		Repo:         session.Repo,
+		BranchMode:   state.BranchModePinned,
+		Branch:       strings.TrimSpace(session.BaseBranch),
+		ForkMode:     session.ForkMode,
+		ForkOwner:    session.ForkOwner,
+		PushRemote:   session.PushRemote,
+		PushRepo:     session.PushRepo,
 	}
 }
 
@@ -7823,11 +7877,14 @@ func (a *App) dispatchPackageRemediation(ctx context.Context, target state.Watch
 		a.logger.Error("package remediation provider failed", "repo", target.Repo, "pr", pr.Number, "err", err)
 		return
 	}
-	selectedProvider, err = provider.ForTarget(a.state, target, selectedProvider)
+	var name string
+	var auto bool
+	selectedProvider, name, auto, err = provider.ForTargetWithProfile(a.state, target, selectedProvider)
+	a.logger.Info("package remediation agent profile selection", "repo", target.Repo, "agent_profile", name, "auto", auto)
 	if err != nil {
 		body := hardening.FormatRemediationResultComment(false, fmt.Sprintf("Agent profile unavailable: %s", err.Error()))
 		_ = prMgr.CommentOnPullRequest(ctx, target.Repo, pr.Number, body)
-		a.logger.Warn("package remediation agent profile unavailable", "repo", target.Repo, "pr", pr.Number, "agent_profile", target.AgentProfile, "err", err)
+		a.logger.Warn("package remediation agent profile unavailable", "repo", target.Repo, "pr", pr.Number, "agent_profile", name, "err", err)
 		return
 	}
 
@@ -7867,20 +7924,28 @@ func (a *App) dispatchPackageRemediation(ctx context.Context, target state.Watch
 // runSandboxSession provisions a sandbox container, runs the coding agent
 // inside it, and tears down the sandbox when done.
 func (a *App) runSandboxSession(ctx context.Context, target state.WatchTarget, issue ghcli.Issue, session state.Session) state.Session {
-	config, _ := a.state.LoadServiceConfig()
+	config, configErr := a.state.LoadServiceConfig()
+	if configErr != nil {
+		return issuerunner.BlockSessionOnAgentProfile(ctx, a.state, a.issueTrackerForTarget(target), target, issue, session, configErr)
+	}
 
 	// Resolve the agent profile before provisioning: its env has to be baked
 	// into the container, and a broken profile must not cost a container.
 	var profile state.AgentInvocation
-	if target.AgentProfile != "" {
+	name, auto, err := config.EffectiveAgentProfile(target)
+	if err != nil {
+		return issuerunner.BlockSessionOnAgentProfile(ctx, a.state, a.issueTrackerForTarget(target), target, issue, session, err)
+	}
+	session.AgentProfile, session.AgentProfileAuto = name, auto
+	if name != "" {
 		selectedProvider, err := provider.Resolve(session.Provider)
 		if err != nil {
 			return issuerunner.RunIssueSession(ctx, a.env, a.state, a.issueTrackerForTarget(target), target, issue, session)
 		}
 		session.Provider = selectedProvider.ID()
-		resolved, err := config.AgentInvocation(target.AgentProfile, session.Provider)
+		resolved, err := config.AgentInvocation(name, session.Provider)
 		if err != nil {
-			a.logger.Warn("sandbox session blocked: agent profile unavailable", "repo", target.Repo, "issue", issue.Number, "agent_profile", target.AgentProfile, "err", err)
+			a.logger.Warn("sandbox session blocked: agent profile unavailable", "repo", target.Repo, "issue", issue.Number, "agent_profile", name, "err", err)
 			return issuerunner.BlockSessionOnAgentProfile(ctx, a.state, a.issueTrackerForTarget(target), target, issue, session, err)
 		}
 		profile = resolved
