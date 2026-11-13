@@ -276,6 +276,66 @@ func Restart(ctx context.Context, env *environment.Environment) error {
 	return nil
 }
 
+// Stop stops the installed service without disabling autostart at login.
+// It returns stopped=false when the service was already stopped, in which case
+// the service manager is not invoked.
+func Stop(ctx context.Context, env *environment.Environment) (bool, error) {
+	status, err := installedStatus(ctx, env)
+	if err != nil {
+		return false, err
+	}
+	if !status.Running {
+		return false, nil
+	}
+	switch env.OS {
+	case "darwin":
+		_, err = env.Runner.Run(ctx, "", "launchctl", "bootout", launchdTarget())
+	case "linux":
+		_, err = env.Runner.Run(ctx, "", "systemctl", "--user", "stop", systemdUnitName)
+	default:
+		return false, fmt.Errorf("unsupported OS %q", env.OS)
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// Start starts the installed service. It returns started=false when the
+// service is already running, in which case the service manager is not invoked.
+func Start(ctx context.Context, env *environment.Environment) (bool, error) {
+	status, err := installedStatus(ctx, env)
+	if err != nil {
+		return false, err
+	}
+	if status.Running {
+		return false, nil
+	}
+	switch env.OS {
+	case "darwin":
+		_, err = env.Runner.Run(ctx, "", "launchctl", "bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), status.FilePath)
+	case "linux":
+		_, err = env.Runner.Run(ctx, "", "systemctl", "--user", "start", systemdUnitName)
+	default:
+		return false, fmt.Errorf("unsupported OS %q", env.OS)
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func installedStatus(ctx context.Context, env *environment.Environment) (Status, error) {
+	status, err := ServiceStatus(ctx, env)
+	if err != nil {
+		return Status{}, err
+	}
+	if !status.Installed {
+		return Status{}, fmt.Errorf("service is not installed at %s", status.FilePath)
+	}
+	return status, nil
+}
+
 func baseStatus(goos string) (Status, error) {
 	path, err := FilePath(goos)
 	if err != nil {
