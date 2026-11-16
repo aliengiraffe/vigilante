@@ -261,6 +261,9 @@ func BuildIssuePromptForRuntime(runtime string, target state.WatchTarget, issue 
 	}
 	if strings.TrimSpace(session.ReusedRemoteBranch) != "" {
 		baseBranch := promptBaseBranch(target, session)
+		if stacked := strings.TrimSpace(session.StackedBaseBranch); stacked != "" {
+			baseBranch = stacked
+		}
 		reusedRemote := "origin"
 		if remote := strings.TrimSpace(session.PushRemote); remote != "" {
 			reusedRemote = remote

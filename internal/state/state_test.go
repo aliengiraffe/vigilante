@@ -684,3 +684,24 @@ func TestWatchTargetsSurviveConcurrentStores(t *testing.T) {
 		t.Fatalf("last writer must leave exactly one target, got %#v", targets)
 	}
 }
+
+func TestIncompleteRerunPolicy(t *testing.T) {
+	limit, backoff := ServiceConfig{}.IncompleteRerunPolicy()
+	if limit != DefaultIncompleteRerunLimit || backoff != DefaultIncompleteRerunBackoff {
+		t.Fatalf("defaults = (%d, %s)", limit, backoff)
+	}
+	one := 1
+	limit, backoff = ServiceConfig{IncompleteRerunLimit: &one, IncompleteRerunBackoff: "1m"}.IncompleteRerunPolicy()
+	if limit != 1 || backoff != time.Minute {
+		t.Fatalf("configured = (%d, %s)", limit, backoff)
+	}
+	if _, backoff = (ServiceConfig{IncompleteRerunBackoff: "soon"}).IncompleteRerunPolicy(); backoff != DefaultIncompleteRerunBackoff {
+		t.Fatalf("malformed backoff should fall back, got %s", backoff)
+	}
+	if got := IncompleteRerunDelay(5*time.Minute, 2); got != 20*time.Minute {
+		t.Fatalf("delay = %s, want 20m", got)
+	}
+	if got := IncompleteRerunDelay(time.Hour, 10); got != 2*time.Hour {
+		t.Fatalf("delay = %s, want 2h cap", got)
+	}
+}

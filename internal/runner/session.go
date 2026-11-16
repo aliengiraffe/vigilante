@@ -204,6 +204,8 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 
 	session.IterationInProgress = false
 
+	agentBlock := ConsumeAgentBlockedSignal(session.WorktreePath)
+	ResolveStackedBaseBranch(ctx, issueTracker, target.EffectiveProjectRef(), &session)
 	signal := EvaluateSessionProgress(ctx, env.Runner, session)
 	if !signal.HasPullRequest {
 		pr, err := reconcileSessionPullRequest(ctx, issueTracker, session)
@@ -217,26 +219,56 @@ func RunIssueSession(ctx context.Context, env *environment.Environment, store *s
 	if signal.HasPullRequest {
 		session.Status = state.SessionStatusSuccess
 		session.IncompleteReason = ""
+		ResetIncompleteRerunTracking(&session)
 		writeLifecycleEvent(logWriter, fmt.Sprintf("session completed status=success duration=%s", time.Since(invocationStart).Truncate(time.Second)))
 		appendSessionLog(logPath, fmt.Sprintf("session succeeded duration=%s output_bytes=%d", time.Since(invocationStart).Truncate(time.Second), len(output)), session, output)
-	} else {
-		reason := ClassifyIncompleteReason(signal)
-		session.Status = state.SessionStatusIncomplete
-		session.IncompleteReason = reason
-		writeLifecycleEvent(logWriter, fmt.Sprintf("session completed status=incomplete reason=%s duration=%s commits=%t worktree_changes=%t",
-			reason, time.Since(invocationStart).Truncate(time.Second), signal.HasNewCommits, signal.HasWorktreeChanges))
-		appendSessionLog(logPath, fmt.Sprintf("session incomplete reason=%s duration=%s output_bytes=%d", reason, time.Since(invocationStart).Truncate(time.Second), len(output)), session, output)
-		body := ghcli.FormatProgressComment(ghcli.ProgressComment{
-			Stage:      "Incomplete",
-			Emoji:      "⚠️",
-			Percent:    90,
-			ETAMinutes: 5,
-			Items:      incompleteSessionItems(session, signal),
-			Tagline:    "Progress saved — not done yet.",
-		})
-		_ = issueTracker.CommentOnWorkItem(ctx, target.Repo, issue.Number, body)
+		return session
 	}
+	if agentBlock == nil {
+		agentBlock = RecordIncompleteAttempt(&session, signal)
+	}
+	if agentBlock != nil {
+		session.IncompleteReason = ""
+		markSessionBlocked(&session, "issue_execution", *agentBlock, time.Now().UTC())
+		writeLifecycleEvent(logWriter, fmt.Sprintf("session completed status=blocked kind=%s duration=%s attempt=%d fingerprint=%s",
+			agentBlock.Kind, time.Since(invocationStart).Truncate(time.Second), session.IncompleteRerunCount, signal.Fingerprint))
+		appendSessionLog(logPath, fmt.Sprintf("session blocked kind=%s duration=%s output_bytes=%d", agentBlock.Kind, time.Since(invocationStart).Truncate(time.Second), len(output)), session, output)
+		_ = issueTracker.CommentOnWorkItem(ctx, target.Repo, issue.Number, SessionBlockedComment(session))
+		return session
+	}
+	reason := ClassifyIncompleteReason(signal)
+	session.Status = state.SessionStatusIncomplete
+	session.IncompleteReason = reason
+	writeLifecycleEvent(logWriter, fmt.Sprintf("session completed status=incomplete reason=%s duration=%s commits=%t worktree_changes=%t base=%s attempt=%d fingerprint=%s",
+		reason, time.Since(invocationStart).Truncate(time.Second), signal.HasNewCommits, signal.HasWorktreeChanges, ProgressBaseBranch(session), session.IncompleteRerunCount, signal.Fingerprint))
+	appendSessionLog(logPath, fmt.Sprintf("session incomplete reason=%s duration=%s output_bytes=%d", reason, time.Since(invocationStart).Truncate(time.Second), len(output)), session, output)
+	body := ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Incomplete",
+		Emoji:      "⚠️",
+		Percent:    90,
+		ETAMinutes: 5,
+		Items:      incompleteSessionItems(session, signal),
+		Tagline:    "Progress saved — not done yet.",
+	})
+	_ = issueTracker.CommentOnWorkItem(ctx, target.Repo, issue.Number, body)
 	return session
+}
+
+// ResolveStackedBaseBranch records the issue's `Base branch:` directive on
+// session so progress is measured against the stacked base. It reads the issue
+// body from the session, or from the issue tracker when the session has none.
+// Sessions that already track a pull request are skipped: progress is settled.
+func ResolveStackedBaseBranch(ctx context.Context, issueTracker backend.IssueTracker, project string, session *state.Session) {
+	if strings.TrimSpace(session.StackedBaseBranch) != "" || session.PullRequestNumber > 0 {
+		return
+	}
+	body := session.IssueBody
+	if strings.TrimSpace(body) == "" && issueTracker != nil && session.IssueNumber > 0 {
+		if details, err := issueTracker.GetWorkItemDetails(ctx, project, session.IssueNumber); err == nil && details != nil {
+			body = details.Body
+		}
+	}
+	session.StackedBaseBranch = ParseBaseBranchDirective(body)
 }
 
 func reconcileSessionPullRequest(ctx context.Context, issueTracker backend.IssueTracker, session state.Session) (*backend.PullRequest, error) {
@@ -588,10 +620,7 @@ func SessionLaunchComment(session state.Session, providerName string) string {
 	if strings.TrimSpace(session.PushRemote) != "" && strings.TrimSpace(session.PushRemote) != "origin" {
 		pushTargetItem = fmt.Sprintf("Push target: `%s` (`%s`). Upstream issue and PR context remain `%s`.", session.PushRemote, fallbackSessionText(session.PushRepo, "fork repo pending"), session.Repo)
 	}
-	baseBranch := strings.TrimSpace(session.BaseBranch)
-	if baseBranch == "" {
-		baseBranch = "main"
-	}
+	baseBranch := ProgressBaseBranch(session)
 
 	stage := SessionStartStage
 	var items []string
@@ -684,19 +713,62 @@ func blockedPreflightItems(blocked state.BlockedReason, providerID string, prefl
 	return items
 }
 
+// SessionBlockedComment is the issue comment for an implementation session
+// that Vigilante stopped because it cannot make progress on its own: the agent
+// declared a blocker, a rerun made no progress, or the reruns ran out.
+func SessionBlockedComment(session state.Session) string {
+	reason := session.BlockedReason
+	var lead string
+	switch reason.Kind {
+	case BlockedKindAgentDeclared, BlockedKindDependencyMissing:
+		lead = fmt.Sprintf("The coding agent stopped on a blocker it cannot resolve: %s.", strings.TrimSuffix(reason.Summary, "."))
+	case BlockedKindNoProgressRepeated:
+		lead = fmt.Sprintf("Vigilante stopped rerunning `%s`: the last rerun made no progress (same commit, same worktree), so another one would not either.", session.Branch)
+	case BlockedKindRerunLimit:
+		lead = fmt.Sprintf("Vigilante %s on `%s`.", strings.TrimSuffix(reason.Summary, "."), session.Branch)
+	default:
+		lead = fmt.Sprintf("Vigilante stopped `%s`: %s.", session.Branch, strings.TrimSuffix(fallbackSessionText(reason.Summary, "the session is blocked"), "."))
+	}
+	items := []string{lead}
+	if reason.Detail != "" && (reason.Kind == BlockedKindAgentDeclared || reason.Kind == BlockedKindDependencyMissing) {
+		items = append(items, "Detail: "+summarizeCommentText(reason.Detail))
+	}
+	items = append(items,
+		blocking.CauseLine(reason),
+		"Next step: resolve the blocker, then comment `@vigilanteai resume` on this issue (or run `"+fallbackSessionText(session.ResumeHint, "vigilante resume")+"`). Vigilante will not rerun it automatically.",
+	)
+	return ghcli.FormatProgressComment(ghcli.ProgressComment{
+		Stage:      "Blocked",
+		Emoji:      "⛔",
+		Percent:    90,
+		ETAMinutes: 0,
+		Items:      items,
+		Tagline:    "Knowing when to stop is progress too.",
+	})
+}
+
+func summarizeCommentText(text string) string {
+	text = strings.Join(strings.Fields(text), " ")
+	if len(text) > 500 {
+		text = strings.TrimSpace(text[:500]) + "…"
+	}
+	return text
+}
+
 func incompleteSessionItems(session state.Session, signal ProgressSignal) []string {
 	items := []string{
 		fmt.Sprintf("The coding agent exited successfully but no pull request was created for `%s`.", session.Branch),
 	}
+	base := ProgressBaseBranch(session)
 	switch {
 	case signal.HasNewCommits && signal.HasWorktreeChanges:
-		items = append(items, "New commits were pushed to the branch and uncommitted changes remain in the worktree.")
+		items = append(items, fmt.Sprintf("The branch has commits ahead of `%s` and uncommitted changes remain in the worktree.", base))
 	case signal.HasNewCommits:
-		items = append(items, "New commits were pushed to the branch but no PR was opened.")
+		items = append(items, fmt.Sprintf("The branch has commits ahead of `%s` but no PR was opened.", base))
 	case signal.HasWorktreeChanges:
 		items = append(items, "Uncommitted changes exist in the worktree but no commits were made.")
 	default:
-		items = append(items, "No durable progress was detected: no new commits and no modified files.")
+		items = append(items, fmt.Sprintf("No durable progress was detected: no commits ahead of `%s` and no modified files.", base))
 	}
 	items = append(items, "Next step: Vigilante will attempt to rerun the session in the existing worktree to continue from the current state.")
 	return items

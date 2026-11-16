@@ -94,6 +94,7 @@ Service dependencies:
 - Include enough detail for a human maintainer to understand the current state and next step.
 - If work cannot proceed safely, stop and report the blocker instead of guessing.
 - A `Base branch:` directive that points at a branch missing from the remote is one of these blockers: comment a failure on the issue and stop instead of falling back to the default branch.
+- When a blocker cannot be resolved inside this session (for example a prerequisite that lives in an unmerged pull request, a `Base branch:` that is missing or lacks content the issue depends on, or another dependency outside your control), declare it to Vigilante before exiting: write `.vigilante/blocked.json` at the worktree root containing `{"kind": "dependency_missing", "summary": "<one line naming the blocker>", "detail": "<what is missing and what would unblock it>"}` (use `"kind": "agent_declared"` for blockers that are not a missing dependency). Do not commit the file. Vigilante removes it, marks the session blocked with your reason, posts the blocked comment, and does not rerun the session until a human comments `@vigilanteai resume`. Exiting without a pull request and without this file is treated as incomplete work and is rerun automatically, so never rely on a free-text blocked comment alone.
 
 11. Finish with a clear terminal state
 - Leave the worktree in a coherent state.
