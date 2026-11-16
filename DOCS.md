@@ -540,6 +540,30 @@ Expected behavior:
 - restarts the installed managed service instead of launching an unmanaged background process
 - fails clearly when the service is not installed or the platform is unsupported
 
+### `vigilante service start`
+
+Start the installed Vigilante user service again after a `vigilante service stop`.
+
+Expected behavior:
+
+- runs `launchctl bootstrap gui/<uid> ~/Library/LaunchAgents/com.vigilante.agent.plist` on macOS and `systemctl --user start vigilante.service` on Linux
+- exits 0 and prints `vigilante service is already running` without calling the service manager when the service is already running
+- fails with `service is not installed at <path>` when no plist or unit exists, and clearly on unsupported platforms
+
+### `vigilante service stop`
+
+Stop the installed Vigilante user service without uninstalling it.
+
+Expected behavior:
+
+- runs `launchctl bootout gui/<uid>/com.vigilante.agent` on macOS (not `kill`, because `KeepAlive` would respawn the agent) and `systemctl --user stop vigilante.service` on Linux
+- exits 0 and prints `vigilante service is already stopped` without calling the service manager when the service is not running
+- keeps the plist or unit file installed and never touches SQLite state, worktrees, or session records
+- persistence: the service stays stopped until the next `vigilante service start`, `vigilante service restart`, `vigilante setup`, or user login/reboot. It does not disable autostart at login (`stop`, not `disable`)
+- `vigilante setup` and Homebrew upgrades (the cask restarts the service) start a stopped service again
+- in-flight sessions: the OS decides what happens to running coding-agent processes. systemd's default `KillMode=control-group` kills child agent processes, while launchd may not, so stopping may interrupt running sessions
+- use it to pause new dispatches or before a foreground `vigilante daemon run`, so two watchers do not compete for the same state
+
 ### `vigilante cleanup --repo <owner/name> [--issue <n>]`
 
 Clean up running sessions without touching unrelated historical session records.

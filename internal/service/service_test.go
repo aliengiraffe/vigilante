@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -645,5 +646,127 @@ func TestHomebrewCaskInstallRoot(t *testing.T) {
 				t.Fatalf("unexpected root=%q want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func writeServiceFile(t *testing.T, goos string) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	path := filepath.Join(home, ".config", "systemd", "user", "vigilante.service")
+	if goos == "darwin" {
+		path = filepath.Join(home, "Library", "LaunchAgents", "com.vigilante.agent.plist")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func lifecycleEnv(goos string, running bool) (*environment.Environment, *recordingRunner) {
+	r := &recordingRunner{}
+	switch goos {
+	case "darwin":
+		if running {
+			r.Outputs = map[string]string{testutil.Key("launchctl", "print", launchdTarget()): "pid = 42\n"}
+		} else {
+			r.Errors = map[string]error{testutil.Key("launchctl", "print", launchdTarget()): errors.New("Could not find service")}
+		}
+	default:
+		active := "inactive"
+		if running {
+			active = "active"
+		}
+		r.Outputs = map[string]string{testutil.Key("systemctl", "--user", "show", "--property=LoadState,ActiveState", systemdUnitName): "LoadState=loaded\nActiveState=" + active + "\n"}
+	}
+	if r.Outputs == nil {
+		r.Outputs = map[string]string{}
+	}
+	for _, c := range []string{
+		testutil.Key("launchctl", "bootout", launchdTarget()),
+		testutil.Key("launchctl", "bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), launchdPlistPath(goos)),
+		testutil.Key("systemctl", "--user", "stop", systemdUnitName),
+		testutil.Key("systemctl", "--user", "start", systemdUnitName),
+	} {
+		r.Outputs[c] = ""
+	}
+	return &environment.Environment{OS: goos, Runner: r}, r
+}
+
+func launchdPlistPath(_ string) string {
+	p, _ := FilePath("darwin")
+	return p
+}
+
+func TestStopAndStartCommands(t *testing.T) {
+	for _, tc := range []struct {
+		goos      string
+		stopCmd   string
+		startCmd  func(path string) string
+		statusCmd string
+	}{
+		{"darwin", testutil.Key("launchctl", "bootout", launchdTarget()), func(p string) string {
+			return testutil.Key("launchctl", "bootstrap", fmt.Sprintf("gui/%d", os.Getuid()), p)
+		}, testutil.Key("launchctl", "print", launchdTarget())},
+		{"linux", testutil.Key("systemctl", "--user", "stop", systemdUnitName), func(string) string {
+			return testutil.Key("systemctl", "--user", "start", systemdUnitName)
+		}, testutil.Key("systemctl", "--user", "show", "--property=LoadState,ActiveState", systemdUnitName)},
+	} {
+		t.Run(tc.goos, func(t *testing.T) {
+			path := writeServiceFile(t, tc.goos)
+
+			env, r := lifecycleEnv(tc.goos, true)
+			changed, err := Stop(context.Background(), env)
+			if err != nil || !changed {
+				t.Fatalf("stop: changed=%v err=%v", changed, err)
+			}
+			if got := r.calls[len(r.calls)-1]; got != tc.stopCmd {
+				t.Fatalf("unexpected stop call %q", got)
+			}
+			// Already running: start must not call the manager.
+			r.calls = nil
+			if changed, err := Start(context.Background(), env); err != nil || changed {
+				t.Fatalf("start on running: changed=%v err=%v", changed, err)
+			}
+			if len(r.calls) != 1 || r.calls[0] != tc.statusCmd {
+				t.Fatalf("expected only a status call, got %v", r.calls)
+			}
+
+			env, r = lifecycleEnv(tc.goos, false)
+			if changed, err := Stop(context.Background(), env); err != nil || changed {
+				t.Fatalf("stop on stopped: changed=%v err=%v", changed, err)
+			}
+			if len(r.calls) != 1 || r.calls[0] != tc.statusCmd {
+				t.Fatalf("expected only a status call, got %v", r.calls)
+			}
+			r.calls = nil
+			if changed, err := Start(context.Background(), env); err != nil || !changed {
+				t.Fatalf("start: changed=%v err=%v", changed, err)
+			}
+			if got := r.calls[len(r.calls)-1]; got != tc.startCmd(path) {
+				t.Fatalf("unexpected start call %q", got)
+			}
+			for _, c := range r.calls {
+				if strings.Contains(c, "enable") || strings.Contains(c, "disable") {
+					t.Fatalf("unexpected call %q", c)
+				}
+			}
+		})
+	}
+}
+
+func TestStopStartNotInstalledAndUnsupported(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	env := &environment.Environment{OS: "linux", Runner: testutil.FakeRunner{}}
+	for name, fn := range map[string]func(context.Context, *environment.Environment) (bool, error){"stop": Stop, "start": Start} {
+		if _, err := fn(context.Background(), env); err == nil || !strings.Contains(err.Error(), "service is not installed at") {
+			t.Fatalf("%s: unexpected error %v", name, err)
+		}
+		if _, err := fn(context.Background(), &environment.Environment{OS: "windows", Runner: testutil.FakeRunner{}}); err == nil || !strings.Contains(err.Error(), "unsupported OS") {
+			t.Fatalf("%s: unexpected error %v", name, err)
+		}
 	}
 }
